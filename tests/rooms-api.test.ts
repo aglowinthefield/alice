@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttp, type Server } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -46,7 +46,7 @@ finish
 type Harness = { url: string; home: string; fakeDir: string; request: (path: string, method?: string, input?: unknown) => Promise<{ status: number; data: any }>; calls: () => { args: string[]; cwd: string }[]; restart: () => Promise<void>; stop: () => Promise<void>; kill: () => Promise<void>; repoA: string; repoB: string; boardA: string; boardB: string; impression: { fail: boolean; saved: string[]; searches: any[] } };
 
 async function harness(): Promise<Harness> {
-  const home = mkdtempSync(join(tmpdir(), "bakery-rooms-api-"));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "bakery-rooms-api-")));
   const fakeDir = join(home, "fake"), dataDir = join(home, "data");
   mkdirSync(fakeDir, { recursive: true });
   const pi = join(home, "pi"); writeFileSync(pi, fakePi); chmodSync(pi, 0o755);
@@ -209,7 +209,7 @@ test("queue, stop, resume, steer, partial output and late-output fencing", async
     const detail = await idle(h, room.id);
     const texts = detail.messages.filter((m: any) => m.kind !== "system").map((m: any) => `${m.kind}:${m.interrupted ? "interrupted:" : ""}${m.body}`);
     const index = (needle: string) => texts.findIndex((text: string) => text.includes(needle));
-    assert.ok(index("interrupted:partial from Ada") > index("SLOW first") && index("interrupted:partial from Ada") < index("queued C"), "partial text kept in place");
+    assert.ok(index("interrupted:partial from Ada") > index("SLOW first") && index("interrupted:partial from Ada") < index("queued C"), `partial text kept in place: ${JSON.stringify(texts)}`);
     assert.ok(index("queued C") < index("queued B edited"), "promoted message runs first; the rest keep their order");
     assert.ok(!texts.some((text: string) => text.includes("queued A")), "removed message never ran");
     assert.equal(detail.rounds.find((r: any) => r.note.startsWith("Steered")).status, "stopped");
@@ -243,8 +243,9 @@ test("a restart interrupts running work honestly, replays nothing, and keeps the
     await h.request(`/rooms/${room.id}/messages`, "POST", { body: "SLOW before restart" });
     await waitFor(async () => (await h.request(`/rooms/${room.id}`)).data.live.length > 0, "live partial");
     await h.request(`/rooms/${room.id}/messages`, "POST", { body: "still queued" });
-    const calls = h.calls().length;
     await h.restart();
+    // Count after the old server is gone: a screening call may have started between the send and the kill.
+    const calls = h.calls().length;
     const state = (await h.request(`/rooms/${room.id}`)).data;
     assert.equal(state.running, false);
     assert.equal(state.room.paused, true, "the queue is paused after an interruption");

@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +27,8 @@ printf '{"type":"message_end","message":{"role":"assistant","stopReason":"stop",
 `;
 
 test("rooms UI: create colleagues and a room, send, ask everyone, queue and stop in a real browser", async () => {
+  // The server serves the built UI (BAKERY_SERVE_UI=1); CI runs the tests before `npm run build`, so build when missing.
+  if (!existsSync("dist/index.html")) execFileSync("npx", ["vite", "build"], { stdio: "ignore", shell: process.platform === "win32" });
   const home = mkdtempSync(join(tmpdir(), "bakery-rooms-ui-"));
   const probe = createServer();
   await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));

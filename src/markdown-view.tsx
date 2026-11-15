@@ -7,6 +7,7 @@ import {
 } from "react";
 import { parseMarkdown, type Block, type Inline } from "./markdown.js";
 import { highlightDiffCode, languageForPath } from "./review-diff.js";
+import { AttachmentLightbox, type LightboxImage } from "./attachments.js";
 import { cn } from "./lib/utils";
 import type { Card, Status } from "./model.js";
 
@@ -116,9 +117,16 @@ function withCardChips(text: string, key: number): ReactNode {
   return parts;
 }
 
-/** A stored image shown inline and linked to its full size. If the file cannot load, a plain link to it takes its place. */
+/** What a report's images share: the carousel they open in, and a way to drop one that cannot load. */
+const MarkdownImages = createContext<{
+  open: (src: string) => void;
+  failed: (src: string) => void;
+} | null>(null);
+
+/** A stored image shown inline; a click opens it in the lightbox. If the file cannot load, a plain link to it takes its place. */
 function MarkdownImage({ src, alt }: { src: string; alt: string }) {
   const [failed, setFailed] = useState(false);
+  const images = useContext(MarkdownImages);
   const name = alt || "image";
   if (failed)
     return (
@@ -127,16 +135,75 @@ function MarkdownImage({ src, alt }: { src: string; alt: string }) {
       </a>
     );
   return (
-    <a href={src} target="_blank" rel="noreferrer">
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(event) => {
+        // Modified clicks keep the browser's own handling (new tab, new window).
+        if (
+          !images ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        )
+          return;
+        event.preventDefault();
+        images.open(src);
+      }}
+    >
       <img
         src={src}
         alt={name}
         loading="lazy"
-        onError={() => setFailed(true)}
+        onError={() => {
+          setFailed(true);
+          images?.failed(src);
+        }}
         className="my-3 max-h-[36rem] max-w-full rounded border border-border object-contain"
       />
     </a>
   );
+}
+
+function inlineImages(nodes: Inline[], out: LightboxImage[]) {
+  for (const node of nodes) {
+    if (node.type === "image") {
+      if (!out.some((image) => image.url === node.src))
+        out.push({ id: node.src, url: node.src, name: node.alt || "image" });
+    } else if (
+      node.type === "strong" ||
+      node.type === "em" ||
+      node.type === "del" ||
+      node.type === "link"
+    )
+      inlineImages(node.children, out);
+  }
+}
+
+/** Every distinct image in the document, in reading order. */
+function blockImages(blocks: Block[], out: LightboxImage[] = []) {
+  for (const block of blocks) {
+    switch (block.type) {
+      case "heading":
+      case "paragraph":
+        inlineImages(block.children, out);
+        break;
+      case "quote":
+        blockImages(block.children, out);
+        break;
+      case "table":
+        for (const cell of [...block.header, ...block.rows.flat()])
+          inlineImages(cell, out);
+        break;
+      case "list":
+        for (const item of block.items) blockImages(item.children, out);
+        break;
+    }
+  }
+  return out;
 }
 
 function renderInline(nodes: Inline[]): ReactNode[] {
@@ -266,7 +333,33 @@ export function Markdown({
   className?: string;
 }) {
   const blocks = useMemo(() => parseMarkdown(source), [source]);
+  const [broken, setBroken] = useState<string[]>([]);
+  const [viewing, setViewing] = useState<string | null>(null);
+  // Images that failed to load are links now, so they stay out of the carousel.
+  const images = useMemo(
+    () => blockImages(blocks).filter((image) => !broken.includes(image.id)),
+    [blocks, broken],
+  );
+  const shown = images.findIndex((image) => image.id === viewing);
+  const controls = useMemo(
+    () => ({
+      open: setViewing,
+      failed: (src: string) => setBroken((list) => [...list, src]),
+    }),
+    [],
+  );
   return (
-    <div className={cn("markdown", className)}>{renderBlocks(blocks)}</div>
+    <div className={cn("markdown", className)}>
+      <MarkdownImages.Provider value={controls}>
+        {renderBlocks(blocks)}
+      </MarkdownImages.Provider>
+      <AttachmentLightbox
+        boardId=""
+        images={images}
+        index={shown < 0 ? null : shown}
+        onIndexChange={(index) => setViewing(images[index]?.id ?? null)}
+        onClose={() => setViewing(null)}
+      />
+    </div>
   );
 }

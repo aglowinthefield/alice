@@ -220,9 +220,9 @@ function repoRoot(value: unknown) {
   if (!isAbsolute(path)) throw new Error("Repository path must be absolute or start with ~/");
   let root: string;
   try {
-    root = realpathSync(path);
+    root = realpathSync.native(path);
     const gitRoot = execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-    if (realpathSync(gitRoot) !== root) throw new Error("Not a Git repository root");
+    if (realpathSync.native(gitRoot) !== root) throw new Error("Not a Git repository root");
   } catch { throw new Error(`Repository path is not an existing Git repository root: ${input}`); }
   return root;
 }

@@ -22,7 +22,7 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
   let installs = 0;
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/status") return route.fulfill({ json: { draining: false, activeRuns: 0, version: "0.1.0", sha: "e3c5357", date: "2026-10-28T12:00:00Z", updates: { commits: [{ sha: "abc1234", subject: "Add the settings page" }], installing: false, error: null } } });
+    if (path === "/api/status") return route.fulfill({ json: { draining: false, activeRuns: 0, version: "0.1.0", commit: "e3c5357", date: "2026-10-28T12:00:00Z", updates: { commits: [{ sha: "abc1234", subject: "Add the settings page" }], installing: false, error: null } } });
     if (path === "/api/update") { installs++; return route.fulfill({ status: 202, json: { commits: [], installing: true, error: null } }); }
     if (path === "/api/settings") return route.fulfill({ json: settings });
     return route.fulfill({ json: [] });
@@ -37,7 +37,8 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
     await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Updates" }).click();
     assert.equal(new URL(page.url()).pathname, "/settings/updates");
     assert.equal(await page.getByTestId("settings-version").textContent(), "0.1.0");
-    await page.getByText("e3c5357").waitFor();
+    await page.getByText("e3c5357", { exact: true }).first().waitFor();
+    assert.match(await page.getByTestId("settings-footer-version").textContent() ?? "", /Bakery 0\.1\.0\s*e3c5357/);
     await page.getByText("Add the settings page").waitFor();
     await page.getByRole("button", { name: "Update and restart" }).click();
     await page.waitForFunction(() => true);

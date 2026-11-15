@@ -47,6 +47,11 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
         await new Promise(resolve => setTimeout(resolve, 25));
       }
     }
+    // /api/status reports package.json's version and the short Git commit the server started on.
+    const status = (await request("/status")).data;
+    assert.equal(status.version, JSON.parse(readFileSync("package.json", "utf8")).version);
+    assert.equal(status.commit, execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim());
+    assert.equal("sha" in status, false);
     // The dev supervisor preserves the public Host while the API listens on an internal port.
     for (const [host, origin, expected] of [
       ["127.0.0.1:4317", "http://127.0.0.1:4317", 200],

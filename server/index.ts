@@ -120,10 +120,10 @@ const autoPickup = new AutoPickup(board, worker);
 // Only a hosted server (npm start) updates itself. Under the dev supervisor the checkout is someone's working copy.
 // What this process is running: package.json's version plus the commit it started on (null outside a git checkout).
 const version = (() => {
-  let packageVersion = "unknown", sha: string | null = null, date: string | null = null;
+  let packageVersion = "unknown", commit: string | null = null, date: string | null = null;
   try { packageVersion = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version ?? packageVersion; } catch { /* keep unknown */ }
-  try { [sha, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
-  return { version: packageVersion, sha, date };
+  try { [commit, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
+  return { version: packageVersion, commit, date };
 })();
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;

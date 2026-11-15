@@ -5,10 +5,12 @@ import { homedir } from "node:os";
 import { basename, extname, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { doctor, report } from "./doctor.mjs";
+import { formatVersion, readVersion } from "./version.mjs";
 
 const usage = `bakery-cli — local Bakery API client
 
 Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|high|urgent] [--board ID|PATH] [--json]
+       bakery-cli --version
        bakery-cli doctor [--json]
        bakery-cli boards [--json]
        bakery-cli board-add [PATH] [--json]
@@ -82,6 +84,7 @@ function options(argv) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
     else if (arg === "--help" || arg === "-h") result.help = true;
+    else if (arg === "--version" || arg === "-v") result.version = true;
     else if (arg.startsWith("--") && lists.has(arg.slice(2))) {
       const value = argv[i + 1];
       if (!value || value.startsWith("--")) throw new Error(`Supply a card ID after ${arg}`);
@@ -216,6 +219,7 @@ function print(data, json, lines) {
 async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
+  if (opts.version) { console.log(`bakery-cli ${formatVersion(readVersion())}`); return; }
   if (opts.help || !command) { console.log(usage); return; }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
   const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
@@ -252,7 +256,7 @@ async function main() {
   const origin = await serverUrl();
   if (command === "doctor") {
     if (opts.board) throw new Error("--board is not valid with doctor");
-    const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards") });
+    const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards"), fetchStatus: () => request(origin, "/api/status"), cliVersion: readVersion() });
     print(checks, opts.json, report(checks));
     if (checks.some(check => check.status === "fail")) process.exitCode = 1;
     return;

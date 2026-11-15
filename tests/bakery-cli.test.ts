@@ -222,6 +222,37 @@ test("pickup shows the rolling limit and requires consent to reset it", async ()
   } finally { await f.close(); }
 });
 
+test("a daily pickup limit of 0 means no limit in output and settings", async () => {
+  const limited = await fixture();
+  try {
+    assert.match((await limited.run("stats")).stdout, /Pickup on; concurrency 2; 6\/6 starts in 24h; next slot/);
+    const off = await limited.run("pickup", "on", "--limit", "off", "--yes");
+    assert.equal(off.code, 0, off.stderr);
+    assert.match(off.stdout, /; 6 starts in 24h \(no limit\);/);
+    assert.equal((await limited.run("pickup", "on", "--limit", "0", "--yes")).code, 0);
+    for (const bad of ["-1", "100", "1.5", "none"]) assert.match((await limited.run("pickup", "on", "--limit", bad, "--yes")).stderr, /Limit must be off, 0 \(no limit\) or an integer from 1 to 99/);
+    assert.deepEqual(limited.requests.filter(r => r.method === "PATCH").map(r => (r.input as { pickupDailyLimit: number }).pickupDailyLimit), [0, 0]);
+  } finally { await limited.close(); }
+  const unlimited = await fixture([{ ...board, pickupDailyLimit: 0, autoPickupStarts: 8, autoPickupNextAt: null }]);
+  try {
+    assert.match((await unlimited.run("stats")).stdout, /Pickup on; concurrency 2; 8 starts in 24h \(no limit\); \$0\.00 spent/);
+    assert.doesNotMatch((await unlimited.run("pickup")).stdout, /\//);
+    const on = await unlimited.run("pickup", "on", "--yes");
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stdout, /starts in 24h \(no limit\)/);
+    const disabled = await unlimited.run("pickup", "off");
+    assert.equal(disabled.code, 0, disabled.stderr);
+    assert.match(disabled.stdout, /^Pickup off; concurrency 2; \d+ starts in 24h \(no limit\)/);
+    const limit = await unlimited.run("pickup", "on", "--limit", "4", "--yes");
+    assert.match(limit.stdout, /\d+\/4 starts in 24h/);
+    assert.deepEqual(unlimited.requests.filter(r => r.method === "PATCH").map(r => r.input), [
+      { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 0 },
+      { autoPickupEnabled: false, pickupConcurrency: 2, pickupDailyLimit: 0 },
+      { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 4 },
+    ]);
+  } finally { await unlimited.close(); }
+});
+
 test("ambiguous boards require a selector and bad card ids fail before mutation", async () => {
   const f = await fixture([board, { ...board, id: "board-two", repo: "/tmp/another-project" }]);
   try {
@@ -393,7 +424,9 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
     assert.equal(result.code, 1, "a board whose repository is missing fails the run");
     assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(1 board\)/m);
     assert.match(result.stdout, /^FAIL\tboard \/nonexistent\/bakery-doctor\trepository path does not exist/m);
-    assert.match(result.stdout, /\d+ passed, \d+ warnings, 1 failed$/m);
+    // pi, gh and Worktrunk may be missing on the machine running the tests, so count the failures instead of fixing them at 1.
+    const failed = result.stdout.split("\n").filter(line => line.startsWith("FAIL\t")).length;
+    assert.match(result.stdout, new RegExp(`\\d+ passed, \\d+ warnings, ${failed} failed$`, "m"));
     const json = JSON.parse((await f.run("doctor", "--json")).stdout);
     assert.deepEqual(json.find((check: { name: string }) => check.name === "server").status, "pass");
   } finally { await f.close(); }

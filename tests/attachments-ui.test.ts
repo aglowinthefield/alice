@@ -327,3 +327,52 @@ test("clicking a thumbnail opens a lightbox carousel over the card's images, wit
     await section.waitFor({ state: "visible" });
   } finally { await browser.close(); await server.close(); }
 });
+
+test("clicking an image in an agent report opens the lightbox over the report's images", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const card = { id: "card", title: "Shots", body: "", repo: "/tmp/repo", source: "manual", status: "review", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false, attachmentCount: 2 };
+    const base = "/api/boards/board/cards/card/attachments";
+    const run = { id: "run", cardId: "card", attempt: 1, status: "review", output: "", error: null, worktree: "/tmp/wt", startedBy: "manual", agent: "", inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, cost: null, report: `![Before](${base}/one)\n\n![After](${base}/two)`, startedAt: "2026-01-01", finishedAt: "2026-01-01", changedFiles: 0 };
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": [card],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card/runs": [run],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/comments": [],
+      "/api/boards/board/cards/card/auto-review": [],
+      "/api/boards/board/cards/card/history": [],
+      "/api/boards/board/cards/card/attachments": [],
+      "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
+      "/api/status": { draining: false, activeRuns: 0 },
+    };
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === `${base}/one` || path === `${base}/two`) return route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64") });
+      assert.ok(path in data, `Unexpected API request: ${path}`);
+      await route.fulfill({ json: data[path] });
+    });
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    await page.getByRole("button", { name: /Shots/ }).click();
+    const report = page.getByRole("region", { name: /Agent report|Findings/ });
+    await report.getByRole("img", { name: "Before" }).click();
+    const lightbox = page.getByRole("dialog").filter({ has: page.getByRole("button", { name: "Next image" }) });
+    await lightbox.waitFor();
+    assert.equal(await lightbox.getByRole("img", { name: "Before", exact: true }).getAttribute("src"), `${base}/one`);
+    assert.match(await lightbox.textContent() ?? "", /1 of 2/);
+    await lightbox.getByRole("button", { name: "Next image" }).click();
+    assert.equal(await lightbox.getByRole("img", { name: "After", exact: true }).getAttribute("src"), `${base}/two`);
+    assert.match(await lightbox.textContent() ?? "", /2 of 2/);
+    // Full size is offered from the lightbox.
+    await lightbox.getByRole("button", { name: "Full size" }).waitFor();
+    await page.keyboard.press("Escape");
+    await lightbox.waitFor({ state: "detached" });
+  } finally { await browser.close(); await server.close(); }
+});

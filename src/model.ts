@@ -91,6 +91,9 @@ export type BakerySettings = {
   showCardModels?: boolean;
   agentModels?: AgentModels;
   discordWebhookUrl?: string;
+  telemetryEnabled?: boolean;
+  /** False when the server has no BAKERY_TELEMETRY_ENDPOINT; the toggle is then hidden. */
+  telemetryAvailable?: boolean;
 };
 export type ReviewComment = {
   id: string;

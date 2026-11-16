@@ -183,6 +183,8 @@ export class Integration {
   private progress = new Map<string, PushProgress>();
   /** Non-blocking problems seen while approving, such as an offline fetch. Kept for inspection; also logged. */
   readonly warnings: string[] = [];
+  /** Called with "merge" or "pr" when Bakery merges a card into local main or opens or updates its pull request. Used for usage telemetry. */
+  onDelivered: (kind: "merge" | "pr") => void = () => {};
   constructor(private board: Board, private dataDir: string, private fetchTimeoutMs = 30_000) {}
 
   /** The current or last push of `cardId` to GitHub, or null when Bakery has not pushed it since starting. */
@@ -431,7 +433,10 @@ export class Integration {
     const summary = (output || "").trim().slice(-3000);
     const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
     if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
-    if (!url) url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }), !!handoff);
+    if (!url) {
+      url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }), !!handoff);
+      this.delivered("pr", undefined);
+    }
     const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
     if (handoff) await commentOnPullRequest(github, slug, number, handoff);
     return { number, url };
@@ -599,6 +604,10 @@ export class Integration {
   }
 
   /** Marks the card Done, then pushes main when the board asks for it. A failed push never undoes the merge; it goes in the card's history. */
+  private delivered<T>(kind: "merge" | "pr", value: T): T {
+    try { this.onDelivered(kind); } catch { /* telemetry never affects a merge */ }
+    return value;
+  }
   private completeAndPush(card: Card, runId: string, candidate: string, repo: string): Card {
     const done = this.board.completeApproval(card.id, runId, candidate);
     if (!this.board.boardForRepo(card.repo)?.pushMainAfterMerge) return done;
@@ -643,7 +652,7 @@ export class Integration {
 
     if (approved.preparedHead && isAncestor(repo, approved.preparedHead, "main")) {
       if (git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Bakery merged this card; inspect the result before closing it");
-      return this.completeAndPush(card, run.id, approved.candidate, repo);
+      return this.delivered("merge", this.completeAndPush(card, run.id, approved.candidate, repo));
     }
     if (isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Bakery; inspect main before closing this card");
     const base = git(repo, "rev-parse", "main");
@@ -678,7 +687,7 @@ export class Integration {
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
       git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.
-      return this.completeAndPush(card, run.id, approved.candidate, repo);
+      return this.delivered("merge", this.completeAndPush(card, run.id, approved.candidate, repo));
     } finally {
       // Only remove Bakery's temporary integration checkout. Keep the card worktree on every failure.
       try { git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }

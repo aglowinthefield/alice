@@ -50,3 +50,31 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
     await page.getByRole("group", { name: "Theme" }).waitFor();
   } finally { await page.close(); }
 });
+
+test("the telemetry toggle is hidden without an endpoint, and saves when shown", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  let current: Record<string, unknown> = { ...settings, telemetryAvailable: false, telemetryEnabled: false };
+  const patches: unknown[] = [];
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/status") return route.fulfill({ json: { draining: false, activeRuns: 0, version: "0.1.0", commit: null, date: null, updates: null } });
+    if (path === "/api/settings") {
+      if (route.request().method() === "PATCH") { const patch = route.request().postDataJSON(); patches.push(patch); current = { ...current, ...patch }; }
+      return route.fulfill({ json: current });
+    }
+    return route.fulfill({ json: [] });
+  });
+  try {
+    await page.goto(new URL("/settings/general", url).href);
+    await page.getByRole("checkbox", { name: /Confirm before starting a run/ }).waitFor();
+    assert.equal(await page.getByRole("checkbox", { name: /anonymous usage counts/ }).count(), 0);
+    current = { ...current, telemetryAvailable: true };
+    await page.reload();
+    const toggle = page.getByRole("checkbox", { name: /anonymous usage counts/ });
+    await toggle.waitFor();
+    assert.equal(await toggle.isChecked(), false);
+    await toggle.check();
+    await page.waitForFunction(() => true);
+    assert.deepEqual(patches, [{ telemetryEnabled: true }]);
+  } finally { await page.close(); }
+});

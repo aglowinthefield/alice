@@ -132,6 +132,7 @@ npm run build          # runs format:check, tsrs, and vite build
 npm run format         # fixes formatting in the covered frontend files
 ```
 
+- Found a bug? Open an issue with the [bug report form](.github/ISSUE_TEMPLATE/bug.yml); it asks for your version, OS, `bakery-cli doctor` output and logs.
 - Keep a change focused on one thing, and add or update a test for behavior you change.
 - The formatter check covers the board, card details, review, attempts, usage, API, and model modules. It doesn't cover server or test files yet.
 - Tests never touch repositories you've added to Bakery.

@@ -55,10 +55,10 @@ test("Settings switches between the preserved default and Compline after reload"
     const defaultSidebar = await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor);
     await dialog.getByRole("combobox", { name: "Theme" }).selectOption("compline");
     await page.waitForFunction(() => document.documentElement.dataset.theme === "compline");
-    assert.notEqual(background, "rgb(31, 34, 38)");
-    assert.equal(await page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(31, 34, 38)");
-    assert.equal(await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(38, 42, 47)");
-    assert.notEqual(defaultSidebar, "rgb(38, 42, 47)");
+    assert.notEqual(background, "rgb(22, 24, 28)");
+    assert.equal(await page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(22, 24, 28)");
+    assert.equal(await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(30, 33, 38)");
+    assert.notEqual(defaultSidebar, "rgb(30, 33, 38)");
     const colors = await Promise.all([
       "--foreground", "--background", "--muted-foreground", "--muted",
       "--primary-foreground", "--primary", "--diff-add-foreground", "--diff-add",
@@ -76,17 +76,17 @@ test("Settings switches between the preserved default and Compline after reload"
     await dialog.getByRole("radio", { name: "Dark" }).focus();
     await page.keyboard.press("Shift+Tab");
     await page.keyboard.press("Tab");
-    assert.equal(await dialog.getByRole("radio", { name: "Dark" }).evaluate((el) => getComputedStyle(el).outlineColor), "rgb(163, 173, 183)");
+    assert.equal(await dialog.getByRole("radio", { name: "Dark" }).evaluate((el) => getComputedStyle(el).outlineColor), "rgb(186, 198, 210)");
     await page.goBack();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: /Review card/ }).click();
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
-    assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(165, 181, 170)");
+    assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(188, 210, 194)");
     const added = page.locator('[data-line][data-line-type="change-addition"]');
     const removed = page.locator('[data-line][data-line-type="change-deletion"]');
-    assert.equal(await added.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(39, 51, 44)");
-    assert.equal(await removed.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(53, 43, 47)");
-    assert.equal(await page.locator('[data-column-number][data-line-type="change-addition"]').evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(39, 51, 44)");
+    assert.equal(await added.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(32, 55, 42)");
+    assert.equal(await removed.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(62, 38, 43)");
+    assert.equal(await page.locator('[data-column-number][data-line-type="change-addition"]').evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(32, 55, 42)");
     delaySettings = true;
     await page.reload();
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");

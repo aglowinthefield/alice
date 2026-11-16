@@ -67,7 +67,7 @@ function UnreadBadge({
       data-unread={count}
       aria-label={`${count} unread`}
       title={`${count} unread ${count === 1 ? "reply" : "replies"}`}
-      className={`shrink-0 rounded-full bg-primary px-1.5 font-mono text-[10px] leading-4 text-primary-foreground ${className}`}
+      className={`shrink-0 rounded-sm bg-primary px-1.5 font-mono text-[10px] leading-4 text-primary-foreground ${className}`}
     >
       {count}
     </span>

@@ -182,7 +182,7 @@ export function AttachmentLightbox({
                     type="button"
                     aria-label="Previous image"
                     onClick={() => step(-1)}
-                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full border border-border bg-background/80 p-2 shadow hover:bg-background"
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-2 shadow hover:bg-background"
                   >
                     <ChevronLeft size={20} />
                   </button>
@@ -190,7 +190,7 @@ export function AttachmentLightbox({
                     type="button"
                     aria-label="Next image"
                     onClick={() => step(1)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full border border-border bg-background/80 p-2 shadow hover:bg-background"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-2 shadow hover:bg-background"
                   >
                     <ChevronRight size={20} />
                   </button>
@@ -302,7 +302,7 @@ export function AttachmentGrid({
                   onClick={async () => {
                     if (await confirmDeleteAttachment(item)) onRemove(item);
                   }}
-                  className="absolute -right-1.5 -top-1.5 rounded-full border border-border bg-background p-0.5"
+                  className="absolute -right-1.5 -top-1.5 rounded-md border border-border bg-background p-0.5"
                 >
                   <X size={11} />
                 </button>

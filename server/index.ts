@@ -36,6 +36,7 @@ import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
+import { Telemetry, doctorCheck, errorType, runOutcome } from "./telemetry.js";
 
 // The Logs view reads this process's console output from here.
 const logs = new LogBuffer();
@@ -125,6 +126,14 @@ const version = (() => {
   try { [commit, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
   return { version: packageVersion, commit, date };
 })();
+// Usage telemetry is off unless BAKERY_TELEMETRY_ENDPOINT is set and the operator turns it on in Settings. See docs/telemetry.md.
+const telemetry = new Telemetry({ endpoint: process.env.BAKERY_TELEMETRY_ENDPOINT, enabled: () => board.getSettings().telemetryEnabled, dataDir, version: version.version });
+board.onRun((event, run) => {
+  if (event === "started") { telemetry.count("bakery.runs.started"); return; }
+  const outcome = runOutcome(run);
+  if (outcome) telemetry.count(outcome);
+});
+integration.onDelivered = kind => telemetry.count(kind === "merge" ? "bakery.merges" : "bakery.pull_requests.opened");
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
@@ -187,7 +196,9 @@ function listModels(): Promise<{ models: string[]; error?: string }> {
     });
   });
 }
-function send(res: ServerResponse, status: number, payload: unknown) {
+/** Every error response is counted here, once: a caught exception by its class name, an explicit one by its status. */
+function send(res: ServerResponse, status: number, payload: unknown, errorClass?: string) {
+  if (status >= 400) telemetry.count("bakery.server.errors", { "error.type": errorClass ?? `Http${status}` });
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.end(JSON.stringify(payload));
 }
@@ -260,10 +271,17 @@ const server = createServer(async (req, res) => {
       if (!Number.isInteger(after) || after < 0) throw new Error("after must be a whole number");
       send(res, 200, { startedAt: logs.startedAt, entries: logs.since(after) }); return;
     }
-    if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
+    // telemetryAvailable is false without an endpoint, and then the UI hides the toggle.
+    if (path === "/api/settings" && req.method === "GET") { send(res, 200, { ...board.getSettings(), telemetryAvailable: telemetry.available }); return; }
+    // `bakery-cli doctor` runs in another process, so it reports its failed check names here. Unknown names are ignored.
+    if (path === "/api/telemetry/doctor" && req.method === "POST") {
+      const { checks } = await body(req);
+      if (Array.isArray(checks)) for (const name of checks.slice(0, 50)) { const check = doctorCheck(name); if (check) telemetry.count("bakery.doctor.failures", { "doctor.check": check }); }
+      send(res, 202, { ok: true }); return;
+    }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input) && !("telemetryEnabled" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
@@ -271,7 +289,12 @@ const server = createServer(async (req, res) => {
       if ("density" in input && input.density !== "compact" && input.density !== "default" && input.density !== "cozy") throw new Error("density must be compact, default, or cozy");
       if ("discordWebhookUrl" in input && (typeof input.discordWebhookUrl !== "string" || (input.discordWebhookUrl !== "" && !isDiscordWebhookUrl(input.discordWebhookUrl)))) throw new Error("discordWebhookUrl must be empty or a https://discord.com/api/webhooks/ URL");
       if ("showCardModels" in input && typeof input.showCardModels !== "boolean") throw new Error("showCardModels must be a boolean");
-      send(res, 200, board.updateSettings({
+      if ("telemetryEnabled" in input && typeof input.telemetryEnabled !== "boolean") throw new Error("telemetryEnabled must be a boolean");
+      // Turning it off forgets what was gathered, so turning it on again starts from zero.
+      if (input.telemetryEnabled === false) telemetry.discard();
+      if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs BAKERY_TELEMETRY_ENDPOINT to be set");
+      send(res, 200, { ...board.updateSettings({
+        telemetryEnabled: "telemetryEnabled" in input ? input.telemetryEnabled as boolean : undefined,
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
         notifyOnReview: "notifyOnReview" in input ? input.notifyOnReview as boolean : undefined,
         cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
@@ -280,7 +303,7 @@ const server = createServer(async (req, res) => {
         showCardModels: "showCardModels" in input ? input.showCardModels as boolean : undefined,
         agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
         discordWebhookUrl: "discordWebhookUrl" in input ? input.discordWebhookUrl as string : undefined,
-      })); return;
+      }), telemetryAvailable: telemetry.available }); return;
     }
     if (path === "/api/models" && req.method === "GET") { send(res, 200, await listModels()); return; }
     if (path === "/api/path-suggestions" && req.method === "GET") {
@@ -816,18 +839,18 @@ const server = createServer(async (req, res) => {
     res.end(readFileSync(target));
   } catch (error) {
     if (error instanceof IntegrationConflictError) {
-      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details });
+      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details }, errorType(error));
       return;
     }
-    if (error instanceof PoisonedSessionError) { send(res, 409, { code: "session_rejected", error: error.message, cardId: error.cardId, runId: error.runId }); return; }
+    if (error instanceof PoisonedSessionError) { send(res, 409, { code: "session_rejected", error: error.message, cardId: error.cardId, runId: error.runId }, errorType(error)); return; }
     const message = error instanceof Error ? error.message : "Unknown error";
     const status = /not found/i.test(message) ? 404 : 400;
     console.debug(`${req.method} ${req.url} -> ${status}: ${message}`);
-    send(res, status, { error: message });
+    send(res, status, { error: message }, errorType(error));
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPullRequest.start(); autoPickup.start(); githubSync.start(); if (process.env.BAKERY_SENTINEL !== "0") sentinel.start(); pullFeed.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPullRequest.start(); autoPickup.start(); telemetry.start(); githubSync.start(); if (process.env.BAKERY_SENTINEL !== "0") sentinel.start(); pullFeed.start();
   if (updates) {
     updates.refresh();
     updateTimer = setInterval(() => updates.refresh(), 30_000);
@@ -858,7 +881,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
   server.close(); server.closeAllConnections(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
-  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
+  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {

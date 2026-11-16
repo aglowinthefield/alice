@@ -16,7 +16,7 @@ import type { Card, Run } from "../server/board.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 
 // A local bare repository plays origin and a fake `gh` on PATH plays GitHub. The fake keeps its pull requests
-// in prs.json, logs each call to calls.log, fails `auth status` while auth-fail exists, and fails the batched
+// in prs.json, logs each call to calls.log, fails every call but --version while auth-fail exists, and fails the batched
 // `pr list` (no --head) with GitHub's 504 while list-fail exists. `gh api` answers main's rulesets from rules.json
 // (none by default) and its branch protection from protection.json (unprotected by default).
 const fakeGh = `#!/usr/bin/env node
@@ -28,10 +28,8 @@ const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : 
 // Like gh, return only the fields asked for with --json.
 const pick = pr => flag("--json") ? Object.fromEntries(flag("--json").split(",").filter(key => key in pr).map(key => [key, pr[key]])) : pr;
 if (args[0] === "--version") { console.log("gh version 2.99.0 (fake)"); process.exit(0); }
-if (args[0] === "auth" && args[1] === "status") {
-  if (fs.existsSync(path.join(dir, "auth-fail"))) { console.error("You are not logged into any GitHub hosts. To log in, run: gh auth login"); process.exit(1); }
-  console.log("Logged in to github.com"); process.exit(0);
-}
+if (fs.existsSync(path.join(dir, "auth-fail"))) { console.error("You are not logged into any GitHub hosts. To log in, run: gh auth login"); process.exit(1); }
+if (args[0] === "auth" && args[1] === "status") { console.log("Logged in to github.com"); process.exit(0); }
 if (args[0] === "pr" && args[1] === "list") {
   const head = flag("--head");
   if (!head && fs.existsSync(path.join(dir, "list-fail"))) { console.error("HTTP 504: 504 Gateway Timeout (https://api.github.com/graphql)"); process.exit(1); }
@@ -206,6 +204,20 @@ test("a card's PR is found by its bakery/<id> branch, and an attached PR link ov
     const cleared = f.board.setPullRequestOverride(card.id, "");
     assert.equal(cleared.prOverrideUrl, null);
     assert.equal((await linkedPullRequest(f.github, "acme/widgets", cleared))?.number, 8);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a PR is counted for telemetry when it is created, not when an open one is updated", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const integration = new Integration(f.board, f.data);
+    const delivered: string[] = [];
+    integration.onDelivered = kind => { delivered.push(kind); };
+    await integration.openPullRequest(card, integration.review(card).fingerprint, f.github);
+    assert.deepEqual(delivered, ["pr"]);
+    await integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
+    assert.deepEqual(delivered, ["pr"], "the second push reuses the open PR");
   } finally { f.cleanup(); }
 });
 
@@ -589,6 +601,10 @@ test("github-pr: without gh, or when gh is signed out, the board shows an error 
     f.landUpstream("later.txt");
 
     writeFileSync(join(f.ghDir, "auth-fail"), "");
+    // The access check passed earlier and is reused, so the first gh call reports the sign-out...
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.match(f.board.getBoard(f.repoBoard.id)!.integrationError, /GitHub CLI is not signed in.*not logged into/s);
+    // ...and drops the reused check, so the next sync runs gh auth status again.
     await f.sync.syncBoard(f.repoBoard.id);
     assert.match(f.board.getBoard(f.repoBoard.id)!.integrationError, /gh auth status failed.*not logged into/s);
     rmSync(join(f.ghDir, "auth-fail"));
@@ -1219,6 +1235,8 @@ test("publish as PR: a card merged into local main goes back to Review, opens a 
     const card = await reviewedCard(f);
     const worktree = join(f.data, "worktrees", card.id);
     const integration = new Integration(f.board, f.data);
+    const delivered: string[] = [];
+    integration.onDelivered = kind => { delivered.push(kind); };
     assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
     const candidate = git(worktree, "rev-parse", "HEAD");
     const mergedTip = git(f.repo, "rev-parse", "main");
@@ -1237,6 +1255,7 @@ test("publish as PR: a card merged into local main goes back to Review, opens a 
 
     // Publish: the approved candidate is pushed to bakery/<id>, a PR opens, the local record is cleared.
     const published = await integration.publishLocalMerge(f.board.getCard(card.id)!, f.github);
+    assert.deepEqual(delivered, ["merge", "pr"], "publishing counts the PR it creates");
     assert.equal(published.card.status, "review");
     assert.equal(published.card.prNumber, 100);
     assert.equal(published.card.prState, "OPEN");

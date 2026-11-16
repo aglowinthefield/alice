@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -430,6 +430,28 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
     const json = JSON.parse((await f.run("doctor", "--json")).stdout);
     assert.deepEqual(json.find((check: { name: string }) => check.name === "server").status, "pass");
   } finally { await f.close(); }
+});
+
+test("doctor exits promptly with its own status when the telemetry route stalls", async () => {
+  const stalled: ServerResponse[] = [];
+  const stub = createServer((req, res) => {
+    if (req.url === "/api/telemetry/doctor") { stalled.push(res); return; }
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]));
+  });
+  await new Promise<void>(resolve => stub.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = (stub.address() as { port: number }).port;
+    const started = Date.now();
+    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
+    let stdout = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    const code = await new Promise<number | null>(resolve => child.once("close", resolve));
+    assert.equal(code, 1);
+    assert.match(stdout, /^FAIL\tboard /m);
+    assert.equal(stalled.length, 1, "the failure was reported");
+    assert.ok(Date.now() - started < 5000, `exit took ${Date.now() - started}ms, not the 10s request timeout`);
+  } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 
 test("doctor fails the server check when Bakery is not running", async () => {

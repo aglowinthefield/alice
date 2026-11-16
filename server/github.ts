@@ -192,10 +192,34 @@ export function trustedBakeryComments<T extends { association: string; body: str
   return comments.filter(item => trustedAssociations.includes(item.association) && mentionsBakery(item.body)).sort((a, b) => a.at.localeCompare(b.at));
 }
 
+/** How gh reports a missing or rejected sign-in on any command. */
+const signedOut = /HTTP 401|Bad credentials|not logged in|gh auth login/i;
+/** How long a passing `check()` is reused. `gh auth status` calls GitHub's API, which costs most of a second. */
+const checkTtlMs = 10 * 60_000;
+/** A gh call failed because gh is signed out. Board sync lets it through instead of filing it on one card. */
+export class GhSignedOutError extends Error {}
+
 export class GitHub {
+  private checkedAt = 0;
+  private checking?: Promise<void>;
   constructor(private readonly ghBin = "gh", private readonly cwd?: string) {}
-  private async gh(args: string[]): Promise<string> { return (await run(this.ghBin, args, this.cwd)).stdout; }
-  check(): Promise<void> { return checkGh(this.ghBin); }
+  private async gh(args: string[]): Promise<string> {
+    try { return (await run(this.ghBin, args, this.cwd)).stdout; }
+    catch (error) {
+      // A sign-out after a cached check shows up here first; forget the check so the next one runs for real.
+      if (!signedOut.test((error as Error).message)) throw error;
+      this.checkedAt = 0;
+      throw new GhSignedOutError(`GitHub CLI is not signed in: ${(error as Error).message}`);
+    }
+  }
+  /** `checkGh`, reusing a pass for 10 minutes. A failure is never reused. */
+  check(): Promise<void> {
+    if (Date.now() - this.checkedAt < checkTtlMs) return Promise.resolve();
+    this.checking ??= checkGh(this.ghBin)
+      .then(() => { this.checkedAt = Date.now(); })
+      .finally(() => { this.checking = undefined; });
+    return this.checking;
+  }
   /** Recent PRs in the repository, newest first. One call per board per tick. */
   async listPullRequests(repo: string): Promise<PullRequest[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", "200", "--json", listFields])) as PullRequest[];
@@ -459,13 +483,16 @@ export class GitHubSync {
     // looked up on its own, so one slow query does not stop every card from linking or settling.
     let recent: PullRequest[] | undefined;
     try { recent = await this.github.listPullRequests(repo); }
-    catch (error) { console.error(`GitHub sync for ${repoBoard.repo}: gh pr list failed, checking each card on its own: ${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) {
+      if (error instanceof GhSignedOutError) throw error;
+      console.error(`GitHub sync for ${repoBoard.repo}: gh pr list failed, checking each card on its own: ${error instanceof Error ? error.message : String(error)}`); }
     for (const card of cards) {
       try {
         let pr = await linkedPullRequest(this.github, repo, card, recent);
         if (pr?.state === "OPEN" && !pr.statusCheckRollup) pr = { ...pr, statusCheckRollup: await this.github.checks(prRepo(card, repo), pr.number) };
         if (pr) await this.settle(repoBoard, card, pr, prRepo(card, repo));
       } catch (error) {
+        if (error instanceof GhSignedOutError) throw error;
         this.board.recordPullRequestError(card.id, `Could not check the pull request: ${error instanceof Error ? error.message : String(error)}`);
       }
     }

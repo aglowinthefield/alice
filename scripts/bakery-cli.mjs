@@ -125,14 +125,14 @@ async function serverUrl() {
   return candidates[answers.indexOf(true)] ?? candidates[1];
 }
 
-async function request(origin, path, method = "GET", input) {
+async function request(origin, path, method = "GET", input, timeoutMs = 10000) {
   let response;
   try {
     response = await fetch(new URL(path, origin), {
       method,
       headers: input === undefined ? undefined : { "Content-Type": "application/json" },
       body: input === undefined ? undefined : JSON.stringify(input),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     throw new Error(`Cannot reach Bakery at ${origin.origin}: ${error instanceof Error ? error.message : error}`);
@@ -258,6 +258,10 @@ async function main() {
     if (opts.board) throw new Error("--board is not valid with doctor");
     const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards"), fetchStatus: () => request(origin, "/api/status"), cliVersion: readVersion() });
     print(checks, opts.json, report(checks));
+    // Failed check names go to the server's opt-in telemetry, which counts them only when the operator turned it on.
+    // Best effort: not awaited, and abandoned after a second, so a slow or stalled route never delays the exit or changes its status.
+    const failed = checks.filter(check => check.status === "fail").map(check => check.name);
+    if (failed.length) request(origin, "/api/telemetry/doctor", "POST", { checks: failed }, 1000).catch(() => {});
     if (checks.some(check => check.status === "fail")) process.exitCode = 1;
     return;
   }

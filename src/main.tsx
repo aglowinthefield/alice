@@ -162,7 +162,7 @@ function NewCardsBadge({ count }: { count: number }) {
       role="status"
       aria-label={label}
       title={label}
-      className="ml-auto mr-2 shrink-0 rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
+      className="ml-auto mr-2 shrink-0 rounded-sm bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
     >
       {count}
     </span>
@@ -322,7 +322,7 @@ function ChatUnreadBadge({
       data-chat-unread={count}
       aria-label={`${count} unread chat ${count === 1 ? "reply" : "replies"}`}
       title={`${count} unread chat ${count === 1 ? "reply" : "replies"}`}
-      className={`flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary ${className}`}
+      className={`flex shrink-0 items-center gap-1 rounded-sm bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary ${className}`}
     >
       <MessageSquare size={10} aria-hidden="true" />
       {count}
@@ -338,7 +338,7 @@ function SentinelsBadge({ count }: { count: number }) {
       data-sentinels-in-progress={count}
       aria-label={label}
       title={label}
-      className="ml-auto shrink-0 rounded-full bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
+      className="ml-auto shrink-0 rounded-sm bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
     >
       {count}
     </span>
@@ -355,7 +355,7 @@ function RemoteLink({ url }: { url: string }) {
       rel="noopener noreferrer"
       title={url}
       aria-label={`Remote repository: ${remote.label}`}
-      className="group inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group inline-flex max-w-full items-center gap-2 rounded-sm border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Icon size={13} className="shrink-0" aria-hidden="true" />
       <span className="truncate font-mono text-foreground">{remote.label}</span>
@@ -2947,7 +2947,7 @@ export function App() {
                               className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50 data-[new]:border-primary data-[new]:ring-2 data-[new]:ring-primary/60`}
                             >
                               {newCardIds.has(item.id) && (
-                                <span className="mb-1 inline-block rounded-full bg-primary px-2 py-px text-[10px] font-semibold uppercase tracking-[.1em] text-primary-foreground">
+                                <span className="mb-1 inline-block rounded-sm bg-primary px-2 py-px text-[10px] font-semibold uppercase tracking-[.1em] text-primary-foreground">
                                   New
                                 </span>
                               )}

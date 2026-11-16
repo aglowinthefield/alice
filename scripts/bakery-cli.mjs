@@ -258,6 +258,9 @@ async function main() {
     if (opts.board) throw new Error("--board is not valid with doctor");
     const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards"), fetchStatus: () => request(origin, "/api/status"), cliVersion: readVersion() });
     print(checks, opts.json, report(checks));
+    // Failed check names go to the server's opt-in telemetry, which counts them only when the operator turned it on. A failure here changes nothing.
+    const failed = checks.filter(check => check.status === "fail").map(check => check.name);
+    if (failed.length) await request(origin, "/api/telemetry/doctor", "POST", { checks: failed }).catch(() => {});
     if (checks.some(check => check.status === "fail")) process.exitCode = 1;
     return;
   }

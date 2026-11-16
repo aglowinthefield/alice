@@ -893,8 +893,10 @@ const startDrain = (onDrained: () => void) => {
   void Promise.all([worker.drain(), autoReview.drain(), autoPullRequest.drain()]).then(onDrained);
 };
 process.on("message", (message: unknown) => {
-  if ((message as { type?: unknown } | null)?.type !== "drain") return;
-  startDrain(() => process.send?.({ type: "drained" }));
+  const type = (message as { type?: unknown } | null)?.type;
+  // Windows has no SIGTERM to send: killing a process there is abrupt, so the parent asks over IPC instead.
+  if (type === "shutdown") shutdown("SIGTERM");
+  if (type === "drain") startDrain(() => process.send?.({ type: "drained" }));
 });
 // Without the supervisor (npm start under systemd), SIGUSR2 drains and then exits so the service manager restarts
 // the server with whatever is on disk. scripts/update.sh sends it after pulling.

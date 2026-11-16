@@ -151,10 +151,12 @@ export function killTree(
   platform: string = process.platform,
 ): boolean {
   if (platform === "win32" && child.pid) {
+    // True when there was something to stop, as `child.kill()` reports; the child is already gone once taskkill returns.
+    const wasRunning = child.exitCode === null && child.signalCode === null;
     killWindowsTree(child.pid);
     child.stdout?.destroy();
     child.stderr?.destroy();
-    if (child.exitCode !== null) return true;
+    return wasRunning || child.kill(signal);
   }
   return child.kill(signal);
 }

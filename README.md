@@ -132,12 +132,17 @@ npm run build          # runs format:check, tsrs, and vite build
 npm run format         # fixes formatting in the covered frontend files
 ```
 
+- Found a bug? Open an issue with the [bug report form](.github/ISSUE_TEMPLATE/bug.yml); it asks for your version, OS, `bakery-cli doctor` output and logs.
 - Keep a change focused on one thing, and add or update a test for behavior you change.
 - The formatter check covers the board, card details, review, attempts, usage, API, and model modules. It doesn't cover server or test files yet.
 - Tests never touch repositories you've added to Bakery.
-- By contributing, you agree that your work is licensed under the [MIT License](LICENSE).
+- By contributing, you agree that your work is licensed under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2).
 
 ## Documentation
 
 - [Reference](docs/reference.md): every feature, setting, CLI command and environment variable.
 - **Safety:** Pi is told not to commit, push, or publish, but **that isn't a sandbox**. Only run agents on repositories you trust. The server has no authentication and listens on `127.0.0.1` only; see [Safety](docs/reference.md#safety) and [Hosting on another machine](docs/reference.md#hosting-on-another-machine).
+
+## License
+
+Bakery is under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2). You can use, change and share it for any purpose except offering a product or service that competes with Bakery. Two years after each release, that release's code also becomes available under the Apache License 2.0.

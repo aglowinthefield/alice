@@ -21,6 +21,8 @@ export type Board = {
   remoteUrl?: string;
   /** local: Approve merges into local main. github-pr: Approve opens a PR; Done once it merges on GitHub. */
   integration?: "local" | "github-pr";
+  /** What is stored: "github-pr" while pull requests are off in this build, where `integration` reads "local". */
+  integrationConfigured?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
   /** A sync problem Bakery is retrying (a failed fetch); pickup is not paused. */
@@ -91,6 +93,9 @@ export type BakerySettings = {
   showCardModels?: boolean;
   agentModels?: AgentModels;
   discordWebhookUrl?: string;
+  telemetryEnabled?: boolean;
+  /** False when the server has no BAKERY_TELEMETRY_ENDPOINT; the toggle is then hidden. */
+  telemetryAvailable?: boolean;
 };
 export type ReviewComment = {
   id: string;

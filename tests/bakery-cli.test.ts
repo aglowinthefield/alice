@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
@@ -27,6 +27,7 @@ async function fixture(boards: object[] = [board]) {
     res.setHeader("content-type", "application/json");
     let data: unknown;
     if (path === "/api/boards" && req.method === "POST") { res.writeHead(201); data = { id: "board-new", repo: (input as { repo: string }).repo }; }
+    else if (path === "/api/status") data = { version: "9.8.7", commit: "abc1234" };
     else if (path === "/api/boards") data = boards;
     else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = cards;
     else if (/^\/api\/boards\/board-one\/cards\/[\w-]+$/.test(path) && req.method === "PATCH") {
@@ -431,6 +432,28 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
   } finally { await f.close(); }
 });
 
+test("doctor exits promptly with its own status when the telemetry route stalls", async () => {
+  const stalled: ServerResponse[] = [];
+  const stub = createServer((req, res) => {
+    if (req.url === "/api/telemetry/doctor") { stalled.push(res); return; }
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]));
+  });
+  await new Promise<void>(resolve => stub.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = (stub.address() as { port: number }).port;
+    const started = Date.now();
+    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
+    let stdout = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    const code = await new Promise<number | null>(resolve => child.once("close", resolve));
+    assert.equal(code, 1);
+    assert.match(stdout, /^FAIL\tboard /m);
+    assert.equal(stalled.length, 1, "the failure was reported");
+    assert.ok(Date.now() - started < 5000, `exit took ${Date.now() - started}ms, not the 10s request timeout`);
+  } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
+});
+
 test("doctor fails the server check when Bakery is not running", async () => {
   const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: "http://127.0.0.1:1", BAKERY_PI_BIN: "bakery-no-such-pi" } });
   let stdout = "";
@@ -448,4 +471,40 @@ test("board-add posts the repository path to the HTTP API", async () => {
     assert.deepEqual(out, { id: "board-new", repo: "/tmp/new-repo" });
     assert.deepEqual(f.requests.find(item => item.method === "POST" && item.path === "/api/boards")?.input, { repo: "/tmp/new-repo" });
   } finally { await f.close(); }
+});
+
+test("--version prints the CLI's package.json version and Git commit", async () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+  const f = await fixture();
+  try {
+    const out = (await f.run("--version")).stdout.trim();
+    assert.match(out, new RegExp(`^bakery-cli ${pkg.version.replace(/\./g, "\\.")}( \\([0-9a-f]{7,}\\))?$`));
+    assert.equal(f.requests.length, 0, "--version does not need the server");
+  } finally { await f.close(); }
+});
+
+test("doctor starts with the CLI version, and adds the server's against a remote BAKERY_URL", async () => {
+  const f = await fixture();
+  try {
+    const local = (await f.run("doctor")).stdout.split("\n");
+    assert.match(local[0], /^PASS\tbakery-cli\t\d+\.\d+\.\d+/);
+    assert.ok(!local.some(line => line.includes("bakery server")), "a local server is this checkout, so one line");
+  } finally { await f.close(); }
+  // A remote server is any address the CLI does not treat as loopback, so reach a stub through this machine's LAN address.
+  const lan = Object.values(networkInterfaces()).flat().find(item => item && item.family === "IPv4" && !item.internal)?.address;
+  if (!lan) return;
+  const stub = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : []));
+  });
+  await new Promise<void>(resolve => stub.listen(0, "0.0.0.0", resolve));
+  try {
+    const port = (stub.address() as { port: number }).port;
+    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://${lan}:${port}`, BAKERY_ALLOW_REMOTE: "1" } });
+    let stdout = "";
+    for await (const chunk of child.stdout) stdout += chunk;
+    const lines = stdout.split("\n");
+    assert.match(lines[0], /^PASS\tbakery-cli\t\d+\.\d+\.\d+/);
+    assert.equal(lines[1], "PASS\tbakery server\t9.8.7 (abc1234)");
+  } finally { await new Promise<void>(resolve => stub.close(() => resolve())); }
 });

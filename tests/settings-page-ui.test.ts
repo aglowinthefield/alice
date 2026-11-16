@@ -22,7 +22,7 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
   let installs = 0;
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/status") return route.fulfill({ json: { draining: false, activeRuns: 0, version: "0.1.0", sha: "e3c5357", date: "2026-10-28T12:00:00Z", updates: { commits: [{ sha: "abc1234", subject: "Add the settings page" }], installing: false, error: null } } });
+    if (path === "/api/status") return route.fulfill({ json: { draining: false, activeRuns: 0, version: "0.1.0", commit: "e3c5357", date: "2026-10-28T12:00:00Z", updates: { commits: [{ sha: "abc1234", subject: "Add the settings page" }], installing: false, error: null } } });
     if (path === "/api/update") { installs++; return route.fulfill({ status: 202, json: { commits: [], installing: true, error: null } }); }
     if (path === "/api/settings") return route.fulfill({ json: settings });
     return route.fulfill({ json: [] });
@@ -37,7 +37,8 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
     await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Updates" }).click();
     assert.equal(new URL(page.url()).pathname, "/settings/updates");
     assert.equal(await page.getByTestId("settings-version").textContent(), "0.1.0");
-    await page.getByText("e3c5357").waitFor();
+    await page.getByText("e3c5357", { exact: true }).first().waitFor();
+    assert.match(await page.getByTestId("settings-footer-version").textContent() ?? "", /Bakery 0\.1\.0\s*e3c5357/);
     await page.getByText("Add the settings page").waitFor();
     await page.getByRole("button", { name: "Update and restart" }).click();
     await page.waitForFunction(() => true);
@@ -47,5 +48,33 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
     assert.equal(new URL(page.url()).pathname, "/today", "switching categories does not stack history entries");
     await page.goto(new URL("/settings/appearance", url).href);
     await page.getByRole("group", { name: "Theme" }).waitFor();
+  } finally { await page.close(); }
+});
+
+test("the telemetry toggle is hidden without an endpoint, and saves when shown", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  let current: Record<string, unknown> = { ...settings, telemetryAvailable: false, telemetryEnabled: false };
+  const patches: unknown[] = [];
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/status") return route.fulfill({ json: { draining: false, activeRuns: 0, version: "0.1.0", commit: null, date: null, updates: null } });
+    if (path === "/api/settings") {
+      if (route.request().method() === "PATCH") { const patch = route.request().postDataJSON(); patches.push(patch); current = { ...current, ...patch }; }
+      return route.fulfill({ json: current });
+    }
+    return route.fulfill({ json: [] });
+  });
+  try {
+    await page.goto(new URL("/settings/general", url).href);
+    await page.getByRole("checkbox", { name: /Confirm before starting a run/ }).waitFor();
+    assert.equal(await page.getByRole("checkbox", { name: /anonymous usage counts/ }).count(), 0);
+    current = { ...current, telemetryAvailable: true };
+    await page.reload();
+    const toggle = page.getByRole("checkbox", { name: /anonymous usage counts/ });
+    await toggle.waitFor();
+    assert.equal(await toggle.isChecked(), false);
+    await toggle.check();
+    await page.waitForFunction(() => true);
+    assert.deepEqual(patches, [{ telemetryEnabled: true }]);
   } finally { await page.close(); }
 });

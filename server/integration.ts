@@ -8,6 +8,7 @@ import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from 
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
+import { featureOffMessage } from "../src/features.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false, maxBuffer = 8 * 1024 * 1024): string {
@@ -183,6 +184,8 @@ export class Integration {
   private progress = new Map<string, PushProgress>();
   /** Non-blocking problems seen while approving, such as an offline fetch. Kept for inspection; also logged. */
   readonly warnings: string[] = [];
+  /** Called with "merge" or "pr" when Bakery merges a card into local main or opens or updates its pull request. Used for usage telemetry. */
+  onDelivered: (kind: "merge" | "pr") => void = () => {};
   constructor(private board: Board, private dataDir: string, private fetchTimeoutMs = 30_000) {}
 
   /** The current or last push of `cardId` to GitHub, or null when Bakery has not pushed it since starting. */
@@ -361,6 +364,7 @@ export class Integration {
    */
   async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator"): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
+    if (repoBoard?.integrationConfigured === "github-pr" && !this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
@@ -429,7 +433,10 @@ export class Integration {
     const summary = (output || "").trim().slice(-3000);
     const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
     if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
-    if (!url) url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
+    if (!url) {
+      url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
+      this.delivered("pr", undefined);
+    }
     return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url };
   }
 
@@ -455,6 +462,7 @@ export class Integration {
    */
   async publishLocalMerge(card: Card, github: GitHub): Promise<{ card: Card; main: MainRecovery | null }> {
     const repoBoard = this.board.boardForRepo(card.repo);
+    if (!this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("Switch this board to GitHub pull requests before publishing a card as a pull request");
     if (card.status !== "done") throw new Error("Only a Done card that was merged into local main can be published as a pull request");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; clear the link first`);
@@ -595,6 +603,10 @@ export class Integration {
   }
 
   /** Marks the card Done, then pushes main when the board asks for it. A failed push never undoes the merge; it goes in the card's history. */
+  private delivered<T>(kind: "merge" | "pr", value: T): T {
+    try { this.onDelivered(kind); } catch { /* telemetry never affects a merge */ }
+    return value;
+  }
   private completeAndPush(card: Card, runId: string, candidate: string, repo: string): Card {
     const done = this.board.completeApproval(card.id, runId, candidate);
     if (!this.board.boardForRepo(card.repo)?.pushMainAfterMerge) return done;
@@ -610,6 +622,11 @@ export class Integration {
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);
+    // Pull requests are off in this build, so a board set to them has no safe way to deliver: never merge locally in their place.
+    if (repoBoard?.integrationConfigured === "github-pr")
+      throw new Error(`This board is set to GitHub pull requests, which are turned off in this build, so Approve will not merge into local main instead. ${featureOffMessage("pullRequests")} Or choose Local merge in the board's settings to merge locally.`);
+    if (repoBoard?.githubMainProtected && !repoBoard.integrationChosen && !this.board.features.pullRequests)
+      throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, and pull requests are turned off in this build, so merging into local main would leave it ahead of GitHub. ${featureOffMessage("pullRequests")} Or choose Local merge in the board's settings to merge locally anyway.`);
     if (repoBoard?.githubMainProtected && !repoBoard.integrationChosen)
       throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, so merging into local main would leave it ahead of GitHub. Switch Integration to GitHub pull requests in the board's settings, or choose Local merge there to merge locally anyway`);
     const { repo, worktree, run } = this.location(card);
@@ -639,7 +656,7 @@ export class Integration {
 
     if (approved.preparedHead && isAncestor(repo, approved.preparedHead, "main")) {
       if (git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Bakery merged this card; inspect the result before closing it");
-      return this.completeAndPush(card, run.id, approved.candidate, repo);
+      return this.delivered("merge", this.completeAndPush(card, run.id, approved.candidate, repo));
     }
     if (isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Bakery; inspect main before closing this card");
     const base = git(repo, "rev-parse", "main");
@@ -674,7 +691,7 @@ export class Integration {
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
       git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.
-      return this.completeAndPush(card, run.id, approved.candidate, repo);
+      return this.delivered("merge", this.completeAndPush(card, run.id, approved.candidate, repo));
     } finally {
       // Only remove Bakery's temporary integration checkout. Keep the card worktree on every failure.
       try { git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }

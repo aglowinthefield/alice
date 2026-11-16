@@ -54,6 +54,8 @@ export class PullRequestFeed {
       .catch(error => { if (!this.entries.has(boardId)) throw error; console.error(`Pull request details for ${repo}: ${error instanceof Error ? error.message : String(error)}`); })
       .finally(() => this.inFlight.delete(boardId));
     this.inFlight.set(boardId, whole);
+    // A failed quick list rejects `whole` too; callers see it through `quick`, so the shared pass must not also crash the process unhandled.
+    whole.catch(() => {});
     // Callers wait for the quick list only; a failed quick list rejects for them and for the shared pass.
     return quick.catch(error => { this.inFlight.delete(boardId); throw error; });
   }

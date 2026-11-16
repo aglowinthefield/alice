@@ -65,8 +65,12 @@ export function confirmDeleteAttachment(item: Attachment): Promise<boolean> {
 const isImage = (item: Attachment) =>
   /^image\/(png|jpeg|gif|webp)$/.test(item.type);
 
-const attachmentHref = (boardId: string, item: Attachment) =>
-  `${attachmentsUrl(boardId, item.cardId)}/${item.id}`;
+/** An image the lightbox can show: a stored attachment, or any image URL (such as one in a report). */
+export type LightboxImage = Pick<Attachment, "id" | "name"> &
+  Partial<Pick<Attachment, "cardId" | "size">> & { url?: string };
+
+const attachmentHref = (boardId: string, item: LightboxImage) =>
+  item.url ?? `${attachmentsUrl(boardId, item.cardId ?? "")}/${item.id}`;
 
 /**
  * A popup carousel over a set of images. Arrow keys or the side buttons step through them;
@@ -81,7 +85,7 @@ export function AttachmentLightbox({
   onClose,
 }: {
   boardId: string;
-  images: Attachment[];
+  images: LightboxImage[];
   /** The image shown, or null when the lightbox is closed. */
   index: number | null;
   onIndexChange: (index: number) => void;
@@ -119,8 +123,9 @@ export function AttachmentLightbox({
                 {item.name}
               </DialogTitle>
               <DialogDescription className="shrink-0 text-xs text-muted-foreground">
-                {count > 1 && `${(index ?? 0) + 1} of ${count} · `}
-                {formatSize(item.size)}
+                {count > 1 && `${(index ?? 0) + 1} of ${count}`}
+                {count > 1 && item.size !== undefined && " · "}
+                {item.size !== undefined && formatSize(item.size)}
               </DialogDescription>
               <div className="ml-auto flex shrink-0 items-center gap-1.5 text-xs">
                 <button
@@ -177,7 +182,7 @@ export function AttachmentLightbox({
                     type="button"
                     aria-label="Previous image"
                     onClick={() => step(-1)}
-                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full border border-border bg-background/80 p-2 shadow hover:bg-background"
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-2 shadow hover:bg-background"
                   >
                     <ChevronLeft size={20} />
                   </button>
@@ -185,7 +190,7 @@ export function AttachmentLightbox({
                     type="button"
                     aria-label="Next image"
                     onClick={() => step(1)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full border border-border bg-background/80 p-2 shadow hover:bg-background"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-border bg-background/80 p-2 shadow hover:bg-background"
                   >
                     <ChevronRight size={20} />
                   </button>
@@ -285,7 +290,7 @@ export function AttachmentGrid({
                   <Download size={13} />
                   <span className="max-w-48 truncate">{item.name}</span>
                   <span className="text-muted-foreground">
-                    {formatSize(item.size)}
+                    {item.size !== undefined && formatSize(item.size)}
                   </span>
                 </a>
               )}
@@ -297,7 +302,7 @@ export function AttachmentGrid({
                   onClick={async () => {
                     if (await confirmDeleteAttachment(item)) onRemove(item);
                   }}
-                  className="absolute -right-1.5 -top-1.5 rounded-full border border-border bg-background p-0.5"
+                  className="absolute -right-1.5 -top-1.5 rounded-md border border-border bg-background p-0.5"
                 >
                   <X size={11} />
                 </button>

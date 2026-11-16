@@ -1,5 +1,6 @@
 import type { Board, Run } from "./board.js";
 import { boardGithubRepo } from "./github.js";
+import { monitorsGithub } from "./sentinel.js";
 import type { PrLocks } from "./pr-locks.js";
 import type { SentinelStore } from "./sentinel-store.js";
 
@@ -23,7 +24,7 @@ export class RunLocks {
   private target(run: Run): { repo: string; number: number; holder: string } | undefined {
     const card = this.board.getCard(run.cardId);
     const repoBoard = card && this.board.listBoards().find(item => item.repo === card.repo);
-    if (!card || repoBoard?.integration !== "github-pr") return undefined;
+    if (!card || !repoBoard || !monitorsGithub(repoBoard)) return undefined;
     const repo = boardGithubRepo(repoBoard);
     const sentinelPr = this.store.attemptPr(card.id);
     if (sentinelPr !== undefined) return { repo, number: sentinelPr, holder: `sentinel:${card.id}` };

@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { api } from "./api.js";
 import type { BakerySettings } from "./model.js";
 import { settingsSections, type SettingsSection } from "./route.js";
 import { themeFamilies, themeModes, themeParts } from "./themes.js";
@@ -145,6 +146,29 @@ export function SettingsPage({
                     saveSettings({ discordWebhookUrl })
                   }
                 />
+                {settings?.telemetryAvailable && (
+                  <label className="mt-6 flex items-start gap-3 border-t border-border pt-5 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-1 accent-primary"
+                      checked={settings.telemetryEnabled ?? false}
+                      disabled={busy}
+                      onChange={(event) =>
+                        saveSettings({ telemetryEnabled: event.target.checked })
+                      }
+                    />
+                    <span>
+                      Send anonymous usage counts
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        Counts of runs, merges, pull requests and errors, tagged
+                        with the Bakery version, your OS and a random install
+                        ID, go to the endpoint this server was set up with. No
+                        code, prompts, card text, paths or hostnames. Every
+                        field is listed in docs/telemetry.md.
+                      </span>
+                    </span>
+                  </label>
+                )}
                 <fieldset
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
@@ -337,9 +361,34 @@ export function SettingsPage({
               {error}
             </p>
           )}
+          <VersionFooter />
         </section>
       </div>
     </main>
+  );
+}
+
+/** The running version at the bottom of every Settings category, read once from the server's status. */
+function VersionFooter() {
+  const [info, setInfo] = useState<{
+    version?: string;
+    commit?: string | null;
+  } | null>(null);
+  useEffect(() => {
+    api<{ version?: string; commit?: string | null }>("/status").then(
+      setInfo,
+      () => setInfo(null),
+    );
+  }, []);
+  if (!info?.version) return null;
+  return (
+    <p
+      data-testid="settings-footer-version"
+      className="mt-8 border-t border-border pt-4 text-xs text-muted-foreground"
+    >
+      Bakery {info.version}
+      {info.commit && <span className="ml-2 font-mono">{info.commit}</span>}
+    </p>
   );
 }
 

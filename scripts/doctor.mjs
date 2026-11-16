@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { formatVersion } from "./version.mjs";
 
 // Bare names like `pi` are npm `.cmd` shims on Windows, which only a shell can run.
 function run(bin, args, timeout = 20_000) {
@@ -105,7 +106,7 @@ function boardChecks(board, local) {
 }
 
 /** Runs every check. `fetchBoards` resolves to the server's boards or throws when it is unreachable. */
-export async function doctor({ env = process.env, origin, local, fetchBoards }) {
+export async function doctor({ env = process.env, origin, local, fetchBoards, fetchStatus, cliVersion }) {
   let boards = null, serverCheck;
   try {
     boards = await fetchBoards();
@@ -115,7 +116,14 @@ export async function doctor({ env = process.env, origin, local, fetchBoards }) 
   }
   // Tools, the data directory and repository paths belong to the machine the server runs on.
   const machine = local ? [nodeCheck(), ...gitChecks(), ...piChecks(env), wtCheck(env), ghCheck(env, boards), ...dataDirChecks(env)] : [];
-  return [...machine, serverCheck, ...(boards ?? []).flatMap(board => boardChecks(board, local))];
+  // The versions come first. A remote server can run a different version than this CLI, so print both.
+  const versions = [];
+  if (cliVersion) versions.push({ status: "pass", name: "bakery-cli", detail: formatVersion(cliVersion) });
+  if (!local && fetchStatus) {
+    try { versions.push({ status: "pass", name: "bakery server", detail: formatVersion(await fetchStatus()) }); }
+    catch { versions.push({ status: "warn", name: "bakery server", detail: "version unavailable" }); }
+  }
+  return [...versions, ...machine, serverCheck, ...(boards ?? []).flatMap(board => boardChecks(board, local))];
 }
 
 export function report(checks) {

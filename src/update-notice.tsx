@@ -13,7 +13,7 @@ type Status = {
   cards?: WaitingCard[];
   updates?: Updates | null;
   version?: string;
-  sha?: string | null;
+  commit?: string | null;
   date?: string | null;
 };
 
@@ -201,7 +201,7 @@ export function UpdatesPanel() {
         <dd data-testid="settings-version">{status.version ?? "unknown"}</dd>
         <dt className="text-muted-foreground">Commit</dt>
         <dd className="font-mono">
-          {status.sha ?? "unknown"}
+          {status.commit ?? "unknown"}
           {status.date && (
             <span className="ml-2 font-sans text-muted-foreground">
               {new Date(status.date).toLocaleDateString(undefined, {

@@ -1,4 +1,5 @@
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
+import { featureOffMessage, type Feature } from "../src/features.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -40,6 +41,7 @@ import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
+import { Telemetry, doctorCheck, errorType, runOutcome } from "./telemetry.js";
 
 // The Logs view reads this process's console output from here.
 const logs = new LogBuffer();
@@ -130,11 +132,19 @@ const autoPickup = new AutoPickup(board, worker);
 // Only a hosted server (npm start) updates itself. Under the dev supervisor the checkout is someone's working copy.
 // What this process is running: package.json's version plus the commit it started on (null outside a git checkout).
 const version = (() => {
-  let packageVersion = "unknown", sha: string | null = null, date: string | null = null;
+  let packageVersion = "unknown", commit: string | null = null, date: string | null = null;
   try { packageVersion = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version ?? packageVersion; } catch { /* keep unknown */ }
-  try { [sha, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
-  return { version: packageVersion, sha, date };
+  try { [commit, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
+  return { version: packageVersion, commit, date };
 })();
+// Usage telemetry is off unless BAKERY_TELEMETRY_ENDPOINT is set and the operator turns it on in Settings. See docs/telemetry.md.
+const telemetry = new Telemetry({ endpoint: process.env.BAKERY_TELEMETRY_ENDPOINT, enabled: () => board.getSettings().telemetryEnabled, dataDir, version: version.version });
+board.onRun((event, run) => {
+  if (event === "started") { telemetry.count("bakery.runs.started"); return; }
+  const outcome = runOutcome(run);
+  if (outcome) telemetry.count(outcome);
+});
+integration.onDelivered = kind => telemetry.count(kind === "merge" ? "bakery.merges" : "bakery.pull_requests.opened");
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
@@ -145,13 +155,21 @@ const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.reviewFingerprint(card), github, undefined, "ci-fix")));
+// Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
+const features = board.features;
+/** Routes that belong to one optional feature; with it off they are refused before any handler runs. */
+const featureRoutes: [Feature, RegExp][] = [
+  ["sentinels", /^\/api\/(boards\/[\w-]+\/sentinels|sentinels\/[\w-]+(\/(runs|run))?)$/],
+  ["pullRequests", /^\/api\/boards\/[\w-]+\/(pull-requests(\/\d{1,9}\/merge)?|sync|local-merges|main\/reset|cards\/[\w-]+\/(pull-request|publish|pr-draft))$/],
+];
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
-const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_SENTINEL !== "0");
+const sentinelsOn = board.features.sentinels && process.env.BAKERY_SENTINEL !== "0";
+const runLocks = new RunLocks(board, prLocks, sentinelStore, sentinelsOn);
 // Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or BAKERY_DISCORD_WEBHOOK_URL when Settings has none.
 new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.BAKERY_DISCORD_WEBHOOK_URL);
 const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
-  card => worker.start(card, "manual", "by Bakery's sentinel"), 15_000, process.env.BAKERY_SENTINEL !== "0");
+  card => worker.start(card, "manual", "by Bakery's sentinel"), 15_000, sentinelsOn);
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -197,7 +215,9 @@ function listModels(): Promise<{ models: string[]; error?: string }> {
     });
   });
 }
-function send(res: ServerResponse, status: number, payload: unknown) {
+/** Every error response is counted here, once: a caught exception by its class name, an explicit one by its status. */
+function send(res: ServerResponse, status: number, payload: unknown, errorClass?: string) {
+  if (status >= 400) telemetry.count("bakery.server.errors", { "error.type": errorClass ?? `Http${status}` });
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.end(JSON.stringify(payload));
 }
@@ -249,6 +269,8 @@ const server = createServer(async (req, res) => {
       // The dev proxy preserves the public Host, which can differ from the internal listening port.
       if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
+    const disabled = featureRoutes.find(([feature, pattern]) => !features[feature] && pattern.test(path));
+    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled[0], error: featureOffMessage(disabled[0]) }); return; }
     if (path === "/api/status" && req.method === "GET") {
       // The cards behind the runs still going, so the update notice can say what it is waiting for.
       const cardIds = new Set<string>();
@@ -257,7 +279,7 @@ const server = createServer(async (req, res) => {
         for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
       return;
     }
     if (path === "/api/update" && req.method === "POST") {
@@ -270,10 +292,17 @@ const server = createServer(async (req, res) => {
       if (!Number.isInteger(after) || after < 0) throw new Error("after must be a whole number");
       send(res, 200, { startedAt: logs.startedAt, entries: logs.since(after) }); return;
     }
-    if (path === "/api/settings" && req.method === "GET") { send(res, 200, board.getSettings()); return; }
+    // telemetryAvailable is false without an endpoint, and then the UI hides the toggle.
+    if (path === "/api/settings" && req.method === "GET") { send(res, 200, { ...board.getSettings(), telemetryAvailable: telemetry.available }); return; }
+    // `bakery-cli doctor` runs in another process, so it reports its failed check names here. Unknown names are ignored.
+    if (path === "/api/telemetry/doctor" && req.method === "POST") {
+      const { checks } = await body(req);
+      if (Array.isArray(checks)) for (const name of checks.slice(0, 50)) { const check = doctorCheck(name); if (check) telemetry.count("bakery.doctor.failures", { "doctor.check": check }); }
+      send(res, 202, { ok: true }); return;
+    }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input) && !("telemetryEnabled" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
@@ -281,7 +310,12 @@ const server = createServer(async (req, res) => {
       if ("density" in input && input.density !== "compact" && input.density !== "default" && input.density !== "cozy") throw new Error("density must be compact, default, or cozy");
       if ("discordWebhookUrl" in input && (typeof input.discordWebhookUrl !== "string" || (input.discordWebhookUrl !== "" && !isDiscordWebhookUrl(input.discordWebhookUrl)))) throw new Error("discordWebhookUrl must be empty or a https://discord.com/api/webhooks/ URL");
       if ("showCardModels" in input && typeof input.showCardModels !== "boolean") throw new Error("showCardModels must be a boolean");
-      send(res, 200, board.updateSettings({
+      if ("telemetryEnabled" in input && typeof input.telemetryEnabled !== "boolean") throw new Error("telemetryEnabled must be a boolean");
+      // Turning it off forgets what was gathered, so turning it on again starts from zero.
+      if (input.telemetryEnabled === false) telemetry.discard();
+      if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs BAKERY_TELEMETRY_ENDPOINT to be set");
+      send(res, 200, { ...board.updateSettings({
+        telemetryEnabled: "telemetryEnabled" in input ? input.telemetryEnabled as boolean : undefined,
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
         notifyOnReview: "notifyOnReview" in input ? input.notifyOnReview as boolean : undefined,
         cardDetailsLayout: "cardDetailsLayout" in input ? input.cardDetailsLayout as "dialog" | "side" : undefined,
@@ -290,7 +324,7 @@ const server = createServer(async (req, res) => {
         showCardModels: "showCardModels" in input ? input.showCardModels as boolean : undefined,
         agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
         discordWebhookUrl: "discordWebhookUrl" in input ? input.discordWebhookUrl as string : undefined,
-      })); return;
+      }), telemetryAvailable: telemetry.available }); return;
     }
     if (path === "/api/models" && req.method === "GET") { send(res, 200, await listModels()); return; }
     if (path === "/api/path-suggestions" && req.method === "GET") {
@@ -436,6 +470,7 @@ const server = createServer(async (req, res) => {
       }
       if ("autoPullRequestEnabled" in input) {
         if (Object.keys(input).length !== 1 || typeof input.autoPullRequestEnabled !== "boolean") throw new Error("Update autoPullRequestEnabled as a boolean, separately from other board settings");
+        if (input.autoPullRequestEnabled && !features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
         if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
         send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
@@ -827,18 +862,19 @@ const server = createServer(async (req, res) => {
     res.end(readFileSync(target));
   } catch (error) {
     if (error instanceof IntegrationConflictError) {
-      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details });
+      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details }, errorType(error));
       return;
     }
-    if (error instanceof PoisonedSessionError) { send(res, 409, { code: "session_rejected", error: error.message, cardId: error.cardId, runId: error.runId }); return; }
+    if (error instanceof PoisonedSessionError) { send(res, 409, { code: "session_rejected", error: error.message, cardId: error.cardId, runId: error.runId }, errorType(error)); return; }
     const message = error instanceof Error ? error.message : "Unknown error";
     const status = /not found/i.test(message) ? 404 : 400;
     console.debug(`${req.method} ${req.url} -> ${status}: ${message}`);
-    send(res, status, { error: message });
+    send(res, status, { error: message }, errorType(error));
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPullRequest.start(); autoPickup.start(); githubSync.start(); if (process.env.BAKERY_SENTINEL !== "0") sentinel.start(); pullFeed.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start();
+  if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
   if (updates) {
     updates.refresh();
     updateTimer = setInterval(() => updates.refresh(), 30_000);
@@ -869,7 +905,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
   server.close(); server.closeAllConnections(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown(); rooms.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
-  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
+  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {

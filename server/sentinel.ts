@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isSentinelJob, reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
 import { acknowledge, boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, type RepoComment, trustedBakeryComments } from "./github.js";
+import { githubRepo } from "./github-url.js";
 import type { PrLocks } from "./pr-locks.js";
 import { prFindingKey, sentinelKinds, sentinelNames, type SentinelFinding, type SentinelKind, type SentinelRecord, type SentinelRun, type SentinelStore } from "./sentinel-store.js";
 
@@ -51,6 +52,11 @@ export function requestBrief(input: { url: string; branch: string; head: string;
 }
 
 /**
+ * Sentinels watch any board linked to a GitHub repository, whatever it delivers through: Local merge or pull requests,
+ * and with the pull requests feature off. They need only the remote, so they stay independent of that feature.
+ */
+export function monitorsGithub(repoBoard: { remoteUrl: string }): boolean { return githubRepo(repoBoard.remoteUrl) !== undefined; }
+/**
  * Fallback for PRs the card-bound triggers (`sendBackConflict`, `sendBackFailingCi`) cannot reach: PRs whose card is
  * gone or has no worktree, whose agent died mid-run, or that were opened by hand. For each open PR written by the
  * board's owner that conflicts or fails CI, with no live lock, it makes one Ready card to fix it.
@@ -75,8 +81,10 @@ export class Sentinel {
     private readonly startRun?: (card: Card) => void,
     /** How often the scheduler checks which sentinels are due. */
     private readonly pollMs = 15_000,
-    /** False when BAKERY_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
+    /** False when the Sentinels feature is off or BAKERY_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
     readonly active = true) {
+    // Inactive (feature off or BAKERY_SENTINEL=0): no listeners and no writes to the stored sentinel data.
+    if (!active) return;
     board.onRun((event, run) => {
       if (event !== "finished") return;
       const push = this.afterRun(run).finally(() => this.pushes.delete(push));
@@ -106,13 +114,18 @@ export class Sentinel {
   /** The github-pr boards' sentinels, made on first sight. */
   private sentinelsOf(boardId: string): SentinelRecord[] {
     const repoBoard = this.board.getBoard(boardId);
-    if (repoBoard?.integration !== "github-pr") return [];
+    if (!repoBoard || !monitorsGithub(repoBoard)) return [];
     return sentinelKinds.map(kind => this.store.ensureSentinel(boardId, kind, kind === "pr-health" ? this.intervalMs : this.requestMs, boardGithubRepo(repoBoard)));
   }
   private sentinelFor(boardId: string, kind: SentinelKind): SentinelRecord | undefined { return this.sentinelsOf(boardId).find(item => item.kind === kind); }
   /** Runs every enabled sentinel that is due, then starts jobs that could not start when they were made. */
   async dispatchDue(): Promise<void> {
     if (!this.active) return;
+    // The scheduler fires this unawaited: a failure here is logged, never an unhandled rejection that ends the server.
+    try { await this.dispatchDueNow(); }
+    catch (error) { console.error(`[sentinel] scheduling failed: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  private async dispatchDueNow(): Promise<void> {
     for (const item of this.board.listBoards()) this.sentinelsOf(item.id);
     // Queued health jobs are checked against their PRs first: one resolved while paused, stopped or restarting is withdrawn, not started.
     const unchecked = await this.revalidateQueued();
@@ -121,7 +134,7 @@ export class Sentinel {
   }
   /** Every enabled sentinel of every github-pr board, now, due or not. */
   async tick(): Promise<void> {
-    await Promise.all(this.board.listBoards().filter(item => item.integration === "github-pr").map(item => this.pass(item.id)));
+    await Promise.all(this.board.listBoards().filter(monitorsGithub).map(item => this.pass(item.id)));
   }
   /** The board's `pr-health` sentinel, once. Runs never overlap; a paused sentinel does nothing. */
   async pass(boardId: string): Promise<void> {
@@ -144,7 +157,7 @@ export class Sentinel {
       const context: RunContext = { sentinel, runId, findings: [] };
       const repoBoard = this.board.getBoard(sentinel.boardId);
       try {
-        if (repoBoard?.integration !== "github-pr") throw new Error("The board no longer integrates through GitHub pull requests");
+        if (!repoBoard || !monitorsGithub(repoBoard)) throw new Error("The board no longer has a GitHub remote to monitor");
         if (sentinel.kind === "pr-health") await this.passOnce(repoBoard, context); else await this.requestsOnce(repoBoard, context);
         const made = context.findings.filter(item => item.outcome === "created").length;
         this.store.finishRun(runId, { status: "succeeded", findings: context.findings, summary: `${made} new job card${made === 1 ? "" : "s"}, ${context.findings.length} finding${context.findings.length === 1 ? "" : "s"} in all` });
@@ -170,7 +183,7 @@ export class Sentinel {
   }
   /** Ready jobs that could not start when they were made. `hold` names boards whose queued health jobs could not be checked, which wait. */
   startReadyJobs(hold: ReadonlySet<string> = new Set()): void {
-    for (const repoBoard of this.board.listBoards().filter(item => item.integration === "github-pr"))
+    for (const repoBoard of this.board.listBoards().filter(monitorsGithub))
       for (const card of this.board.listCards(repoBoard.repo)) {
         if (card.status !== "ready" || !isSentinelJob(card)) continue;
         if (hold.has(repoBoard.id) && this.store.attemptPr(card.id) !== undefined && !this.store.isRequestCard(card.id)) continue;
@@ -184,7 +197,7 @@ export class Sentinel {
    */
   private async revalidateQueued(): Promise<Set<string>> {
     const unchecked = new Set<string>();
-    for (const repoBoard of this.board.listBoards().filter(item => item.integration === "github-pr")) {
+    for (const repoBoard of this.board.listBoards().filter(monitorsGithub)) {
       const queued = this.board.listCards(repoBoard.repo).filter(card => card.status === "ready" && isSentinelJob(card) && this.store.attemptPr(card.id) !== undefined && !this.store.isRequestCard(card.id)
         && (!card.sentinelId || this.store.getSentinel(card.sentinelId)?.enabled !== false));
       if (!queued.length || !this.owner && !this.ownerLogin) { if (queued.length) unchecked.add(repoBoard.id); continue; }

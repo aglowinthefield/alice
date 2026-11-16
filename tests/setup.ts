@@ -58,8 +58,16 @@ child.on("close", code => process.exit(code ?? 1));
   // A process that was just stopped can hold its working directory for a moment after Windows reports it gone, so
   // removing a test's temp directory right away fails with EPERM. Retrying is Node's documented answer; tests also
   // close their databases and wait for the servers they start before removing anything.
+  // If the directory is still held after the retries, cleanup is abandoned with a warning: throwing from a test's
+  // `finally` would replace the assertion that actually failed, and a leftover temp directory is harmless.
   const rmSync = fs.rmSync;
-  fs.rmSync = ((path: fs.PathLike, options?: fs.RmOptions) =>
-    rmSync(path, options?.recursive ? { maxRetries: 20, retryDelay: 100, ...options } : options)) as typeof fs.rmSync;
+  fs.rmSync = ((path: fs.PathLike, options?: fs.RmOptions) => {
+    if (!options?.recursive) return rmSync(path, options);
+    try { rmSync(path, { maxRetries: 8, retryDelay: 100, ...options }); }
+    catch (error) {
+      if (!["EPERM", "EBUSY", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      console.warn(`left ${String(path)} behind: ${(error as Error).message}`);
+    }
+  }) as typeof fs.rmSync;
   syncBuiltinESMExports();
 }

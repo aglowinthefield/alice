@@ -153,12 +153,12 @@ test(
       "taskkill tree termination is Windows-only",
   },
   async () => {
-    // The parent prints the descendant's pid and exits at once; the descendant keeps stdout open, so `close` never fires on its own.
+    // libuv ties Node-spawned children to their parent's job object, so the descendant is detached to outlive it. The parent prints the descendant's pid and exits at once; the descendant keeps stdout open, so `close` never fires on its own.
     const child = spawn(
       process.execPath,
       [
         "-e",
-        `const c=require("child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:["ignore","inherit","inherit"]});console.log(c.pid);process.exit(0)`,
+        `const c=require("child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:["ignore","inherit","inherit"],detached:true});console.log(c.pid);process.exit(0)`,
       ],
       { stdio: ["ignore", "pipe", "inherit"] },
     );

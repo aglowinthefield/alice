@@ -266,6 +266,9 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
+  } catch (error) {
+    // A reset connection says nothing about why the server went away, so keep what it printed and how it ended.
+    throw new Error(`${error instanceof Error ? error.stack : error}\nserver exit=${child.exitCode} signal=${child.signalCode} stderr: ${output}`, { cause: error });
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
@@ -538,7 +541,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
     env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
-  let output = "";
+  let output = "", db: DatabaseSync | undefined;
   child.stderr?.on("data", chunk => { output += chunk.toString(); });
   try {
     const url = `http://127.0.0.1:${port}`;
@@ -567,11 +570,11 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       }
       return { card, base };
     };
-    const db = new DatabaseSync(join(home, "data", "bakery.sqlite"));
+    db = new DatabaseSync(join(home, "data", "bakery.sqlite"));
     const first = await toReview("Waiting"), second = await toReview("Draining");
-    db.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
+    db!.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
     const requestWhileWaiting = async ({ card, base }: { card: { id: string }; base: string }) => {
-      db.prepare("UPDATE cards SET prState='MERGED' WHERE id=?").run(card.id);
+      db!.prepare("UPDATE cards SET prState='MERGED' WHERE id=?").run(card.id);
       const listed = async () => ((await request(`/boards/${board.id}/cards`)).data as { id: string; reviewWait: string; startQueued: boolean }[]).find(item => item.id === card.id)!;
       assert.equal((await listed()).reviewWait, "github");
       const fingerprint = (await request(`${base}/review?fingerprint=1`)).data.fingerprint;
@@ -590,6 +593,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
     await drained;
     await requestWhileWaiting(second);
   } finally {
+    db?.close(); // An open handle keeps board.sqlite locked on Windows.
     if (child.exitCode === null) {
       child.kill("SIGTERM");
       await new Promise(resolve => child.once("close", resolve));

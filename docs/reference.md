@@ -29,6 +29,7 @@ flowchart LR
 - [Reviewing and merging](#reviewing-and-merging)
 - [GitHub pull request mode](#github-pull-request-mode)
 - [Sentinels](#sentinels)
+- [Optional features](#optional-features)
 - [Watching a run](#watching-a-run)
 - [Automation (opt-in)](#automation-opt-in)
 - [CLI](#cli)
@@ -177,6 +178,8 @@ In the repository's settings, **Push main to origin after merging** (local-merge
 
 ## GitHub pull request mode
 
+Off unless `BAKERY_FEATURE_PULL_REQUESTS=1` (see [Optional features](#optional-features)).
+
 A board integrates either locally, where Approve merges into local `main`, or through GitHub pull requests, where a card is Done only when its PR has merged on GitHub and the merge commit is on `origin/main`.
 
 The default depends on the repository. When you give a board a GitHub remote link (`https://github.com/OWNER/REPO`), Bakery asks GitHub whether `main` accepts direct pushes: `gh api repos/OWNER/REPO/rules/branches/main` for rulesets, then `gh api repos/OWNER/REPO/branches/main/protection` for branch protection. If a ruleset requires a pull request or a merge queue, or branch protection requires pull request reviews, the board switches to **GitHub pull requests**. Otherwise it stays **Local merge**. The board's settings show what Bakery found.
@@ -231,6 +234,8 @@ Publishing doesn't touch local `main`. Once every local commit on `main` is a Ba
 
 ## Sentinels
 
+Off unless `BAKERY_FEATURE_SENTINELS=1` (see [Optional features](#optional-features)).
+
 A sentinel is a persistent monitor, not a card. It never enters Triage, Ready, Running, Review or Done, is never reviewed or merged, and is not counted in lane counts, Today or SDLC stats. A pull-request board has two, listed under **Sentinels** in the sidebar:
 
 - **Broken pull requests** looks every 5 minutes (`BAKERY_SENTINEL_MS`) for open PRs by the repository owner that conflict with main or fail CI.
@@ -241,6 +246,25 @@ Each has instructions (added to every job's brief), a schedule, an enabled or pa
 What a sentinel finds becomes an ordinary job card, linked back by sentinel, run and a stable finding key (`pr:<number>` for a broken PR). The card runs on the usual worker, with the same logs, usage and budget, and Bakery pushes its result to the PR branch itself, so Approve, merge and auto-review do not apply to it. While a finding's card is open, later runs add no second card for it. Once that card is Done and the PR is still broken (a new head or main), the next run makes a new card, up to three per PR. Finishing a card never completes or pauses its sentinel. A run only one process can hold at a time, and a run cut off by a restart is marked interrupted.
 
 Jobs made before sentinels had records are linked to their sentinel on first start, keeping their ids, status, PR locks and any running agent. The link is made in one transaction and is safe to repeat.
+
+## Optional features
+
+Sentinels and GitHub pull requests are optional and **off by default**. Each has its own switch, and the two are independent:
+
+| Switch | Turns on |
+| --- | --- |
+| `BAKERY_FEATURE_SENTINELS=1` | Sentinels: the Sentinels page, their routes and their background scheduler. |
+| `BAKERY_FEATURE_PULL_REQUESTS=1` | GitHub pull request mode: the Pull requests page, the Integration mode choice, publishing, automatic pull requests, GitHub sync and polling. |
+
+Unset, empty or `0` means off; any other value is an error. Set the switch both when you build the UI and when you start the server, because the UI has it compiled in and the server reads it at start (`/api/status` reports what the server runs with). For example, `BAKERY_FEATURE_PULL_REQUESTS=1 npm run build && BAKERY_FEATURE_PULL_REQUESTS=1 BAKERY_SERVE_UI=1 npm start`; for a service, put both in its environment and in the environment of `scripts/update.sh`. `src/features.ts` is the one definition both sides read.
+
+With a feature off:
+
+- Its screens, navigation and settings are not shown, its routes answer `404` with `code: "feature_off"` and the switch to set, its timers never start, and it needs no configuration (`gh` included).
+- Stored data is kept, not deleted. A board set to GitHub pull requests reads as Local while pull requests are off, and goes back to its stored mode when you turn them on; sentinels, their runs and their job cards come back the same way.
+- Cards, runs, local review and Local merge work as usual.
+- Bakery never falls back to merging locally when the board needs a pull request. If the board is set to GitHub pull requests, or `main` on GitHub only accepts them and you haven't chosen Local merge, Approve is refused with a message saying so; set the switch or choose Local merge in the board's settings.
+- Sentinels need only a GitHub remote link on the board, not pull request mode, so with only Sentinels on they watch boards that merge locally too. A stored sync error is kept but ignored (it does not pause automatic pickup) while pull requests are off.
 
 ## Watching a run
 

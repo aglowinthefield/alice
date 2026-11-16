@@ -8,6 +8,7 @@ import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from 
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
+import { featureOffMessage } from "../src/features.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
 function gitCommand(repo: string, args: string[], index?: string, raw = false, maxBuffer = 8 * 1024 * 1024): string {
@@ -363,6 +364,7 @@ export class Integration {
    */
   async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator"): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
+    if (repoBoard?.integrationConfigured === "github-pr" && !this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
@@ -460,6 +462,7 @@ export class Integration {
    */
   async publishLocalMerge(card: Card, github: GitHub): Promise<{ card: Card; main: MainRecovery | null }> {
     const repoBoard = this.board.boardForRepo(card.repo);
+    if (!this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("Switch this board to GitHub pull requests before publishing a card as a pull request");
     if (card.status !== "done") throw new Error("Only a Done card that was merged into local main can be published as a pull request");
     if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; clear the link first`);
@@ -619,6 +622,11 @@ export class Integration {
   approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);
+    // Pull requests are off in this build, so a board set to them has no safe way to deliver: never merge locally in their place.
+    if (repoBoard?.integrationConfigured === "github-pr")
+      throw new Error(`This board is set to GitHub pull requests, which are turned off in this build, so Approve will not merge into local main instead. ${featureOffMessage("pullRequests")} Or choose Local merge in the board's settings to merge locally.`);
+    if (repoBoard?.githubMainProtected && !repoBoard.integrationChosen && !this.board.features.pullRequests)
+      throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, and pull requests are turned off in this build, so merging into local main would leave it ahead of GitHub. ${featureOffMessage("pullRequests")} Or choose Local merge in the board's settings to merge locally anyway.`);
     if (repoBoard?.githubMainProtected && !repoBoard.integrationChosen)
       throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, so merging into local main would leave it ahead of GitHub. Switch Integration to GitHub pull requests in the board's settings, or choose Local merge there to merge locally anyway`);
     const { repo, worktree, run } = this.location(card);

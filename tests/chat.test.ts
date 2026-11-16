@@ -49,6 +49,14 @@ test("the system prompt names the board, its CLI and its cards, busiest first", 
   } finally { done(); }
 });
 
+test("the system prompt asks for a Markdown card description template", () => {
+  const { repoBoard, done } = fixture();
+  try {
+    const prompt = chatSystemPrompt(repoBoard, [], "cli");
+    for (const text of ["## Goal", "## Changes", "## Acceptance criteria", "## Context", "## Out of scope", "omit empty sections", "do not inflate small tasks"]) assert.ok(prompt.includes(text), text);
+  } finally { done(); }
+});
+
 test("the system prompt lists only open cards, at most 40", () => {
   const { board, repoBoard, dir, done } = fixture();
   try {

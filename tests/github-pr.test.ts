@@ -209,6 +209,20 @@ test("a card's PR is found by its bakery/<id> branch, and an attached PR link ov
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a PR is counted for telemetry when it is created, not when an open one is updated", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const integration = new Integration(f.board, f.data);
+    const delivered: string[] = [];
+    integration.onDelivered = kind => { delivered.push(kind); };
+    await integration.openPullRequest(card, integration.review(card).fingerprint, f.github);
+    assert.deepEqual(delivered, ["pr"]);
+    await integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
+    assert.deepEqual(delivered, ["pr"], "the second push reuses the open PR");
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: Approve catches up with commits someone pushed to the PR branch, and refuses to overwrite them", async () => {
   const f = fixture();
   try {
@@ -1219,6 +1233,8 @@ test("publish as PR: a card merged into local main goes back to Review, opens a 
     const card = await reviewedCard(f);
     const worktree = join(f.data, "worktrees", card.id);
     const integration = new Integration(f.board, f.data);
+    const delivered: string[] = [];
+    integration.onDelivered = kind => { delivered.push(kind); };
     assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
     const candidate = git(worktree, "rev-parse", "HEAD");
     const mergedTip = git(f.repo, "rev-parse", "main");
@@ -1237,6 +1253,7 @@ test("publish as PR: a card merged into local main goes back to Review, opens a 
 
     // Publish: the approved candidate is pushed to bakery/<id>, a PR opens, the local record is cleared.
     const published = await integration.publishLocalMerge(f.board.getCard(card.id)!, f.github);
+    assert.deepEqual(delivered, ["merge", "pr"], "publishing counts the PR it creates");
     assert.equal(published.card.status, "review");
     assert.equal(published.card.prNumber, 100);
     assert.equal(published.card.prState, "OPEN");

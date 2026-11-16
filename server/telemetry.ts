@@ -84,11 +84,17 @@ export class Telemetry {
 
   /** Adds one to a counter. Synchronous and cheap; never throws. */
   count(name: TelemetryCounter, attributes: Attributes = {}): void {
-    if (!this.active) return;
+    if (!this.active) { if (this.pending.size) this.discard(); return; }
     const key = `${name}\u0000${JSON.stringify(attributes)}`;
     const entry = this.pending.get(key);
     if (entry) entry.count++;
     else this.pending.set(key, { name, attributes, count: 1 });
+  }
+
+  /** Forgets every pending count, for when the operator turns telemetry off. */
+  discard(): void {
+    this.pending = new Map();
+    this.windowStart = this.now();
   }
 
   start(): void {
@@ -125,7 +131,9 @@ export class Telemetry {
   async shutdown(timeoutMs = 2_000): Promise<void> {
     clearInterval(this.timer);
     this.timer = undefined;
-    await Promise.race([this.flush(), new Promise(resolve => setTimeout(resolve, timeoutMs).unref())]);
+    // Counts recorded while a send was in flight go out in the next one, until nothing is left or the deadline passes.
+    const drain = async () => { do await this.flush(); while (this.pending.size && this.active); };
+    await Promise.race([drain(), new Promise(resolve => setTimeout(resolve, timeoutMs).unref())]);
   }
 
   /** A random ID kept in the data directory, created the first time a batch is sent. */

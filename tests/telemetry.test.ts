@@ -30,6 +30,37 @@ test("with telemetry off and an endpoint set, nothing is sent", async () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("counts gathered before telemetry was turned off are not sent after it is turned on again", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-telemetry-")), sent: Sent[] = [];
+  try {
+    let on = true;
+    const telemetry = new Telemetry({ endpoint: "http://telemetry.test", enabled: () => on, dataDir: dir, version: "1.2.3", post: fakePost(sent) });
+    telemetry.count("bakery.runs.started");
+    on = false; telemetry.discard(); on = true;
+    telemetry.count("bakery.merges");
+    await telemetry.flush();
+    assert.deepEqual(sent[0].body.resourceMetrics[0].scopeMetrics[0].metrics.map((m: any) => m.name), ["bakery.merges"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("shutdown sends counts queued while an earlier send was in flight", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-telemetry-")), sent: Sent[] = [];
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let first = true;
+    const post = async (url: string, init: { body: string }) => { sent.push({ url, body: JSON.parse(init.body) }); if (first) { first = false; await gate; } return { ok: true, status: 200 }; };
+    const telemetry = new Telemetry({ endpoint: "http://telemetry.test", enabled: () => true, dataDir: dir, version: "1.2.3", post });
+    telemetry.count("bakery.runs.started");
+    const inFlight = telemetry.flush();
+    telemetry.count("bakery.runs.stopped");
+    const done = telemetry.shutdown(5_000);
+    release();
+    await Promise.all([inFlight, done]);
+    assert.deepEqual(sent.map(item => item.body.resourceMetrics[0].scopeMetrics[0].metrics.map((m: any) => m.name)), [["bakery.runs.started"], ["bakery.runs.stopped"]]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("without an endpoint telemetry is unavailable and sends nothing even when enabled", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-telemetry-")), sent: Sent[] = [];
   try {
@@ -145,11 +176,13 @@ test("the server sends only counts once the Settings toggle is on, and nothing b
     await call("/settings", "PATCH", {});
     await call("/telemetry/doctor", "POST", { checks: ["git", "board " + repo, repo] });
     await call("/boards", "POST", { repo });
+    assert.equal((await call("/boards/missing/cards")).status, 404);
+    assert.equal((await call("/boards/missing/cards")).status, 404);
     await stop(child);
     assert.equal(bodies().length, 1);
     const body = JSON.parse(received[0]);
     const metrics = Object.fromEntries(body.resourceMetrics[0].scopeMetrics[0].metrics.map((m: any) => [m.name, m.sum.dataPoints.map((p: any) => [p.attributes.map((a: any) => a.value.stringValue).join(), p.asInt])]));
-    assert.deepEqual(metrics, { "bakery.doctor.failures": [["git", "1"], ["board", "1"]], "bakery.server.errors": [["Error", "1"]] });
+    assert.deepEqual(metrics, { "bakery.doctor.failures": [["git", "1"], ["board", "1"]], "bakery.server.errors": [["Error", "1"], ["Http404", "2"]] });
     assert.equal(bodies()[0].includes(repo), false); assert.equal(bodies()[0].includes("secret-repo-name"), false);
     assert.equal(bodies()[0].includes(home), false);
   } finally { sink.close(); rmSync(home, { recursive: true, force: true }); }

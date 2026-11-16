@@ -416,7 +416,6 @@ export class Integration {
       const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body });
       this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
       this.board.recordPullRequestPush(card.id, run.id);
-      if (!hasOpenPr) this.delivered("pr", undefined);
       return this.board.getCard(card.id)!;
     });
   }
@@ -432,7 +431,10 @@ export class Integration {
     const summary = (output || "").trim().slice(-3000);
     const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
     if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
-    if (!url) url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
+    if (!url) {
+      url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
+      this.delivered("pr", undefined);
+    }
     return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url };
   }
 

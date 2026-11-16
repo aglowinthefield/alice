@@ -196,7 +196,9 @@ function listModels(): Promise<{ models: string[]; error?: string }> {
     });
   });
 }
-function send(res: ServerResponse, status: number, payload: unknown) {
+/** Every error response is counted here, once: a caught exception by its class name, an explicit one by its status. */
+function send(res: ServerResponse, status: number, payload: unknown, errorClass?: string) {
+  if (status >= 400) telemetry.count("bakery.server.errors", { "error.type": errorClass ?? `Http${status}` });
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.end(JSON.stringify(payload));
 }
@@ -288,6 +290,8 @@ const server = createServer(async (req, res) => {
       if ("discordWebhookUrl" in input && (typeof input.discordWebhookUrl !== "string" || (input.discordWebhookUrl !== "" && !isDiscordWebhookUrl(input.discordWebhookUrl)))) throw new Error("discordWebhookUrl must be empty or a https://discord.com/api/webhooks/ URL");
       if ("showCardModels" in input && typeof input.showCardModels !== "boolean") throw new Error("showCardModels must be a boolean");
       if ("telemetryEnabled" in input && typeof input.telemetryEnabled !== "boolean") throw new Error("telemetryEnabled must be a boolean");
+      // Turning it off forgets what was gathered, so turning it on again starts from zero.
+      if (input.telemetryEnabled === false) telemetry.discard();
       if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs BAKERY_TELEMETRY_ENDPOINT to be set");
       send(res, 200, { ...board.updateSettings({
         telemetryEnabled: "telemetryEnabled" in input ? input.telemetryEnabled as boolean : undefined,
@@ -835,16 +839,14 @@ const server = createServer(async (req, res) => {
     res.end(readFileSync(target));
   } catch (error) {
     if (error instanceof IntegrationConflictError) {
-      telemetry.count("bakery.server.errors", { "error.type": errorType(error) });
-      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details });
+      send(res, 409, { code: error.code, error: error.message, cardId: error.cardId, files: error.files, details: error.details }, errorType(error));
       return;
     }
-    if (error instanceof PoisonedSessionError) { telemetry.count("bakery.server.errors", { "error.type": errorType(error) }); send(res, 409, { code: "session_rejected", error: error.message, cardId: error.cardId, runId: error.runId }); return; }
-    telemetry.count("bakery.server.errors", { "error.type": errorType(error) });
+    if (error instanceof PoisonedSessionError) { send(res, 409, { code: "session_rejected", error: error.message, cardId: error.cardId, runId: error.runId }, errorType(error)); return; }
     const message = error instanceof Error ? error.message : "Unknown error";
     const status = /not found/i.test(message) ? 404 : 400;
     console.debug(`${req.method} ${req.url} -> ${status}: ${message}`);
-    send(res, status, { error: message });
+    send(res, status, { error: message }, errorType(error));
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });

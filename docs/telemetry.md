@@ -37,7 +37,7 @@ Metrics, each with a count and the batch's start and end time:
 | `bakery.merges` | Cards merged into local main | none |
 | `bakery.pull_requests.opened` | Pull requests Bakery opened | none |
 | `bakery.doctor.failures` | `bakery-cli doctor` checks that failed | `doctor.check`: one of `node`, `git`, `git identity`, `pi`, `pi models`, `worktrunk`, `gh`, `data dir`, `server lock`, `server`, `board`, `bakery-cli`, `bakery server` |
-| `bakery.server.errors` | Requests the server answered with an error | `error.type`: the error's class name, such as `Error` or `IntegrationConflictError` |
+| `bakery.server.errors` | Requests the server answered with an error | `error.type`: the error's class name, such as `Error` or `IntegrationConflictError`, or `Http404` style status for an error response Bakery sent without an exception |
 
 Board checks in `doctor` are named after the repository path. They are reported as `board`, never with the path.
 

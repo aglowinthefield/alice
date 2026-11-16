@@ -179,5 +179,9 @@ test("bakery-cli attach prints each saved file at once and keeps it when a later
     const saved = JSON.parse(json.out) as { name: string }[];
     assert.deepEqual(saved.map(item => item.name), ["ok.png"]);
     assert.match(json.err, /gone\.png/);
-  } finally { server.kill(); rmSync(home, { recursive: true, force: true }); }
+  } finally {
+    // Wait for the server to exit: on Windows it holds the database open until it is gone.
+    if (server.exitCode === null) { const exited = new Promise(resolve => server.once("exit", resolve)); server.kill(); await exited; }
+    rmSync(home, { recursive: true, force: true });
+  }
 });

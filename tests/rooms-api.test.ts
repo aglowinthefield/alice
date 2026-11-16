@@ -196,7 +196,7 @@ test("queue, stop, resume, steer, partial output and late-output fencing", async
     const { room } = await setup(h, ["Ada", "Bob"]);
     const send = (body: string) => h.request(`/rooms/${room.id}/messages`, "POST", { body });
     await send("SLOW first");
-    await waitFor(async () => (await h.request(`/rooms/${room.id}`)).data.live.length > 0, "live partial");
+    await waitFor(async () => (await h.request(`/rooms/${room.id}`)).data.live.some((entry: any) => entry.text), "live partial");
     const a = (await send("queued A")).data, b = (await send("queued B")).data, c = (await send("queued C")).data;
     assert.deepEqual([a, b, c].map(m => m.state), ["queued", "queued", "queued"]);
     assert.equal((await h.request(`/rooms/${room.id}/messages/${b.id}`, "PATCH", { body: "queued B edited" })).status, 200);
@@ -222,7 +222,7 @@ test("queue, stop, resume, steer, partial output and late-output fencing", async
 
     // Stop cancels the running round and pauses; new messages queue; Resume continues.
     await send("SLOW second");
-    await waitFor(async () => (await h.request(`/rooms/${room.id}`)).data.live.length > 0, "second live partial");
+    await waitFor(async () => (await h.request(`/rooms/${room.id}`)).data.live.some((entry: any) => entry.text), "second live partial");
     await h.request(`/rooms/${room.id}/stop`, "POST");
     let state = (await h.request(`/rooms/${room.id}`)).data;
     assert.equal(state.room.paused, true);
@@ -241,7 +241,7 @@ test("a restart interrupts running work honestly, replays nothing, and keeps the
   try {
     const { room } = await setup(h, ["Ada", "Bob"]);
     await h.request(`/rooms/${room.id}/messages`, "POST", { body: "SLOW before restart" });
-    await waitFor(async () => (await h.request(`/rooms/${room.id}`)).data.live.length > 0, "live partial");
+    await waitFor(async () => (await h.request(`/rooms/${room.id}`)).data.live.some((entry: any) => entry.text), "live partial");
     await h.request(`/rooms/${room.id}/messages`, "POST", { body: "still queued" });
     await h.restart();
     // Count after the old server is gone: a screening call may have started between the send and the kill.

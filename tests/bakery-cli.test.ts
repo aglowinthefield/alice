@@ -478,7 +478,7 @@ test("doctor starts with the CLI version, and adds the server's against a remote
   await new Promise<void>(resolve => stub.listen(0, "0.0.0.0", resolve));
   try {
     const port = (stub.address() as { port: number }).port;
-    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://${lan}:${port}` } });
+    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://${lan}:${port}`, BAKERY_ALLOW_REMOTE: "1" } });
     let stdout = "";
     for await (const chunk of child.stdout) stdout += chunk;
     const lines = stdout.split("\n");

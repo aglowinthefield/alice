@@ -146,6 +146,29 @@ export function SettingsPage({
                     saveSettings({ discordWebhookUrl })
                   }
                 />
+                {settings?.telemetryAvailable && (
+                  <label className="mt-6 flex items-start gap-3 border-t border-border pt-5 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-1 accent-primary"
+                      checked={settings.telemetryEnabled ?? false}
+                      disabled={busy}
+                      onChange={(event) =>
+                        saveSettings({ telemetryEnabled: event.target.checked })
+                      }
+                    />
+                    <span>
+                      Send anonymous usage counts
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        Counts of runs, merges, pull requests and errors, tagged
+                        with the Bakery version, your OS and a random install
+                        ID, go to the endpoint this server was set up with. No
+                        code, prompts, card text, paths or hostnames. Every
+                        field is listed in docs/telemetry.md.
+                      </span>
+                    </span>
+                  </label>
+                )}
                 <fieldset
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}

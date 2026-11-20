@@ -3,9 +3,9 @@ import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
 const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
@@ -423,7 +423,7 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
   try {
     const result = await f.run("doctor");
     assert.equal(result.code, 1, "a board whose repository is missing fails the run");
-    assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(1 board\)/m);
+    assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(local, 1 board\)/m);
     assert.match(result.stdout, /^FAIL\tboard \/nonexistent\/bakery-doctor\trepository path does not exist/m);
     // pi, gh and Worktrunk may be missing on the machine running the tests, so count the failures instead of fixing them at 1.
     const failed = result.stdout.split("\n").filter(line => line.startsWith("FAIL\t")).length;
@@ -455,8 +455,12 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
   } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 
-test("doctor fails the server check when Bakery is not running", async () => {
-  const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: "http://127.0.0.1:1", BAKERY_PI_BIN: "bakery-no-such-pi" } });
+test("doctor fails the server check when Bakery is not running", async t => {
+  // An unreadable PATH directory makes a missing binary fail with EACCES, not ENOENT; it must still read as not found.
+  const locked = mkdtempSync(join(tmpdir(), "bakery-locked-path-"));
+  chmodSync(locked, 0o000);
+  t.after(() => { chmodSync(locked, 0o700); rmSync(locked, { recursive: true, force: true }); });
+  const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, PATH: `${locked}${delimiter}${process.env.PATH}`, BAKERY_URL: "http://127.0.0.1:1", BAKERY_PI_BIN: "bakery-no-such-pi" } });
   let stdout = "";
   for await (const chunk of child.stdout) stdout += chunk;
   const code = await new Promise<number | null>(resolve => child.once("close", resolve));
@@ -496,7 +500,7 @@ test("doctor starts with the CLI version, and adds the server's against a remote
   if (!lan) return;
   const stub = createServer((req, res) => {
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : []));
+    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/srv/remote-only" }]));
   });
   await new Promise<void>(resolve => stub.listen(0, "0.0.0.0", resolve));
   try {
@@ -507,6 +511,8 @@ test("doctor starts with the CLI version, and adds the server's against a remote
     const lines = stdout.split("\n");
     assert.match(lines[0], /^PASS\tbakery-cli\t\d+\.\d+\.\d+/);
     assert.equal(lines[1], "PASS\tbakery server\t9.8.7 (abc1234)");
+    assert.equal(lines[2], `PASS\tserver\thttp://${lan}:${port} (remote, 1 board)`, "the instance comes right after the versions");
+    assert.ok(lines.some(line => line.startsWith(`PASS\tboard ${lan}:/srv/remote-only\t`)), "a remote board's path names its host");
   } finally { await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 

@@ -455,6 +455,34 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
   } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 
+test("doctor ends with INFO rows for the CLI's BAKERY_* variables and the server's settings, hiding secrets", async () => {
+  const { doctor, report } = await import(new URL("../scripts/doctor.mjs", import.meta.url).href);
+  const checks = await doctor({
+    env: { BAKERY_URL: "mochi", BAKERY_DISCORD_WEBHOOK_URL: "https://discord.example/hook/secret", PATH: "/usr/bin" },
+    origin: new URL("http://mochi:4317"), local: false,
+    fetchBoards: async () => [],
+    fetchStatus: async () => ({ version: "1.2.3", hostname: "mochi", activeRuns: 2, draining: true, features: { sentinels: false, pullRequests: true } }),
+    fetchSettings: async () => ({ agentModels: { work: { model: "claude", thinking: "high" }, review: { model: "", thinking: "" } }, telemetryAvailable: true, telemetryEnabled: false, discordWebhookUrl: "https://discord.example/hook/secret" }),
+    cliPath: "/opt/bakery/scripts/bakery-cli.mjs",
+  });
+  const lines = report(checks);
+  const info = lines.filter((line: string) => line.startsWith("INFO\t"));
+  assert.deepEqual(info, [
+    "INFO\tcli path\t/opt/bakery/scripts/bakery-cli.mjs",
+    "INFO\tenv BAKERY_DISCORD_WEBHOOK_URL\tset (hidden)",
+    "INFO\tenv BAKERY_URL\tmochi",
+    "INFO\tserver host\tmochi",
+    "INFO\tserver features\tsentinels off, pullRequests on",
+    "INFO\tserver runs\t2 active, draining for an update",
+    "INFO\tserver models\twork claude (high), review default",
+    "INFO\tserver telemetry\toff",
+    "INFO\tserver discord\twebhook set",
+  ]);
+  assert.ok(!lines.some((line: string) => line.includes("secret")), "secret values never print");
+  assert.equal(lines.at(-1), "2 passed, 0 warnings, 0 failed", "INFO rows stay out of the count");
+  assert.ok(!(await doctor({ env: {}, origin: new URL("http://127.0.0.1:1"), local: false, fetchBoards: async () => { throw new Error("down"); } })).some((check: { name: string }) => check.name.startsWith("server ")), "no server rows when it is unreachable");
+});
+
 test("doctor fails the server check when Bakery is not running", async t => {
   // An unreadable PATH directory makes a missing binary fail with EACCES, not ENOENT; it must still read as not found.
   const locked = mkdtempSync(join(tmpdir(), "bakery-locked-path-"));

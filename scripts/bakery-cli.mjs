@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { doctor, report } from "./doctor.mjs";
 import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
 import { c, layout, paint, pretty } from "./cli-style.mjs";
@@ -203,7 +204,7 @@ async function main() {
   const origin = await serverUrl();
   if (command === "doctor") {
     if (opts.board) throw new Error("--board is not valid with doctor");
-    const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards"), fetchStatus: () => request(origin, "/api/status"), cliVersion: readVersion() });
+    const checks = await doctor({ origin, local: ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname), fetchBoards: () => request(origin, "/api/boards"), fetchStatus: () => request(origin, "/api/status"), fetchSettings: () => request(origin, "/api/settings"), cliVersion: readVersion(), cliPath: fileURLToPath(import.meta.url) });
     print(checks, opts.json, report(checks));
     // Failed check names go to the server's opt-in telemetry, which counts them only when the operator turned it on.
     // Best effort: not awaited, and abandoned after a second, so a slow or stalled route never delays the exit or changes its status.

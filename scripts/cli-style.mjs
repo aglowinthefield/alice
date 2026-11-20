@@ -53,7 +53,7 @@ export function banner(version) {
 const STATUS = {
   triage: c.muted, ready: c.info, running: c.warn, review: paint("34"), failed: c.bad, interrupted: c.warn,
   done: c.ok, archived: c.dim, error: c.bad, enabled: c.ok, paused: c.warn, succeeded: c.ok, blocked: c.bad,
-  PASS: c.ok, WARN: c.warn, FAIL: c.bad, on: c.ok, off: c.muted,
+  PASS: c.ok, WARN: c.warn, FAIL: c.bad, INFO: c.muted, on: c.ok, off: c.muted,
 };
 const cell = text => {
   if (STATUS[text]) return STATUS[text](text);

@@ -108,8 +108,35 @@ function boardChecks(board, local, host) {
   return problems.length ? problems : [{ status: "pass", name, detail: `${board.integration ?? "local"} integration` }];
 }
 
+// Values that can carry credentials print as "set (hidden)": doctor output gets pasted into bug reports.
+const SECRET = /TOKEN|SECRET|KEY|PASSWORD|WEBHOOK|ENDPOINT/;
+
+/** The BAKERY_* variables this CLI sees. A remote server's own environment stays on its machine. */
+function envInfo(env) {
+  const names = Object.keys(env).filter(name => name.startsWith("BAKERY_")).sort();
+  if (!names.length) return [{ status: "info", name: "env", detail: "no BAKERY_* variables set" }];
+  return names.map(name => ({ status: "info", name: `env ${name}`, detail: SECRET.test(name) ? "set (hidden)" : env[name] }));
+}
+
+/** What the server reports about itself: host, build features, run state and the settings that change runs. */
+function serverInfo(status, settings) {
+  const rows = [];
+  if (status) {
+    if (status.hostname) rows.push({ name: "server host", detail: status.hostname });
+    if (status.features) rows.push({ name: "server features", detail: Object.entries(status.features).map(([name, on]) => `${name} ${on ? "on" : "off"}`).join(", ") });
+    rows.push({ name: "server runs", detail: `${status.activeRuns ?? 0} active${status.draining ? ", draining for an update" : ""}` });
+  }
+  if (settings) {
+    const models = Object.entries(settings.agentModels ?? {}).map(([role, { model, thinking } = {}]) => `${role} ${model || "default"}${thinking ? ` (${thinking})` : ""}`);
+    if (models.length) rows.push({ name: "server models", detail: models.join(", ") });
+    rows.push({ name: "server telemetry", detail: !settings.telemetryAvailable ? "no endpoint" : settings.telemetryEnabled ? "on" : "off" });
+    rows.push({ name: "server discord", detail: settings.discordWebhookUrl ? "webhook set" : "no webhook" });
+  }
+  return rows.map(row => ({ status: "info", ...row }));
+}
+
 /** Runs every check. `fetchBoards` resolves to the server's boards or throws when it is unreachable. */
-export async function doctor({ env = process.env, origin, local, fetchBoards, fetchStatus, cliVersion }) {
+export async function doctor({ env = process.env, origin, local, fetchBoards, fetchStatus, fetchSettings, cliVersion, cliPath }) {
   let boards = null, serverCheck;
   try {
     boards = await fetchBoards();
@@ -122,16 +149,17 @@ export async function doctor({ env = process.env, origin, local, fetchBoards, fe
   // The versions come first. A remote server can run a different version than this CLI, so print both.
   const versions = [];
   if (cliVersion) versions.push({ status: "pass", name: "bakery-cli", detail: formatVersion(cliVersion) });
-  if (!local && fetchStatus) {
-    try { versions.push({ status: "pass", name: "bakery server", detail: formatVersion(await fetchStatus()) }); }
-    catch { versions.push({ status: "warn", name: "bakery server", detail: "version unavailable" }); }
-  }
+  const status = boards && fetchStatus ? await fetchStatus().catch(() => null) : null;
+  if (!local && fetchStatus) versions.push(status ? { status: "pass", name: "bakery server", detail: formatVersion(status) } : { status: "warn", name: "bakery server", detail: "version unavailable" });
+  const settings = boards && fetchSettings ? await fetchSettings().catch(() => null) : null;
+  // Diagnostics come last as INFO rows: they never pass or fail, and the summary line ignores them.
+  const info = [...(cliPath ? [{ status: "info", name: "cli path", detail: cliPath }] : []), ...envInfo(env), ...serverInfo(status, settings)];
   // The server line goes right after the versions so the instance being checked is the first thing read.
-  return [...versions, serverCheck, ...machine, ...(boards ?? []).flatMap(board => boardChecks(board, local, origin.hostname))];
+  return [...versions, serverCheck, ...machine, ...(boards ?? []).flatMap(board => boardChecks(board, local, origin.hostname)), ...info];
 }
 
 export function report(checks) {
-  const label = { pass: "PASS", warn: "WARN", fail: "FAIL" };
+  const label = { pass: "PASS", warn: "WARN", fail: "FAIL", info: "INFO" };
   const count = status => checks.filter(check => check.status === status).length;
   return [
     ...checks.map(check => `${label[check.status]}\t${check.name}\t${check.detail}`),

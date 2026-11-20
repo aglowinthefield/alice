@@ -196,12 +196,15 @@ export function overview(version) {
       for (const line of more) out.push(" ".repeat(width + 2) + line);
     }
   }
-  const table = rows => { const w = Math.max(...rows.map(row => row[0].length)) + 2; return rows.map(([a, b]) => `  ${c.arg(pad(a, w))}${b}`); };
+  const table = rows => {
+    const w = Math.max(...rows.map(row => row[0].length)) + 2;
+    return rows.flatMap(([a, b]) => wrap(b, Math.max(30, columns() - w - 2)).map((line, i) => i ? " ".repeat(w + 2) + line : `  ${c.arg(pad(a, w))}${line}`));
+  };
   out.push(
     "", c.head("Options"),
     ...table([["--board ID|PATH", "pick the board (default: the one for the current directory, or the only one)"], ["--json", "print the full API data"], ["--yes", "confirm a paid run or a deletion"], ["-v, --version", "print the version"]]),
     "", c.head("Environment"), ...table(ENV),
-    "", c.dim(`  bakery-cli help <command> for its options and examples. Installed with npm link, it is also bakery.`),
+    "", `  bakery-cli help <command> for its options and examples. Installed with npm link, it is also bakery.`,
   );
   return out.join("\n");
 }

@@ -532,7 +532,7 @@ test("a terminal gets aligned, coloured columns; a pipe keeps the tabs", async (
     const strip = (s: string) => s.replace(/\x1b\[[\d;]*m/g, "");
     assert.equal(strip(a), "card-one  triage  priority:high    First");
     assert.equal(strip(b), "c2        done    priority:normal  Second");
-    assert.match(b, /\x1b\[38;5;114mdone/);
+    assert.match(b, /\x1b\[32mdone/);
     assert.equal(plain, "no tabs here");
   } finally { if (before === undefined) delete process.env.FORCE_COLOR; else process.env.FORCE_COLOR = before; }
 });

@@ -387,4 +387,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(`${paint("38;5;174", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = 1; });
+main().catch(error => { console.error(`${paint("31", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = 1; });

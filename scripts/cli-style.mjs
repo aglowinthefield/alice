@@ -7,10 +7,10 @@ export const useColor = (stream = process.stdout) => forced() ? process.env.FORC
 
 export const paint = (code, stream = process.stdout) => text => useColor(stream) ? `\x1b[${code}m${text}\x1b[0m` : text;
 
-// Frosting, cream and crust.
+// The terminal's own 16 colours, so the theme picks shades that read on a light or a dark background.
 export const c = {
-  bold: paint("1"), dim: paint("2"), head: paint("1;38;5;217"), cmd: paint("38;5;218"), arg: paint("38;5;180"),
-  ok: paint("38;5;114"), warn: paint("38;5;221"), bad: paint("38;5;174"), info: paint("38;5;117"), muted: paint("38;5;245"),
+  bold: paint("1"), dim: paint("2"), head: paint("1;35"), cmd: paint("35"), arg: paint("33"),
+  ok: paint("32"), warn: paint("33"), bad: paint("31"), info: paint("36"), muted: paint("2"),
 };
 
 const visible = text => text.replace(/\x1b\[[\d;]*m/g, "");
@@ -41,17 +41,17 @@ const CAKE = [
   "⡟⠛⠉⠉⠀⠀⠀⠀⠀⢀⣀⣠⣤⡤⠴⠖⠒⠚⠛⠉",
   "⣧⡤⠤⠴⠶⠒⠛⠉⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
 ];
-const SHADES = [174, 174, 218, 218, 217, 223, 223, 223, 180, 180];
+const SHADES = [31, 31, 35, 35, 35, 33, 33, 33, 33, 33];
 
 export function banner(version) {
-  const beside = ["", "", "", "", c.bold("b a k e r y"), c.dim("Pi agents bake your cards, one worktree each."), version ? c.dim(version) : "", "", "", ""];
-  return CAKE.map((row, i) => `  ${paint(`38;5;${SHADES[i]}`)(row)}${beside[i] ? `   ${beside[i]}` : ""}`).join("\n");
+  const beside = ["", "", "", "", c.bold("b a k e r y"), "Pi agents bake your cards, one worktree each.", version ? c.dim(version) : "", "", "", ""];
+  return CAKE.map((row, i) => `  ${paint(String(SHADES[i]))(row)}${beside[i] ? `   ${beside[i]}` : ""}`).join("\n");
 }
 
 // Pipe-friendly lines laid out for a person: tab-separated runs of lines become aligned columns, statuses get their
 // lane's colour, and "key:value" cells dim the key.
 const STATUS = {
-  triage: c.muted, ready: c.info, running: c.warn, review: paint("38;5;183"), failed: c.bad, interrupted: paint("38;5;215"),
+  triage: c.muted, ready: c.info, running: c.warn, review: paint("34"), failed: c.bad, interrupted: c.warn,
   done: c.ok, archived: c.dim, error: c.bad, enabled: c.ok, paused: c.warn, succeeded: c.ok, blocked: c.bad,
   PASS: c.ok, WARN: c.warn, FAIL: c.bad, on: c.ok, off: c.muted,
 };

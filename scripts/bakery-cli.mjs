@@ -5,75 +5,10 @@ import { homedir } from "node:os";
 import { basename, extname, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { doctor, report } from "./doctor.mjs";
+import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
+import { c, layout, paint, pretty } from "./cli-style.mjs";
 import { formatVersion, readVersion } from "./version.mjs";
 
-const usage = `bakery-cli — local Bakery API client
-
-Usage: bakery-cli add TITLE... [--body BODY] [--priority -100..100|low|normal|high|urgent] [--board ID|PATH] [--json]
-       bakery-cli --version
-       bakery-cli doctor [--json]
-       bakery-cli boards [--json]
-       bakery-cli board-add [PATH] [--json]
-       bakery-cli board [ID|PATH] [--integration local|github-pr] [--merge-limit 0-99] [--json]
-       bakery-cli pr CARD_ID [URL|off] [--board ID|PATH] [--json]
-       bakery-cli cards [--board ID|PATH] [--json]
-       bakery-cli create --title TITLE [--body BODY] [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]... [--board ID|PATH] [--json]
-       bakery-cli show CARD_ID [--board ID|PATH] [--json]
-       bakery-cli depend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
-       bakery-cli undepend CARD_ID --on CARD_ID... [--board ID|PATH] [--json]
-       bakery-cli edit CARD_ID [--title TITLE] [--body BODY] [--board ID|PATH] [--json]
-       bakery-cli archive CARD_ID... [--board ID|PATH] [--json]
-       bakery-cli attach CARD_ID FILE... [--board ID|PATH] [--json]
-       bakery-cli purge-attachments CARD_ID... --yes [--board ID|PATH] [--json]
-       bakery-cli close CARD_ID [--board ID|PATH] [--json]
-       bakery-cli restore CARD_ID [--board ID|PATH] [--json]
-       bakery-cli stats [--board ID|PATH] [--json]
-       bakery-cli ready CARD_ID [--board ID|PATH] [--yes]
-       bakery-cli triage CARD_ID [--board ID|PATH]
-       bakery-cli start CARD_ID... [--board ID|PATH] --yes
-       bakery-cli recover CARD_ID [--board ID|PATH] --yes
-       bakery-cli runs CARD_ID [--board ID|PATH] [--json]
-       bakery-cli conflicts [--board ID|PATH] [--json]
-       bakery-cli sentinels [--board ID|PATH] [--json]
-       bakery-cli sentinel-pause|sentinel-resume|sentinel-run SENTINEL_ID [--board ID|PATH] [--json]
-       bakery-cli pickup [on|off|reset] [--concurrency 1-4] [--limit 0-99|off] [--budget USD|off] [--board ID|PATH] [--yes]
-
-doctor checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL
-per check; it exits 1 if any check fails. Against a remote BAKERY_URL it checks only the server and boards.
-Set BAKERY_URL (or BAKERY_PORT) to use a different server; it may omit the scheme and port 4317 (non-loopback needs BAKERY_ALLOW_REMOTE=1). --json prints full API data.
-Without --board, commands use the board whose repository contains the current directory, or the only board.
-add is quick capture: the words after it become the title of a new Triage card.
-runs lists each attempt's tokens and cost ("—" when an older attempt has no record) and the card total,
-including agent reviews; runs --json prints { cardId, total, runs, reviews }.
-create --key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status,
-it is printed instead of creating another.
-start runs Pi on Ready, Review or Failed cards (a retry reuses the card's worktree and Pi session).
-recover starts a fresh Pi session on a Failed card whose provider rejected its saved session history (start refuses it). The worktree, edits and review feedback carry over; the old session and log are kept.
-create --after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.
-depend CARD_ID --on OTHER adds that dependency (repeat --on for several); undepend removes it. A card
-waiting on an unfinished dependency is not picked up, and start refuses it until its dependencies are Done.
-show prints a card with its dependencies, dependents, attempts and latest auto-review; edit changes its
-title and/or description.
-close moves a Review card to Done without merging; its worktree and branch stay.
-archive accepts only Done cards and archives all or none; restore moves one archived card back to Done.
-attach saves local files (screenshots, logs, recordings) as attachments of a card and prints a markdown line for each:
-![name](/api/boards/…/attachments/ID) for images, [name](…) for other files. Paste those lines into a report to show
-images inline, since a /tmp path in a report is not durable. It reads each FILE as you, so it can read what you can;
-the server never reads paths. Nothing is sent to any service outside Bakery.
-purge-attachments permanently deletes the attached files and records of archived cards, all or none. It cannot be
-undone, even if the card is restored, so it needs --yes.
-stats prints card counts per lane and the pickup state.
-pickup --limit sets the most automatic starts per rolling 24 hours; 0 or off means no limit.
-board prints a board's integration mode; --integration github-pr makes a card Done when its GitHub pull request
-merges onto origin/main (needs gh and a GitHub remote link), --integration local merges on Approve.
---merge-limit sets the most unattended review merges per rolling 24 hours (0 means no limit); at the limit
-cards wait in Review for a person.
-pr links a card to a pull request URL instead of the bakery/CARD_ID branch lookup; off removes the link.
-sentinels lists the board's sentinels, persistent monitors that are not cards: paused or enabled, schedule, next run and
-latest run. sentinel-pause stops its future runs (and holds its unstarted jobs); sentinel-resume lets it run again at
-once; sentinel-run makes an enabled one run now. Pausing or finishing a job card never changes a sentinel.
---yes is required before start, enabling or resetting pickup, or moving a card to Ready on a pickup-enabled
-board; each can start paid Pi runs. No command approves a merge.`;
 
 function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
@@ -213,20 +148,32 @@ async function uploadAttachment(origin, base, file) {
 
 function print(data, json, lines) {
   if (json) console.log(JSON.stringify(data, null, 2));
-  else for (const line of lines) console.log(line);
+  else for (const line of pretty() ? layout(lines) : lines) console.log(line);
+}
+
+function unknown(name) {
+  const near = suggest(name);
+  return `Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run bakery-cli help to see them all.`;
 }
 
 async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
   if (opts.version) { console.log(`bakery-cli ${formatVersion(readVersion())}`); return; }
-  if (opts.help || !command) { console.log(usage); return; }
+  if (!command || command === "help" && !args.length) { console.log(overview(formatVersion(readVersion()))); return; }
+  if (opts.help || command === "help") {
+    const name = command === "help" ? args[0] : command;
+    const text = commandHelp(name);
+    if (!text) throw new Error(unknown(name));
+    console.log(text);
+    return;
+  }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
   const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
-  if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(`Unknown command: ${command}\n${usage}`);
-  if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usage}`);
-  if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usage}`);
-  if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
+  if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
+  if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
+  if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
@@ -248,7 +195,7 @@ async function main() {
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
   if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "purge-attachments")) throw new Error("--yes is only valid with ready, start, recover, pickup or purge-attachments");
   if (command === "purge-attachments" && !opts.yes) throw new Error("Purging deletes the attached files from disk and cannot be undone, even if the card is restored. Repeat with --yes to confirm.");
-  if (command === "recover" && args.length !== 1) throw new Error(`Invalid arguments for ${command}\n${usage}`);
+  if (command === "recover" && args.length !== 1) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "start" || command === "recover") {
     args.forEach(cardId);
     if (!opts.yes) throw new Error(`Starting ${args.length === 1 ? "a run" : `${args.length} runs`} uses paid Pi. Repeat with --yes to confirm.`);
@@ -337,7 +284,7 @@ async function main() {
     const review = reviews[0] ?? null;
     const refs = (label, items) => items.length ? items.map(item => `${label}\t${item.id}\t${item.status}\t${item.title}`) : [`${label}\tnone`];
     print({ card, runs, review, dependencies }, opts.json, [
-      `${card.title}`,
+      pretty() ? c.bold(card.title) : `${card.title}`,
       `id\t${card.id}`, `status\t${card.status}${card.blocked ? " (blocked: waiting on dependencies)" : ""}`, `repo\t${card.repo ?? board.repo}`,
       ...refs("depends on", dependencies.dependsOn), ...refs("dependent", dependencies.dependents),
       "", ...(card.body?.trim() ? card.body.split("\n") : ["(no description)"]), "",
@@ -440,4 +387,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(`bakery-cli: ${error instanceof Error ? error.message : error}`); process.exitCode = 1; });
+main().catch(error => { console.error(`${paint("38;5;174", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = 1; });

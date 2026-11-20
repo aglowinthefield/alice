@@ -75,7 +75,7 @@ async function fixture(boards: object[] = [board]) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
   const runAt = async (url: string, cwd: string | undefined, ...args: string[]) => {
-    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: url } });
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: url, FORCE_COLOR: "", NO_COLOR: "" } });
     let stdout = "", stderr = "";
     for await (const chunk of child.stdout) stdout += chunk;
     for await (const chunk of child.stderr) stderr += chunk;
@@ -413,7 +413,8 @@ test("create --after and depend/undepend manage card dependencies through the HT
     assert.match((await f.run("cards", "--after", "card-one")).stderr, /--after is only valid with create/);
     assert.match((await f.run("create", "--title", "x", "--on", "card-one")).stderr, /--on is only valid with depend or undepend/);
     assert.match((await f.run("create", "--title", "x", "--after", "../evil")).stderr, /card ID/);
-    assert.match((await f.run("--help")).stdout, /--after CARD_ID/);
+    assert.match((await f.run("help", "create")).stdout, /--after CARD_ID/);
+    assert.match((await f.run("create", "--help")).stdout, /--after CARD_ID/);
   } finally { await f.close(); }
 });
 
@@ -507,4 +508,40 @@ test("doctor starts with the CLI version, and adds the server's against a remote
     assert.match(lines[0], /^PASS\tbakery-cli\t\d+\.\d+\.\d+/);
     assert.equal(lines[1], "PASS\tbakery server\t9.8.7 (abc1234)");
   } finally { await new Promise<void>(resolve => stub.close(() => resolve())); }
+});
+
+test("help lists every command the CLI runs, and renders plain off a terminal", async () => {
+  const { COMMANDS, commandHelp, overview, suggest } = await import("../scripts/cli-help.mjs");
+  const source = readFileSync(cli, "utf8");
+  const expected = source.match(/const expected = \{([^}]*)\}/)![1];
+  const variadic = source.match(/const variadic = \[([^\]]*)\]/)![1];
+  const handled = new Set([...expected.matchAll(/"?([a-z][a-z-]*)"?:/g), ...variadic.matchAll(/"([a-z-]+)"/g)].map(m => m[1]).concat("pickup", "help"));
+  assert.deepEqual([...handled].sort(), COMMANDS.map((item: { name: string }) => item.name).sort());
+  assert.doesNotMatch(overview("1.0.0"), /\x1b\[|⣿|b a k e r y/, "no banner or colour when piped");
+  for (const item of COMMANDS) assert.match(commandHelp(item.name)!, new RegExp(`bakery-cli ${item.name}`));
+  assert.equal(suggest("crate"), "create");
+  assert.equal(suggest("zzzzzzzz"), undefined);
+});
+
+test("a terminal gets aligned, coloured columns; a pipe keeps the tabs", async () => {
+  const { layout } = await import("../scripts/cli-style.mjs");
+  const before = process.env.FORCE_COLOR;
+  process.env.FORCE_COLOR = "1";
+  try {
+    const [a, b, plain] = layout(["card-one\ttriage\tpriority:high\tFirst", "c2\tdone\tpriority:normal\tSecond", "no tabs here"]);
+    const strip = (s: string) => s.replace(/\x1b\[[\d;]*m/g, "");
+    assert.equal(strip(a), "card-one  triage  priority:high    First");
+    assert.equal(strip(b), "c2        done    priority:normal  Second");
+    assert.match(b, /\x1b\[38;5;114mdone/);
+    assert.equal(plain, "no tabs here");
+  } finally { if (before === undefined) delete process.env.FORCE_COLOR; else process.env.FORCE_COLOR = before; }
+});
+
+test("an unknown command suggests the nearest one", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.run("crate");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Unknown command: crate\. Did you mean create\?/);
+  } finally { await f.close(); }
 });

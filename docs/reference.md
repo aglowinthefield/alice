@@ -364,7 +364,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
 - `board [--integration local|github-pr] [--merge-limit 0-99]` shows the board, switches its integration mode, or sets its unattended-merge limit. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
-- To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get a `bakery-cli` command on your `PATH`, run `npm link`.
+- To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get `bakery-cli` (and its shorter alias `bakery`) on your `PATH`, run `npm link`. `bakery-cli help` lists the commands, and `bakery-cli help COMMAND` shows one command's options. On a terminal the output is laid out in coloured columns (`NO_COLOR` turns the colour off); piped, it stays tab-separated.
 
 ## Boards and lanes
 

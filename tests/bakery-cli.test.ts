@@ -511,7 +511,7 @@ test("doctor starts with the CLI version, and adds the server's against a remote
 });
 
 test("help lists every command the CLI runs, and renders plain off a terminal", async () => {
-  const { COMMANDS, commandHelp, overview, suggest } = await import("../scripts/cli-help.mjs");
+  const { COMMANDS, commandHelp, overview, suggest } = await import(new URL("../scripts/cli-help.mjs", import.meta.url).href);
   const source = readFileSync(cli, "utf8");
   const expected = source.match(/const expected = \{([^}]*)\}/)![1];
   const variadic = source.match(/const variadic = \[([^\]]*)\]/)![1];
@@ -524,7 +524,7 @@ test("help lists every command the CLI runs, and renders plain off a terminal", 
 });
 
 test("a terminal gets aligned, coloured columns; a pipe keeps the tabs", async () => {
-  const { layout } = await import("../scripts/cli-style.mjs");
+  const { layout } = await import(new URL("../scripts/cli-style.mjs", import.meta.url).href);
   const before = process.env.FORCE_COLOR;
   process.env.FORCE_COLOR = "1";
   try {

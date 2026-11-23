@@ -311,7 +311,7 @@ async function main() {
     // One at a time, in order. Each saved file's line prints at once; a failure stops there and names the file, files
     // already saved stay attached, and --json still prints them before the error and nonzero exit.
     const saved = [];
-    const link = item => `${/^image\/(png|jpeg|gif|webp)$/.test(item.type) ? "!" : ""}[${item.name.replace(/[\[\]]/g, "_")}](${path}/cards/${id}/attachments/${item.id})`;
+    const link = item => `${/^image\/(png|jpeg|gif|webp)$/.test(item.type) ? "!" : ""}[${item.name.replace(/[[\]]/g, "_")}](${path}/cards/${id}/attachments/${item.id})`;
     try {
       for (const file of args.slice(1)) {
         const item = await uploadAttachment(origin, `${path}/cards/${id}/attachments`, file);

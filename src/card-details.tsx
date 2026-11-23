@@ -22,7 +22,7 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { followUps } from "./follow-ups.js";
-import { parsePlan, type Subtask } from "./plan.js";
+import { parsePlan } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
 import {
@@ -33,7 +33,6 @@ import {
   type BakerySettings,
   type Card,
   type MergeConflict,
-  type Priority,
   type ReviewComment,
   type ReviewDiff,
   type Run,

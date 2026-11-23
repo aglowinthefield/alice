@@ -1,13 +1,6 @@
 import { BrandIcon } from "./brand-icon";
 import { sharedCaches } from "../server/shared-caches.js";
-import {
-  Fragment,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type FormEvent,
-} from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   CircleCheck,
@@ -132,7 +125,6 @@ import {
 import { SettingsPage } from "./settings.js";
 import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
-import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
 import { ConfirmHost, confirmAction } from "./confirm.js";
 
@@ -1078,8 +1070,8 @@ export function App() {
     open: (next) => {
       if (next === "today") openToday();
       else if (next === "stats" || next === "logs") openPage(next);
-      else if (boardId)
-        next === "pulls" ? openPulls(boardId) : openBoard(boardId);
+      else if (boardId && next === "pulls") openPulls(boardId);
+      else if (boardId) openBoard(boardId);
     },
     create: () => setCreating(true),
   };

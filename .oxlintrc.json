@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react", "import", "node"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "no-control-regex": "off",
+    "react/react-in-jsx-scope": "off",
+    "react/refs": "warn",
+    "react/set-state-in-effect": "warn",
+    "react/purity": "warn",
+    "react-hooks/exhaustive-deps": "warn"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": ["dist/**", "src-tauri/target/**", ".worktrees/**"]
+}

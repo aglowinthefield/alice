@@ -45,7 +45,7 @@ jobs:
         # back for its known failures. Put windows-latest back in the plain list once that card merges.
         os: ${{ fromJSON(github.head_ref == 'bakery/1eeec26c-f631-4c9c-8e8d-559d80c983dd' && '["ubuntu-latest","macos-latest","windows-latest"]' || needs.plan.outputs.os) }}
     steps:
-      # Keep LF line endings on Windows so `prettier --check` in the build matches Linux.
+      # Keep LF line endings on Windows so `oxfmt --check` in the build matches Linux.
       - run: git config --global core.autocrlf false
       # Tests create temporary Git repositories and commit in them.
       - run: |

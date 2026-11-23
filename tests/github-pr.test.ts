@@ -575,7 +575,7 @@ test("github-pr: a failing pre-push hook's stdout and stderr both reach the erro
     const integration = new Integration(f.board, f.data);
     const pending = integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
     assert.equal(integration.pushProgress(card.id)?.finishedAt, null, "progress exists while the push runs");
-    await assert.rejects(pending, (error: Error) => error instanceof PushHookError && /^push failed: the repository's pre-push hook refused it\.\n\n/.test(error.message) && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
+    await assert.rejects(pending, (error: Error) => error instanceof PushHookError && error.message.startsWith("push failed: the repository's pre-push hook refused it.\n\n") && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
     const progress = integration.pushProgress(card.id)!;
     assert.match(progress.step, /^Pushing bakery\//, "the failed step is the push");
     assert.ok(progress.log.includes("SETTINGS_TAB_IDS  settingsTabs.ts:9:14"));

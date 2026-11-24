@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
+import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
 import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
@@ -279,6 +280,13 @@ const server = createServer(async (req, res) => {
     }
     const disabled = featureRoutes.find(([feature, pattern]) => !features[feature] && pattern.test(path));
     if (disabled) { send(res, 404, { code: "feature_off", feature: disabled[0], error: featureOffMessage(disabled[0]) }); return; }
+    // Prometheus metrics for the operator's own monitoring; off unless BAKERY_METRICS=1. See docs/metrics.md.
+    if (path === "/metrics" && req.method === "GET") {
+      if (process.env.BAKERY_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set BAKERY_METRICS=1 to serve them." }); return; }
+      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount }, version.version));
+      return;
+    }
     if (path === "/api/status" && req.method === "GET") {
       // The cards behind the runs still going, so the update notice can say what it is waiting for.
       const cardIds = new Set<string>();

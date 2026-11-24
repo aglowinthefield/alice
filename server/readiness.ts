@@ -14,7 +14,7 @@ type Stored = { draft?: PullRequestDraft; hooks?: HookCheck };
 type Job = { runId: string; abort: AbortController; progress: ReadinessProgress; draft?: Promise<PullRequestDraft>; hooks?: Promise<void>; hookState?: HookCheck };
 
 /** Hook failures in a row sent back to the agent from Review before Bakery leaves the next one for a person. */
-export const maxHookSendBacks = 2;
+const maxHookSendBacks = 2;
 /** Drafts written at once, so a restart with many cards in Review does not start dozens of Pi processes. */
 const draftConcurrency = 2;
 

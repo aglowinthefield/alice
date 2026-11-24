@@ -1757,41 +1757,37 @@ test("github-pr readiness: work that changed after the check runs the hook again
   } finally { f.cleanup(); }
 });
 
-test("github-pr readiness: a hook refused at Review goes back to the agent, two times in a row at most", async () => {
+test("github-pr readiness: a hook refused at Review is sent back, two attempts in a row at most", async () => {
   const f = fixture();
   try {
-    const log = join(f.dir, "hook.log");
-    prePushHook(f, log, 1);
+    prePushHook(f, join(f.dir, "hook.log"), 1);
     const card = await reviewedCard(f);
     const { readiness, sentBack } = readinessFor(f);
-    readiness.prepare(card);
-    await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
-    assert.equal(sentBack.length, 1);
-    assert.match(sentBack[0].output, /Unused files \(1\)/);
-    assert.equal(readiness.status(card.id).hooks?.sentBack, true);
-
-    // Two more attempts whose hooks were also sent back from Review: the third refusal is left for a person.
     const worker = new Worker(f.board, f.data, f.fakePi);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const run = worker.start(f.board.getCard(card.id)!);
-      await waitFor(() => f.board.getRun(run.id)?.status !== "running");
-      if (attempt === 0) f.board.setReadiness(run.id, card.id, JSON.stringify({ hooks: { state: "failed", candidate: null, detail: "", sentBack: true } }));
+    // Each refusal is checked on its own attempt; the stand-in records the send-back, so the next attempt starts here.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (attempt > 1) {
+        const run = worker.start(f.board.getCard(card.id)!);
+        await waitFor(() => f.board.getRun(run.id)?.status !== "running");
+      }
+      readiness.prepare(f.board.getCard(card.id)!);
+      await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
+      assert.equal(readiness.status(card.id).hooks?.sentBack, attempt <= 2, `attempt ${attempt}`);
     }
-    readiness.prepare(f.board.getCard(card.id)!);
-    await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
-    assert.equal(sentBack.length, 1, "not sent back a third time");
-    assert.equal(readiness.status(card.id).hooks?.sentBack, false);
+    assert.equal(sentBack.length, 2);
+    assert.match(sentBack[0].output, /Unused files \(1\)/);
     assert.ok(f.board.listCardEvents(card.id).some(event => /already sent it back 2 times/.test(event.reason)));
     assert.equal(await readiness.passedCommit(card.id), null, "Approve runs the hook itself");
   } finally { f.cleanup(); }
 });
 
-test("github-pr readiness: a new attempt stops a running hook check, and boards that push on their own skip it", async () => {
+test("github-pr readiness: a new attempt stops a running hook check and its child processes", async () => {
   const f = fixture();
   try {
     const started = join(f.dir, "started"), pidFile = join(f.dir, "hook.pid");
     const hook = join(f.repo, ".git", "hooks", "pre-push");
-    writeFileSync(hook, `#!/bin/sh\necho $$ > "${pidFile}"\ntouch "${started}"\nsleep 30\n`);
+    // The hook's own child (sleep) must die too, or a killed check would leave a test suite running.
+    writeFileSync(hook, `#!/bin/sh\nsleep 30 &\necho $! > "${pidFile}"\ntouch "${started}"\nwait\n`);
     chmodSync(hook, 0o755);
     const card = await reviewedCard(f);
     const { readiness } = readinessFor(f);
@@ -1801,13 +1797,21 @@ test("github-pr readiness: a new attempt stops a running hook check, and boards 
     readiness.cancel(card.id);
     await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
     assert.equal(JSON.parse(f.board.getReadiness(f.board.listRuns(card.id)[0].id) ?? "{}").hooks, undefined, "no hook result is stored for a cancelled check");
-
-    rmSync(hook);
-    const other = await reviewedCard(f, "Second card");
-    f.board.setAutoPullRequest(f.repoBoard.id, true);
-    const second = readinessFor(f);
-    second.readiness.prepare(other);
-    assert.equal(second.readiness.status(other.id).hooks, null);
-    assert.equal(second.drafts.length, 0, "the automatic pull request drafts on demand instead");
   } finally { f.cleanup(); }
 });
+
+for (const mode of ["auto-review", "automatic pull requests"] as const) {
+  test(`github-pr readiness: with ${mode} on, which push at Review themselves, nothing is prepared`, async () => {
+    const f = fixture();
+    try {
+      if (mode === "auto-review") f.board.setAutoReview(f.repoBoard.id, true, "true");
+      else f.board.setAutoPullRequest(f.repoBoard.id, true);
+      const card = await reviewedCard(f);
+      const { readiness, drafts } = readinessFor(f);
+      readiness.prepare(card);
+      // A started check shows as queued at once, so this would catch one that would race their push.
+      assert.equal(readiness.status(card.id).hooks, null);
+      assert.equal(drafts.length, 0, "they draft on demand instead");
+    } finally { f.cleanup(); }
+  });
+}

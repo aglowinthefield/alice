@@ -201,3 +201,31 @@ test("the server's module graph includes the src files it imports and nothing el
   assert.ok(!files.has("src/main.tsx"));
   assert.ok(!files.has("src/style.css"));
 });
+
+test("the timer installs UI-only updates on its own and leaves restarts for the button", async () => {
+  for (const [path, expected] of [["src/style.css", { swapped: 1, restarted: 0, pending: 0 }], ["server/worker.ts", { swapped: 0, restarted: 0, pending: 1 }]] as const) {
+    const { repo, close } = changeFixture(path);
+    try {
+      let restarted = 0, swapped = 0;
+      const updates = new Updates(repo, fastForward(repo), () => restarted++, () => swapped++);
+      await updates.poll();
+      assert.deepEqual({ swapped, restarted, pending: updates.state.commits.length }, expected, path);
+    } finally { close(); }
+  }
+});
+
+test("a failed automatic UI install is not retried until something new lands", async () => {
+  const { repo, close } = changeFixture("src/style.css");
+  try {
+    let attempts = 0;
+    const updates = new Updates(repo, async () => { attempts++; throw new Error("vite build failed"); }, () => {}, () => {});
+    await updates.poll();
+    await updates.poll();
+    assert.equal(attempts, 1);
+    assert.match(updates.state.error ?? "", /vite build failed/);
+    writeFileSync(join(repo, "src", "style.css"), "body { color: red }\n");
+    git(repo, "commit", "-qam", "Bakery card: another style tweak");
+    await updates.poll();
+    assert.equal(attempts, 2);
+  } finally { close(); }
+});

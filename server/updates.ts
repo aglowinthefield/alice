@@ -37,6 +37,8 @@ export class Updates {
   private installedHead: string | null;
   // Files the running server loads, read once at startup.
   private serverFiles: Set<string>;
+  // The pending target whose automatic UI install failed, so the timer does not rebuild it every tick.
+  private failedTarget: string | null = null;
 
   constructor(
     private root: string,
@@ -71,6 +73,21 @@ export class Updates {
       this.restart = false;
       console.warn(`Update check failed: ${error instanceof Error ? error.message : error}`);
     }
+  }
+
+  /**
+   * The update timer's tick: re-reads what is pending and installs it straight away when it is UI-only. Updates that
+   * need a restart wait for someone to ask, since they pause new runs. A failed automatic install is not retried
+   * until something new lands.
+   */
+  async poll(): Promise<void> {
+    if (this.installing) return;
+    this.refresh();
+    if (this.commits.length === 0 || this.restart) return;
+    if (this.target() === this.failedTarget) return;
+    await this.apply();
+    // Read after the attempt: a fast-forward can land before the build fails.
+    if (this.error) this.failedTarget = this.target();
   }
 
   /**
@@ -122,6 +139,9 @@ export class Updates {
     const changed = this.git("diff", "--name-only", this.serverHead, target).split("\n").filter(Boolean);
     return changed.some(path => !uiOnly(path, this.serverFiles));
   }
+
+  /** What an install would land on: the fetched origin/main and the checked-out HEAD. */
+  private target(): string { return `${this.originMain() ?? ""}:${this.revParse("HEAD") ?? ""}`; }
 
   private originMain(): string | null { return this.revParse("refs/remotes/origin/main"); }
 

@@ -865,8 +865,9 @@ server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockP
 server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start();
   if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
   if (updates) {
-    updates.refresh();
-    updateTimer = setInterval(() => updates.refresh(), 30_000);
+    void updates.poll();
+    // UI-only updates install on their own; ones that restart the server wait for the button.
+    updateTimer = setInterval(() => void updates.poll(), 30_000);
   }
   // Starts queued while the previous server drained for a restart.
   for (const cardId of board.takeQueuedStarts()) {

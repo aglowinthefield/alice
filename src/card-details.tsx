@@ -1175,14 +1175,12 @@ export function CardDetails({
                     setPrDialog(true);
                     return;
                   }
+                  if (!currentReview) return;
+                  // Updating an open PR only pushes the card's branch, and the button names the PR, so only a local merge asks first.
                   if (
-                    !currentReview ||
+                    integration !== "github-pr" &&
                     !(await confirmAction(
-                      integration === "github-pr" && card.prState === "OPEN"
-                        ? `Approve the reviewed diff and push it to pull request #${card.prNumber}? Bakery commits unignored files on bakery/${card.id} and pushes that branch to origin, which updates the open PR. The card is Done once the PR merges on GitHub.`
-                        : integration === "github-pr"
-                          ? `Approve the reviewed diff and open a pull request for ${card.repo}? Bakery commits unignored files on bakery/${card.id}, pushes that branch to origin, and runs gh pr create. Nothing merges locally; the card is Done once the PR merges on GitHub.`
-                          : `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                      `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
                     ))
                   )
                     return;

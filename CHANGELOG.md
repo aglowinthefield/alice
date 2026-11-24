@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Approve and update PR #N** pushes to the open PR without a confirmation prompt. Approving a merge into local main still asks first.
 - `BAKERY_METRICS=1` serves Prometheus metrics on `/metrics`: runs, outcomes, run time, spend and tokens per repository and model, agent reviews, cards per lane and active runs. They're read from the database on each scrape, so totals survive restarts. See docs/metrics.md.
 - Pull-request boards draft the PR and run the repository's commit and pre-push hooks when a run reaches Review, so Approve and open PR opens the dialog with the draft ready and pushes without running the hooks again. A hook that fails at Review goes back to the agent before you review, up to 2 times in a row.
 - `scripts/install-desktop.sh` keeps a Mac's Bakery.app built from `origin/main`, rebuilding only when desktop code changed; `--launchd` runs it every hour.

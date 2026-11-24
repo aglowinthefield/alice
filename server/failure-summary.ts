@@ -20,6 +20,8 @@ export function summarizeFailure(input: { error: string | null; failureKind: str
   if (isProviderFailureKind(failureKind)) return providerSummaries[failureKind];
   if (!error) return input.prState === "CLOSED" ? "PR closed unmerged" : null;
   const timeout = error.match(/Bakery sent SIGTERM: (\d+)-minute run timeout/);
+  const stuck = error.match(/; stuck in ([\w-]+) for (\d+) min/);
+  if (timeout && stuck && Number(stuck[2]) >= 1) return `Timed out: ${stuck[1]} ran ${stuck[2]} min`;
   if (timeout) return `Timed out after ${timeout[1]} min`;
   if (/Bakery sent SIGTERM: manual stop/.test(error)) return "Stopped by hand";
   if (/Bakery sent SIGTERM: server received SIGTERM|^Server restarted while this run was active/.test(error)) return "Server restarted mid-run";
@@ -33,4 +35,21 @@ export function summarizeFailure(input: { error: string | null; failureKind: str
   if (/no settlement event/.test(error)) return "Pi ended without finishing";
   const first = error.split(/[;\n]/)[0].trim();
   return first.length > 40 ? `${first.slice(0, 39)}…` : first || null;
+}
+
+/**
+ * One line naming what a tool call was doing, for a killed run's error: a bash command, a file path, or the arguments.
+ * Drops the worktree prefix agents repeat on every command and redacts values that look like secrets, since the error
+ * reaches Discord.
+ */
+export function describeToolCall(args: unknown, worktree?: string): string {
+  const fields = args && typeof args === "object" ? args as Record<string, unknown> : {};
+  const main = [fields.command, fields.path, fields.code].find(value => typeof value === "string") as string | undefined;
+  let text = main ?? (args === undefined ? "" : JSON.stringify(args) ?? "");
+  if (worktree) text = text.split(`cd ${worktree} && `).join("").split(`${worktree}/`).join("");
+  text = text
+    .replace(/\b([A-Za-z_][A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASS|KEY|URL|DSN|CREDENTIALS?)[A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/gi, "$1=<redacted>")
+    .replace(/:\/\/[^\s/@:]+:[^\s/@]+@/g, "://<redacted>@")
+    .replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim();
+  return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }

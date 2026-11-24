@@ -7,6 +7,7 @@ import { piModelArgs, type AgentPhase } from "./agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
 import { Board, RunLimitError, type Card, type Run } from "./board.js";
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
+import { describeToolCall } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function git(repo: string, ...args: string[]) {
@@ -284,7 +285,7 @@ export class Worker {
     let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
     let settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
-    const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
+    const tools = new Map<string, { name: string; finished: boolean; failed: boolean; since: number; detail: string }>();
     let touchedAt = Date.now();
     child.stdout?.on("data", (chunk: Buffer) => {
       // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
@@ -326,7 +327,7 @@ export class Worker {
           if (event.type === "turn_start") { turn++; tools.clear(); }
           if (event.type === "tool_execution_start" && typeof event.toolCallId === "string") {
             const name = typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName) ? event.toolName : "tool";
-            tools.set(event.toolCallId, { name, finished: false, failed: false });
+            tools.set(event.toolCallId, { name, finished: false, failed: false, since: Date.now(), detail: describeToolCall(event.args, worktree) });
             this.live.set(run.id, { tool: name, turn: turn || 1, since: new Date().toISOString() });
           }
           if (event.type === "tool_execution_end" && typeof event.toolCallId === "string") {
@@ -373,7 +374,10 @@ export class Worker {
       this.terminationReasons.delete(run.id);
       const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
       // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
-      const termination = reason ? `; Bakery sent SIGTERM: ${reason}`
+      // Name the call a killed run was stuck in, so a timeout says what ate the time.
+      const running = [...tools.values()].filter(tool => !tool.finished).sort((a, b) => a.since - b.since)[0];
+      const stuck = running ? `; stuck in ${running.name} for ${Math.round((Date.now() - running.since) / 60_000)} min${running.detail ? `: ${running.detail}` : ""}` : "; no tool was running";
+      const termination = reason ? `; Bakery sent SIGTERM: ${reason}${stuck}`
         : signal || code === 143 ? "; termination source unknown (Bakery did not send SIGTERM)" : "";
       const failureKind: ProviderFailureKind | null = terminalModelError ? classifyProviderFailure(terminalModelError) : null;
       const retryPlain = !ok && isOutputDuplicationBlock(terminalModelError) && prompt.includes(NARRATION);

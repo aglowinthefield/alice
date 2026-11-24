@@ -2246,7 +2246,9 @@ export function App() {
             <span
               title="Model cost of attempts and agent reviews running or finished in the last 24 hours"
               className={
-                currentBoard.autoPickupBudgetReached ? "text-amber-600" : ""
+                currentBoard.autoPickupBudgetReached
+                  ? "text-status-interrupted"
+                  : ""
               }
             >
               Last 24h: {formatCost(currentBoard.cost24h ?? 0)}
@@ -2263,7 +2265,7 @@ export function App() {
           currentBoard.autoPickupStarts >= currentBoard.pickupDailyLimit && (
             <div
               role="alert"
-              className="mx-6 mt-5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm lg:mx-10"
+              className="mx-6 mt-5 rounded-md border border-status-interrupted/40 bg-status-interrupted/10 px-4 py-3 text-sm lg:mx-10"
             >
               <strong>
                 Auto pickup waiting: {currentBoard.autoPickupStarts} /{" "}
@@ -2286,7 +2288,7 @@ export function App() {
           currentBoard.autoPickupBudgetReached && (
             <div
               role="alert"
-              className="mx-6 mt-5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm lg:mx-10"
+              className="mx-6 mt-5 rounded-md border border-status-interrupted/40 bg-status-interrupted/10 px-4 py-3 text-sm lg:mx-10"
             >
               <strong>
                 Auto pickup waiting: daily cost budget reached (
@@ -2337,7 +2339,7 @@ export function App() {
             <div
               role="alert"
               data-testid="pull-requests-off-notice"
-              className="mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm lg:mx-10"
+              className="mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border border-status-interrupted/40 bg-status-interrupted/10 px-4 py-3 text-sm lg:mx-10"
             >
               <span className="min-w-0 break-words">
                 <strong>Approve is unavailable here:</strong>{" "}
@@ -2374,7 +2376,7 @@ export function App() {
             currentBoard.integrationWarning) && (
             <div
               role="alert"
-              className={`mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border px-4 py-3 text-sm lg:mx-10 ${currentBoard.integrationError ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-amber-500/40 bg-amber-500/10"}`}
+              className={`mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border px-4 py-3 text-sm lg:mx-10 ${currentBoard.integrationError ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-status-interrupted/40 bg-status-interrupted/10"}`}
             >
               <span className="min-w-0 break-words">
                 <strong>
@@ -2760,7 +2762,7 @@ export function App() {
                                       <span
                                         data-testid="failure-summary"
                                         title="Why the latest attempt failed. Open the card for the full error."
-                                        className="flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-500"
+                                        className="flex items-center gap-1 rounded border border-status-failed/40 bg-status-failed/10 px-2 py-0.5 text-[10px] font-medium text-status-failed"
                                       >
                                         <CircleX size={10} aria-hidden />
                                         {item.failureSummary}
@@ -2770,7 +2772,7 @@ export function App() {
                                     <span
                                       data-testid="auto-retry"
                                       title="Automatic pickup retries a run that failed on a temporary provider or network error, at most 3 times"
-                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-amber-500"
+                                      className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
                                     >
                                       <RotateCcw size={10} aria-hidden />
                                       Retry {item.autoRetries}/3
@@ -2783,7 +2785,7 @@ export function App() {
                                     <span
                                       data-testid="attempt-count"
                                       title={reworkSummary(item)}
-                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-amber-500"
+                                      className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
                                     >
                                       <RotateCcw size={10} aria-hidden />
                                       {item.attempts} attempts
@@ -4043,9 +4045,9 @@ function PullRequestBadge({
 }) {
   const tone =
     card.prState === "MERGED"
-      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
+      ? "border-status-review/40 bg-status-review/10 text-status-review"
       : card.prState === "CLOSED" || card.prChecks === "failing"
-        ? "border-red-500/40 bg-red-500/10 text-red-500"
+        ? "border-status-failed/40 bg-status-failed/10 text-status-failed"
         : "border-border text-muted-foreground";
   return (
     <span
@@ -4087,8 +4089,8 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
       }
       className={`rounded border px-1.5 py-px text-[11px] leading-4 font-medium ${
         state === "pushed"
-          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
-          : "border-amber-500/40 bg-amber-500/10 text-amber-500"
+          ? "border-status-review/40 bg-status-review/10 text-status-review"
+          : "border-status-interrupted/40 bg-status-interrupted/10 text-status-interrupted"
       }`}
     >
       {state === "pushed" ? "On origin/main" : "Merged locally, not pushed"}
@@ -4152,7 +4154,7 @@ function ActivityBadge({
     <span
       data-testid="activity-badge"
       title="The agent has reported nothing for a while. A long command can be quiet; check the attempt log if it stays quiet."
-      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium text-amber-500"
+      className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
     >
       <CirclePause size={10} aria-hidden />
       Quiet {minutes}m
@@ -4165,7 +4167,7 @@ function WaitingBadge({ waiting }: { waiting: Card[] }) {
     <span
       data-testid="waiting-badge"
       title={`Starts after ${waiting.map((item) => item.title).join(", ")} ${waiting.length === 1 ? "is" : "are"} Done`}
-      className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-px text-[11px] leading-4 font-medium text-sky-500"
+      className="rounded border border-status-running/40 bg-status-running/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-running"
     >
       Waiting on {waiting.length}
     </span>

@@ -169,7 +169,7 @@ export function ReviewPanel({
       {stale && (
         <div
           role="status"
-          className="mt-2 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+          className="mt-2 flex items-center gap-3 rounded-md border border-status-interrupted/40 bg-status-interrupted/10 px-3 py-2 text-xs"
         >
           <span>The code changed since this diff was loaded.</span>
           <Button size="sm" variant="outline" onClick={onRefresh}>

@@ -1024,7 +1024,7 @@ export function CardDetails({
             {card?.startQueued && (
               <>
                 <span
-                  className="rounded border border-amber-500/50 px-2 py-1 text-xs text-amber-600"
+                  className="rounded border border-status-interrupted/50 px-2 py-1 text-xs text-status-interrupted"
                   data-testid="start-queued-badge"
                 >
                   Queued, starts after restart

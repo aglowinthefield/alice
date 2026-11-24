@@ -64,13 +64,13 @@ function JobRow({
           <CircleX
             size={15}
             aria-label={state.label}
-            className="shrink-0 text-red-500"
+            className="shrink-0 text-status-failed"
           />
         ) : (
           <CircleCheck
             size={15}
             aria-label={state.label}
-            className={`shrink-0 ${state.live ? "text-muted-foreground" : "text-emerald-500"}`}
+            className={`shrink-0 ${state.live ? "text-muted-foreground" : "text-status-review"}`}
           />
         )}
         <div className="min-w-0 flex-1">
@@ -97,7 +97,9 @@ function RunRow({ run }: { run: SentinelRun }) {
         · {date(run.startedAt)}
         {run.summary ? ` · ${run.summary}` : ""}
       </span>
-      {run.error && <span className="block text-red-500">{run.error}</span>}
+      {run.error && (
+        <span className="block text-status-failed">{run.error}</span>
+      )}
     </li>
   );
 }
@@ -147,7 +149,7 @@ function SentinelPanel({
         <h2 className="text-base font-medium">{overview.name}</h2>
         <span
           data-sentinel-state={sentinel.enabled ? "enabled" : "paused"}
-          className={`rounded border px-2 py-0.5 text-xs ${sentinel.enabled ? "border-border text-muted-foreground" : "border-amber-500/50 text-amber-500"}`}
+          className={`rounded border px-2 py-0.5 text-xs ${sentinel.enabled ? "border-border text-muted-foreground" : "border-status-interrupted/50 text-status-interrupted"}`}
         >
           {sentinel.enabled
             ? overview.running
@@ -190,7 +192,7 @@ function SentinelPanel({
           : "no runs while paused"}
         {sentinel.lastRunAt ? ` · last run ${date(sentinel.lastRunAt)}` : ""}
       </p>
-      {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+      {error && <p className="mt-1 text-xs text-status-failed">{error}</p>}
       {runs.length > 0 && (
         <>
           <h3 className="mb-1 mt-4 text-sm font-medium">Runs</h3>

@@ -13,7 +13,7 @@ const rank: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 const levelColor: Record<Level, string> = {
   debug: "text-muted-foreground",
   info: "",
-  warn: "text-amber-500",
+  warn: "text-status-interrupted",
   error: "text-destructive",
 };
 const select =

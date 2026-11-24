@@ -65,6 +65,7 @@ const pixel = async (page: Page, x: number, y: number) => {
     canvas.width = image.width; canvas.height = image.height;
     const context = canvas.getContext("2d")!;
     context.drawImage(image, 0, 0);
+    // oxlint-disable-next-line unicorn/no-useless-spread -- turns the Uint8ClampedArray into a plain array for deepEqual
     return [...context.getImageData(x, y, 1, 1).data.slice(0, 3)];
   }, { png, x, y });
 };

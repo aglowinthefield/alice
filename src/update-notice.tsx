@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 
 type WaitingCard = { id: string; title: string; repo: string };
@@ -6,6 +6,10 @@ type Updates = {
   commits: { sha: string; subject: string }[];
   installing: boolean;
   error: string | null;
+  /** Installing restarts the server; false when only the browser UI changes. Missing on older servers. */
+  restart?: boolean;
+  /** The commit the served UI was built from. */
+  ui?: string | null;
 };
 type Status = {
   draining: boolean;
@@ -18,9 +22,18 @@ type Status = {
 };
 
 const runs = (count: number) => `${count} active run${count === 1 ? "" : "s"}`;
+const installLabel = (updates: Updates) =>
+  updates.restart === false ? "Update interface" : "Update and restart";
+const installHint = (updates: Updates, activeRuns: number) =>
+  updates.restart === false
+    ? "Only the interface changed, so runs keep going."
+    : activeRuns > 0
+      ? `Restarts after ${runs(activeRuns)} finish.`
+      : "Nothing is running, so it restarts right away.";
 
 // Bottom-left notice for server updates: the pending commits as a changelog with a button to install them, then
-// the wait for active runs to finish before the server restarts to load the new code.
+// the wait for active runs to finish before the server restarts to load the new code. A UI-only update needs no
+// restart; the notice then offers to reload the page onto the new UI.
 export function UpdateNotice({
   onOpenCard,
   onOpenSettings,
@@ -32,12 +45,16 @@ export function UpdateNotice({
   const [status, setStatus] = useState<Status | null>(null);
   const [down, setDown] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
+  // The UI build this page loaded. The server reports a new one after a UI-only update.
+  const loadedUi = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     let restarting = false;
     const poll = () =>
       api<Status>("/status")
         .then((next) => {
           restarting = next.draining || !!next.updates?.installing;
+          if (loadedUi.current === undefined && next.updates?.ui)
+            loadedUi.current = next.updates.ui;
           setStatus(next);
           setDown(false);
         })
@@ -47,13 +64,36 @@ export function UpdateNotice({
     return () => clearInterval(timer);
   }, []);
   const updates = status?.updates;
+  const newUi =
+    !down &&
+    !!loadedUi.current &&
+    !!updates?.ui &&
+    updates.ui !== loadedUi.current;
   const pending =
     !down &&
     !status?.draining &&
     !updates?.installing &&
     (updates?.commits.length ?? 0) > 0;
-  if (!down && !status?.draining && !updates?.installing && !pending)
-    return null;
+  if (!down && !status?.draining && !updates?.installing && !pending) {
+    if (!newUi) return null;
+    return (
+      <div
+        role="status"
+        className="fixed bottom-3 left-3 z-50 lg:bottom-20 max-w-72 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground shadow-md"
+      >
+        <span className="mr-2 inline-block size-1.5 rounded-full bg-status-review align-middle" />
+        Bakery's interface was updated.
+        <button
+          type="button"
+          data-testid="update-notice-reload"
+          onClick={() => window.location.reload()}
+          className="ml-2 cursor-pointer rounded border border-border px-2 py-0.5 text-foreground hover:bg-accent"
+        >
+          Reload
+        </button>
+      </div>
+    );
+  }
   const install = () => {
     setRequestError(null);
     api<Updates>("/update", { method: "POST" })
@@ -115,7 +155,7 @@ export function UpdateNotice({
               onClick={install}
               className="cursor-pointer rounded border border-border px-2 py-1 text-foreground hover:bg-accent"
             >
-              Update and restart
+              {installLabel(updates!)}
             </button>
             {onOpenSettings && (
               <button
@@ -126,11 +166,7 @@ export function UpdateNotice({
                 Details
               </button>
             )}
-            <p className="mt-1">
-              {status!.activeRuns > 0
-                ? `Restarts after ${runs(status!.activeRuns)} finish.`
-                : "Nothing is running, so it restarts right away."}
-            </p>
+            <p className="mt-1">{installHint(updates!, status!.activeRuns)}</p>
           </div>
         </div>
       )}
@@ -250,12 +286,10 @@ export function UpdatesPanel() {
               onClick={install}
               className="mt-4 cursor-pointer rounded border border-border px-3 py-1.5 hover:bg-accent"
             >
-              Update and restart
+              {installLabel(updates)}
             </button>
             <p className="mt-2 text-xs text-muted-foreground">
-              {status.activeRuns > 0
-                ? `Restarts after ${runs(status.activeRuns)} finish.`
-                : "Nothing is running, so it restarts right away."}
+              {installHint(updates, status.activeRuns)}
             </p>
           </>
         )}

@@ -8,7 +8,7 @@ import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
-import { Integration, PushHookError } from "../server/integration.js";
+import { Integration, PushHookError, type CommitHookError } from "../server/integration.js";
 import { Readiness } from "../server/readiness.js";
 import { GitHub, GitHubSync, bakeryRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
@@ -1696,7 +1696,7 @@ test("publish as PR: a conflicting diverged bakery/<id> stops with nothing pushe
 
 /** Readiness wired like the server: a counting stand-in for the Pi drafter, and send-backs recorded instead of started. */
 function readinessFor(f: Fixture, integration = new Integration(f.board, f.data)) {
-  const drafts: string[] = [], sentBack: PushHookError[] = [];
+  const drafts: string[] = [], sentBack: (PushHookError | CommitHookError)[] = [];
   const readiness = new Readiness(f.board, integration, {
     draft: async (card) => { drafts.push(card.id); return { title: "feat: add feature", body: "Drafted at Review", source: "agent", problem: "", templatePath: null, semantic: null }; },
     sendBack: (_card, error) => { sentBack.push(error); return true; },
@@ -1778,6 +1778,48 @@ test("github-pr readiness: a hook refused at Review is sent back, two attempts i
     assert.match(sentBack[0].output, /Unused files \(1\)/);
     assert.ok(f.board.listCardEvents(card.id).some(event => /already sent it back 2 times/.test(event.reason)));
     assert.equal(await readiness.passedCommit(card.id), null, "Approve runs the hook itself");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: a commit hook refused at Review starts a run with its output, two attempts in a row at most", async () => {
+  const f = fixture();
+  const promptFile = join(f.dir, "prompt.txt"), fixPi = join(f.dir, "pi-fix");
+  // Records the prompt and changes nothing, so the work stays uncommitted and the hook refuses it again.
+  writeFileSync(fixPi, `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > "${promptFile}"\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fixPi, 0o755);
+  try {
+    const hook = join(f.repo, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, "#!/bin/sh\necho 'lint: 2 problems in feature.txt'\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const card = await reviewedCard(f);
+    const worker = new Worker(f.board, f.data, fixPi);
+    const sentBack: Error[] = [];
+    // Sends back as the server does, so each refusal starts the agent's next run.
+    const readiness = new Readiness(f.board, new Integration(f.board, f.data), {
+      draft: async () => ({ title: "feat: add feature", body: "Drafted", source: "agent", problem: "", templatePath: null, semantic: null }),
+      sendBack: (current, error) => { sentBack.push(error); return worker.sendBackHookFailure(current, "commit", "", error.output); },
+    });
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const runs = f.board.listRuns(card.id).length;
+      readiness.prepare(f.board.getCard(card.id)!);
+      if (attempt <= 2) {
+        await waitFor(() => f.board.listRuns(card.id).length > runs && f.board.listRuns(card.id)[0].status === "review");
+        assert.equal(sentBack.length, attempt);
+        assert.equal(JSON.parse(f.board.getReadiness(f.board.listRuns(card.id)[1].id) ?? "{}").hooks?.hook, "commit");
+        const prompt = readFileSync(promptFile, "utf8");
+        assert.match(prompt, /pre-commit or commit-msg hook refused the commit/, `attempt ${attempt}`);
+        assert.match(prompt, /lint: 2 problems in feature\.txt/);
+        assert.doesNotMatch(prompt, /pre-push hook refused it/, "a refused commit has no SHA to name");
+        assert.equal(f.board.getCiFeedback(card.id), undefined, "the output is handed over once");
+      } else {
+        await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
+        assert.equal(readiness.status(card.id).hooks?.sentBack, false);
+      }
+    }
+    assert.equal(sentBack.length, 2, "the third refusal in a row is left for a person");
+    assert.equal(f.board.listRuns(card.id).length, 3);
+    assert.ok(f.board.listCardEvents(card.id).some(event => /commit hook refused this attempt at Review too\. Bakery already sent it back 2 times/.test(event.reason)));
+    assert.equal(await readiness.passedCommit(card.id), null, "Approve runs the hooks itself");
   } finally { f.cleanup(); }
 });
 

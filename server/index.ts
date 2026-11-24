@@ -13,7 +13,7 @@ import { buildStats } from "./stats.js";
 import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
-import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
+import { CommitHookError, Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
@@ -183,7 +183,8 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
   try {
     const pushed = await push();
     // Pushed after all (the operator fixed it by hand, say): an earlier refusal still waiting for a slot is stale.
-    if (board.getCiFeedback(card.id)?.source === "push") board.clearCiFeedback(card.id);
+    const waiting = board.getCiFeedback(card.id)?.source;
+    if (waiting === "push" || waiting === "commit") board.clearCiFeedback(card.id);
     return pushed;
   }
   catch (error) {
@@ -201,12 +202,8 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
   }
 }
 /** Keeps a refused hook's output for the card's next run and starts it; false when no run can start yet. */
-function sendBackHookFailure(card: Card, error: PushHookError): boolean {
-  board.recordPushFailure(card.id, error.sha, error.output);
-  const previous = board.listRuns(card.id)[0];
-  if (!worker.startHookFix(board.getCard(card.id)!)) return false;
-  if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
-  return true;
+function sendBackHookFailure(card: Card, error: PushHookError | CommitHookError): boolean {
+  return error instanceof PushHookError ? worker.sendBackHookFailure(card, "push", error.sha, error.output) : worker.sendBackHookFailure(card, "commit", "", error.output);
 }
 // Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
 const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);

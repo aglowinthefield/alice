@@ -129,6 +129,8 @@ export type PullRequestDraft = {
     state: "queued" | "running" | "passed" | "failed" | "unchecked";
     candidate: string | null;
     detail: string;
+    /** On "failed": the hook that refused, a commit hook (nothing was committed) or the pre-push hook. */
+    hook?: "commit" | "push";
   } | null;
 };
 export type ReviewDiff = {

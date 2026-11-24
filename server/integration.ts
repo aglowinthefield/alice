@@ -142,6 +142,10 @@ export class PushError extends Error {
 export class PushHookError extends PushError {
   constructor(error: PushError, readonly sha: string) { super(error.message, error.output, true); }
 }
+/** The repository's pre-commit or commit-msg hook refused the commit Bakery made of the card's work, so nothing was committed. */
+export class CommitHookError extends Error {
+  constructor(message: string, readonly output: string) { super(message); }
+}
 
 /** Kills a child started with `detached`, and what it started, such as a hook's test run. */
 function killGroup(child: ChildProcess) {
@@ -477,7 +481,8 @@ export class Integration {
   /**
    * Gets a github-pr card ready for Approve when its run reaches Review: commits the work on `bakery/<id>` as Approve
    * would (the repository's pre-commit and commit-msg hooks run), then runs the pre-push hook on that commit with
-   * `git push --dry-run`, so nothing reaches origin. A refused hook throws `PushHookError`. "unchecked" means Git
+   * `git push --dry-run`, so nothing reaches origin. A refused commit throws `CommitHookError` and a refused pre-push
+   * hook `PushHookError`. "unchecked" means Git
    * stopped the dry run for another reason (origin's branch moved, no network), so Approve runs the hook as before.
    * A hook that rewrites files (a formatter) changes the diff under review, which then shows its changes.
    */
@@ -487,7 +492,13 @@ export class Integration {
     if (await gitAsync(worktree, ["diff", "--cached", "--name-only"], signal)) {
       await gitAsync(worktree, ["diff", "--cached", "--check"], signal);
       step("Committing the card's work (the repository's pre-commit hooks run)");
-      await gitAsync(worktree, ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal);
+      try { await gitAsync(worktree, ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Identity and message are set above, so a failed commit here is the repository's commit hooks refusing it.
+        if (signal.aborted || !message.startsWith("commit failed: ")) throw error;
+        throw new CommitHookError(message, message.slice("commit failed: ".length));
+      }
     }
     if (!clean(worktree)) throw new Error("The card worktree has uncommitted changes after Bakery committed it; a hook may have changed files");
     const candidate = git(worktree, "rev-parse", "HEAD");

@@ -55,7 +55,7 @@ export function parsePriority(value: unknown): CardPriority {
 }
 /** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
 /** Why a card has feedback waiting for its next run: failed CI, a refused push, a merge conflict, or a request made on the PR. */
-export type CiFeedbackSource = "ci" | "push" | "conflict" | "comment";
+export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment";
 /**
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
  * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
@@ -258,7 +258,7 @@ export class Board {
     }
     // CI failures from a card's PR, waiting to be handed to the card's next run.
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
-    // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push.
+    // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push, 'commit' for a commit hook that refused the commit.
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
@@ -581,12 +581,13 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /**
-   * A pre-push hook refused the push of `sha`: keep its output for the card's next run. Unlike CI rounds this is not
-   * counted or limited, because each round starts from an operator's Approve, and the fix waits for another one.
+   * A pre-push hook refused the push of `sha` (source "push"), or a commit hook refused the commit (source "commit",
+   * with no sha): keep its output for the card's next run. Unlike CI rounds this is not counted here; Approve rounds
+   * wait for the operator, and `Readiness` limits the send-backs it makes from Review.
    */
-  recordPushFailure(cardId: string, sha: string, output: string): void {
-    this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, 'push') ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source='push'")
-      .run(cardId, sha, output.slice(-20_000), now());
+  recordPushFailure(cardId: string, sha: string, output: string, source: "push" | "commit" = "push"): void {
+    this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source=excluded.source")
+      .run(cardId, sha, output.slice(-20_000), now(), source);
   }
   /**
    * The PR conflicts with main and the conflict is small enough to repair unattended: count a repair round, keep the
@@ -658,9 +659,9 @@ export class Board {
     if (source === "ci" || source === "conflict") this.db.prepare("UPDATE runs SET ciFix=? WHERE id=?").run(source === "conflict" ? 2 : 1, runId);
     this.clearCiFeedback(cardId);
   }
-  /** Review cards whose refused push is waiting for a run slot to go back to the agent (see `Worker.startHookFix`). */
+  /** Review cards whose refused push or commit is waiting for a run slot to go back to the agent (see `Worker.startHookFix`). */
   listWaitingHookFixes(): Card[] {
-    const ids = (this.db.prepare("SELECT cardId FROM ci_feedback WHERE source='push' ORDER BY createdAt").all() as { cardId: string }[]).map(row => row.cardId);
+    const ids = (this.db.prepare("SELECT cardId FROM ci_feedback WHERE source IN ('push', 'commit') ORDER BY createdAt").all() as { cardId: string }[]).map(row => row.cardId);
     return ids.map(id => this.getCard(id)).filter((card): card is Card => card?.status === "review");
   }
   /** Puts back feedback a run took but could not act on (its session was rejected), unless newer feedback arrived. */

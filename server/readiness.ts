@@ -1,14 +1,15 @@
 import type { Board, Card, Run } from "./board.js";
-import { PushHookError, type Integration } from "./integration.js";
+import { CommitHookError, PushHookError, type Integration } from "./integration.js";
 import type { PullRequestDraft } from "./pr-draft.js";
 
 /**
  * How the repository's hooks went on the card's work when its run reached Review. "passed" names the commit whose
  * pre-push hook passed; Approve pushes exactly that commit without running the hook again. "unchecked" means Bakery
- * could not tell (no network, origin's branch moved, a pre-commit hook failed), so Approve runs the hooks as before.
- * `sentBack` is set when a refused hook went back to the agent from here.
+ * could not tell (no network, origin's branch moved), so Approve runs the hooks as before. A "failed" check names the
+ * `hook` that refused: "commit" (pre-commit or commit-msg, nothing was committed) or "push". `sentBack` is set when
+ * the refusal went back to the agent from here.
  */
-export type HookCheck = { state: "queued" | "running" | "passed" | "failed" | "unchecked"; candidate: string | null; detail: string; sentBack?: boolean };
+export type HookCheck = { state: "queued" | "running" | "passed" | "failed" | "unchecked"; candidate: string | null; detail: string; hook?: "commit" | "push"; sentBack?: boolean };
 export type ReadinessProgress = { startedAt: number; steps: { at: number; text: string }[] };
 type Stored = { draft?: PullRequestDraft; hooks?: HookCheck };
 type Job = { runId: string; abort: AbortController; progress: ReadinessProgress; draft?: Promise<PullRequestDraft>; hooks?: Promise<void>; hookState?: HookCheck };
@@ -22,7 +23,7 @@ const draftConcurrency = 2;
  * Gets github-pr cards ready to open their pull request while the operator reviews them, so Approve only pushes.
  * When a run reaches Review it drafts the PR title and body and runs the repository's commit and pre-push hooks on
  * the work (see `Integration.checkHooks`), one card at a time per repository. Both results are stored per run.
- * A refused pre-push hook goes back to the agent right away, up to `maxHookSendBacks` times in a row.
+ * A refused commit or pre-push hook goes back to the agent right away, up to `maxHookSendBacks` times in a row.
  * Boards with auto-review or automatic pull requests push at Review anyway, so only their draft is shared, on demand.
  */
 export class Readiness {
@@ -33,7 +34,7 @@ export class Readiness {
   constructor(private board: Board, private integration: Integration, private deps: {
     draft: (card: Card, run: Run, onProgress: (step: string) => void) => Promise<PullRequestDraft>;
     /** Sends a refused hook's output to the agent as a new run. False when no run can start yet. */
-    sendBack: (card: Card, error: PushHookError) => boolean;
+    sendBack: (card: Card, error: PushHookError | CommitHookError) => boolean;
   }) {}
 
   private latest(card: Card): Run | undefined {
@@ -139,24 +140,26 @@ export class Readiness {
     } catch (error) {
       if (job.abort.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
-      if (!(error instanceof PushHookError)) {
+      if (!(error instanceof PushHookError) && !(error instanceof CommitHookError)) {
         result = { state: "unchecked", candidate: null, detail: message };
         // Only a failed commit is news: a worktree Bakery cannot inspect says so on Approve anyway.
-        if (/^(commit|diff) failed|uncommitted changes after/.test(message)) this.board.noteCard(cardId, `Bakery could not get this card's commit ready to push at Review, so Approve runs the hooks itself: ${message.slice(0, 1500)}`);
+        if (/^diff failed|uncommitted changes after/.test(message)) this.board.noteCard(cardId, `Bakery could not get this card's commit ready to push at Review, so Approve runs the hooks itself: ${message.slice(0, 1500)}`);
       } else {
-        result = { state: "failed", candidate: error.sha, detail: message, sentBack: false };
-        this.step(job, "The pre-push hook refused the commit");
+        const hook = error instanceof PushHookError ? "push" : "commit";
+        const name = hook === "push" ? "The pre-push hook" : "The repository's commit hook";
+        result = { state: "failed", candidate: error instanceof PushHookError ? error.sha : null, detail: message, hook, sentBack: false };
+        this.step(job, hook === "push" ? "The pre-push hook refused the commit" : "A commit hook refused the card's work, so nothing was committed");
         const streak = this.sendBackStreak(cardId, run.id);
         if (streak >= maxHookSendBacks) {
-          this.board.noteCard(cardId, `The pre-push hook refused this attempt at Review too. Bakery already sent it back ${streak} times in a row, so a person decides now; Approve shows the output.`);
+          this.board.noteCard(cardId, `${name} refused this attempt at Review too. Bakery already sent it back ${streak} times in a row, so a person decides now; Approve shows the output.`);
         } else {
           result.sentBack = true;
           this.save(run, { hooks: result });
           job.hookState = result;
           try {
-            if (!this.deps.sendBack(card, error)) this.board.noteCard(cardId, "The pre-push hook refused this attempt at Review. Its output goes to the agent once a run can start.");
+            if (!this.deps.sendBack(card, error)) this.board.noteCard(cardId, `${name} refused this attempt at Review. Its output goes to the agent once a run can start.`);
           } catch (sendError) {
-            this.board.noteCard(cardId, `The pre-push hook refused this attempt at Review, and Bakery could not send it back to the agent: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
+            this.board.noteCard(cardId, `${name} refused this attempt at Review, and Bakery could not send it back to the agent: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
           }
           return;
         }

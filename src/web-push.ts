@@ -42,10 +42,14 @@ export async function enablePush(): Promise<void> {
   await navigator.serviceWorker.ready;
   const subscription =
     (await registration.pushManager.getSubscription()) ??
-    (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: base64UrlToBytes(publicKey),
-    }));
+    (await registration.pushManager
+      .subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: base64UrlToBytes(publicKey),
+      })
+      .catch((error: unknown) => {
+        throw pushServiceError(error);
+      }));
   await api("/push/subscriptions", {
     method: "POST",
     body: JSON.stringify(subscription.toJSON()),
@@ -60,6 +64,19 @@ export async function disablePush(): Promise<void> {
     body: JSON.stringify({ endpoint: subscription.endpoint }),
   });
   await subscription.unsubscribe();
+}
+
+/**
+ * Chromium browsers subscribe through Google's push service. Brave turns that off by default, and builds without
+ * Google services (ungoogled-chromium) have none, so `subscribe` fails with "push service error".
+ */
+function pushServiceError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/push service/i.test(message))
+    return error instanceof Error ? error : new Error(message);
+  return new Error(
+    `This browser could not reach its push service (${message}). In Brave, turn on Settings → Privacy and security → Use Google services for push messaging, then try again. Chromium builds without Google services cannot receive push notifications; use Chrome, Edge, Firefox or Safari.`,
+  );
 }
 
 function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {

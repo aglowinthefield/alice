@@ -434,6 +434,16 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=mochi BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Like the desktop and iOS apps, an address without a scheme tries HTTPS, then HTTP, and one without a port uses 4317. Repository paths and merges are on the server's disk.
 
+### HTTPS on a tailnet
+
+Browsers only allow notifications, service workers and installing the page as an app on HTTPS or localhost, so a server reached at `http://<tailnet IP>:4317` can't use them. `tailscale serve` adds HTTPS with the tailnet's own certificate, reachable only from the tailnet:
+
+```sh
+tailscale serve --bg --https=443 http://<tailnet IP>:4317
+```
+
+Then open `https://<machine>.<tailnet>.ts.net`. Add that name to `BAKERY_ALLOWED_HOSTS`; Bakery accepts HTTPS origins for allowed hosts, so nothing else changes. Serve on a port Bakery isn't using: when `BAKERY_HOST` is the tailnet IP, `--https=4317` collides with Bakery's own listener on that IP and the TLS handshake fails. `tailscale serve status` lists what is served, and `tailscale serve --https=443 off` removes it. The plain HTTP address keeps working for the CLI and the apps.
+
 **Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u bakery`.
 
 ### Keeping a hosted server up to date

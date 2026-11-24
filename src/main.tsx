@@ -901,7 +901,6 @@ export function App() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, []);
-  const seenStatuses = useRef(new Map<string, Map<string, CountKey>>());
   const [selected, setSelected] = useState<string | null>(null);
   // The card this tab had open before a reload; reopened once the first poll finds it.
   const restoreCard = useRef(
@@ -1109,46 +1108,6 @@ export function App() {
     restoreCard.current = null;
     setSelected(null);
   };
-  // Notify once per card as it starts needing your review, comparing against the last poll of the same scope.
-  // Review cards an agent, CI or GitHub still has are tracked as `reviewWaiting`, so the notice waits for them.
-  const notifyNewReviews = (scope: string, next: Card[]) => {
-    const previous = seenStatuses.current.get(scope);
-    seenStatuses.current.set(
-      scope,
-      new Map(next.map((card) => [card.id, countKey(card)])),
-    );
-    if (
-      !previous ||
-      !settings?.notifyOnReview ||
-      !("Notification" in window) ||
-      Notification.permission !== "granted"
-    )
-      return;
-    for (const card of next) {
-      if (
-        countKey(card) !== "review" ||
-        !previous.has(card.id) ||
-        previous.get(card.id) === "review"
-      )
-        continue;
-      try {
-        const notice = new Notification("Card ready for review", {
-          body: card.title,
-          tag: `review-${card.id}`,
-        });
-        notice.onclick = () => {
-          window.focus();
-          if (scope !== "today") openBoard(scope);
-          setSelected(card.id);
-          notice.close();
-        };
-      } catch {
-        setError(
-          "The browser could not show a Review notification. Check its notification settings.",
-        );
-      }
-    }
-  };
   useEffect(() => {
     let current = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -1163,7 +1122,6 @@ export function App() {
             ),
           ]);
           if (!current) return;
-          notifyNewReviews("today", next as Card[]);
           setAllCards(unlessSame(next as Card[]));
           setMergeConflicts(
             unlessSame((conflicts as MergeConflict[][]).flat()),
@@ -1179,7 +1137,6 @@ export function App() {
           api<Board[]>("/boards"),
         ]);
         if (!current) return;
-        notifyNewReviews(boardId, next);
         setCards(unlessSame(next));
         setLoadedBoard(boardId);
         setMergeConflicts(unlessSame(conflicts));
@@ -1196,7 +1153,7 @@ export function App() {
       current = false;
       clearTimeout(timer);
     };
-  }, [view, boardId, refreshKey, settings?.notifyOnReview]);
+  }, [view, boardId, refreshKey]);
   // Opening the Kanban view marks the board's new cards seen and highlights just those cards for this visit. Only
   // cards this screen has loaded are acknowledged, so a card that appears later stays new until a later pass. The
   // request belongs to the visit (view + board), not to the count that triggered it: a poll that already reads zero

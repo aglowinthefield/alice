@@ -4,6 +4,12 @@ import type { BakerySettings } from "./model.js";
 import { settingsSections, type SettingsSection } from "./route.js";
 import { themeFamilies, themeModes, themeParts } from "./themes.js";
 import { UpdatesPanel } from "./update-notice.js";
+import {
+  currentSubscription,
+  disablePush,
+  enablePush,
+  pushSupported,
+} from "./web-push.js";
 
 const titles: Record<SettingsSection, { label: string; blurb: string }> = {
   general: {
@@ -102,42 +108,7 @@ export function SettingsPage({
                     </span>
                   </span>
                 </label>
-                <label className="mt-6 flex items-start gap-3 border-t border-border pt-5 text-sm">
-                  <input
-                    type="checkbox"
-                    className="mt-1 accent-primary"
-                    checked={settings?.notifyOnReview ?? false}
-                    disabled={!settings || busy || !("Notification" in window)}
-                    onChange={async (event) => {
-                      if (!event.target.checked) {
-                        saveSettings({ notifyOnReview: false });
-                        return;
-                      }
-                      try {
-                        const permission =
-                          await Notification.requestPermission();
-                        if (permission === "granted")
-                          saveSettings({ notifyOnReview: true });
-                        else
-                          setError(
-                            "Browser notification permission was not granted. Allow notifications for Bakery in your browser to enable them.",
-                          );
-                      } catch {
-                        setError(
-                          "The browser could not request notification permission.",
-                        );
-                      }
-                    }}
-                  />
-                  <span>
-                    Notify when a card enters Review
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      Browser notifications appear while this board page is
-                      open. Your browser must allow notifications. Cards already
-                      in Review when you open the page do not trigger one.
-                    </span>
-                  </span>
-                </label>
+                <PushNotificationsField onError={setError} />
                 <DiscordWebhookField
                   key={settings?.discordWebhookUrl ?? ""}
                   value={settings?.discordWebhookUrl ?? ""}
@@ -421,6 +392,57 @@ function DiscordWebhookField({
       <span className="mt-1 block text-xs text-muted-foreground">
         Bakery posts to this channel when a run finishes. Leave empty to turn it
         off (BAKERY_DISCORD_WEBHOOK_URL is used if set).
+      </span>
+    </label>
+  );
+}
+
+/** Web Push for this browser: a notification when a card becomes your turn or fails, with or without a Bakery tab open. */
+function PushNotificationsField({
+  onError,
+}: {
+  onError: (message: string) => void;
+}) {
+  const supported = pushSupported();
+  const [enabled, setEnabled] = useState<boolean | null>(
+    supported ? null : false,
+  );
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!supported) return;
+    void currentSubscription()
+      .then((subscription) => setEnabled(!!subscription))
+      .catch(() => setEnabled(false));
+  }, [supported]);
+  const toggle = async (on: boolean) => {
+    setBusy(true);
+    try {
+      if (on) await enablePush();
+      else await disablePush();
+      setEnabled(on);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <label className="mt-6 flex items-start gap-3 border-t border-border pt-5 text-sm">
+      <input
+        type="checkbox"
+        className="mt-1 accent-primary"
+        data-testid="push-notifications"
+        checked={enabled ?? false}
+        disabled={!supported || enabled === null || busy}
+        onChange={(event) => void toggle(event.target.checked)}
+      />
+      <span>
+        Notify this browser when a card needs you
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {supported
+            ? "When a card becomes your turn in Review or fails, even with no Bakery tab open. Clicking one opens the card. Each browser turns this on separately."
+            : "Notifications need Bakery on HTTPS or localhost. See \u201cHTTPS on a tailnet\u201d in docs/reference.md."}
+        </span>
       </span>
     </label>
   );

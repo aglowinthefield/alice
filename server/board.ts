@@ -1477,7 +1477,7 @@ export class Board {
     const ids = this.db.prepare(`SELECT cards.id FROM cards JOIN runs ON runs.cardId=cards.id
       WHERE cards.status IN ('review', 'failed') AND runs.attempt=(SELECT MAX(attempt) FROM runs WHERE cardId=cards.id)
         AND runs.worktree IS NOT NULL AND NOT EXISTS (SELECT 1 FROM approvals WHERE cardId=cards.id AND merged=0)
-        AND NOT EXISTS (SELECT 1 FROM boards WHERE boards.repo=cards.repo AND boards.integration='github-pr')
+        AND NOT EXISTS (SELECT 1 FROM boards WHERE boards.repo=cards.repo AND (boards.integration='github-pr' OR boards.archived=1))
       ORDER BY cards.updatedAt`).all() as { id: string }[];
     return ids.map(({ id }) => ({ card: this.getCard(id)!, run: this.listRuns(id)[0] }));
   }

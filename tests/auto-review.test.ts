@@ -425,6 +425,33 @@ test("changing the work during verification blocks auto-merge and restarting doe
   } finally { item.close(); }
 });
 
+test("main moving during verification is not the work changing: the review carries on and merges", async () => {
+  const item = fixture();
+  try {
+    // The verification command stands in for another card merging (or an update fast-forwarding main) meanwhile.
+    // It commits once, on the first run; approval runs it again on the merged result.
+    const mainMoves = `test -e "${item.repo}/other.txt" || { printf other > "${item.repo}/other.txt" && git -C "${item.repo}" add other.txt && git -C "${item.repo}" -c user.name=Test -c user.email=test@example.invalid commit -qm "another card"; }`;
+    item.board.setAutoReview(item.repoBoard.id, true, mainMoves);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "merged", item.board.getAutoReviewJob(current.run.id)?.details);
+    assert.equal(item.board.getCard(current.card.id)?.status, "done");
+    assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
+    assert.equal(readFileSync(join(item.repo, "other.txt"), "utf8"), "other");
+  } finally { item.close(); }
+});
+
+test("an archived board's cards are not reconciled, so a deleted scratch repository logs nothing", () => {
+  const item = fixture();
+  try {
+    const current = item.reviewedCard();
+    assert.deepEqual(item.board.listExternalMergeCandidates().map(entry => entry.card.id), [current.card.id]);
+    item.board.archiveBoard(item.repoBoard.id);
+    assert.deepEqual(item.board.listExternalMergeCandidates(), []);
+  } finally { item.close(); }
+});
+
 test("the agent reviewer uses the repository's review model before the prompt", async () => {
   const item = fixture();
   try {

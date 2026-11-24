@@ -24,7 +24,8 @@ function gitCommand(repo: string, args: string[], index?: string, raw = false, m
 }
 function git(repo: string, ...args: string[]): string { return gitCommand(repo, args); }
 /** What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies. */
-export type ReviewSummary = { fingerprint: string; paths: string[]; patchChars: number | null; unsupported: boolean };
+/** `work` names the reviewed run and its tree. Unlike `fingerprint`, it ignores where local main is. */
+export type ReviewSummary = { fingerprint: string; work: string; paths: string[]; patchChars: number | null; unsupported: boolean };
 export type ReviewDiff = { fingerprint: string; files: { path: string; patch: string }[] };
 export class IntegrationConflictError extends Error {
   readonly code = "merge_conflict";
@@ -286,7 +287,8 @@ export class Integration {
       gitCommand(worktree, ["add", "-A"], index);
       const tree = gitCommand(worktree, ["write-tree"], index);
       const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, base, tree })).digest("hex");
-      if (!includeFiles && !summary) return { fingerprint, tree, main, files: [] as ReviewDiff["files"], paths: [] as string[], patchChars: null as number | null, unsupported: false };
+      const work = `${run.id}:${tree}`;
+      if (!includeFiles && !summary) return { fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths: [] as string[], patchChars: null as number | null, unsupported: false };
       const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
       if (summary) {
         let patchChars: number | null = null;
@@ -298,7 +300,7 @@ export class Integration {
         // Binary files, symlinks and submodules need a person; modes and numstat show them without reading patches.
         const raw = paths.length ? gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--raw", "--numstat", "--no-color", base, tree], undefined, true, 64 * 1024 * 1024) : "";
         const unsupported = /^:(120000|160000) |^:\d+ (120000|160000) |^-\t-\t/m.test(raw);
-        return { fingerprint, tree, main, files: [] as ReviewDiff["files"], paths, patchChars, unsupported };
+        return { fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths, patchChars, unsupported };
       }
       if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Bakery");
       // One diff for every file, split at each header, instead of one git process per file. Git lists files
@@ -307,7 +309,7 @@ export class Integration {
       const patches = gitCommand(worktree, diffArgs, undefined, true).split(/^(?=diff --git )/m).filter(Boolean);
       const files = paths.map((path, i) => ({ path, patch: patches.length === paths.length ? patches[i].trim() : gitCommand(worktree, [...diffArgs, "--", path]) }));
       if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Bakery");
-      return { fingerprint, tree, main, files, paths, patchChars: null as number | null, unsupported: false };
+      return { fingerprint, work, tree, main, files, paths, patchChars: null as number | null, unsupported: false };
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }
 
@@ -334,10 +336,16 @@ export class Integration {
   // Cheap staleness check: the fingerprint alone, without building any patches.
   reviewFingerprint(card: Card): string { return this.snapshot(card, false).fingerprint; }
 
+  /** The fingerprint and the work it covers (run and tree), from one snapshot. */
+  reviewState(card: Card): { fingerprint: string; work: string } {
+    const { fingerprint, work } = this.snapshot(card, false);
+    return { fingerprint, work };
+  }
+
   /** Changed paths, and the patch size when `measureChars`, without the diff viewer's 200-file and 2 MB caps. */
   reviewSummary(card: Card, measureChars: boolean): ReviewSummary {
-    const { fingerprint, paths, patchChars, unsupported } = this.snapshot(card, false, { measureChars });
-    return { fingerprint, paths, patchChars, unsupported };
+    const { fingerprint, work, paths, patchChars, unsupported } = this.snapshot(card, false, { measureChars });
+    return { fingerprint, work, paths, patchChars, unsupported };
   }
 
   /** Notes how many files the card's reviewed run changes, so Review tiles can say Approve or Accept findings. Best effort. */

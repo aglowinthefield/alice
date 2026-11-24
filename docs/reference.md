@@ -361,6 +361,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `sentinels` lists the board's sentinels with their state, next run and latest run; `sentinel-pause`, `sentinel-resume` and `sentinel-run` take a sentinel ID (see Sentinels).
 - `stats` prints the board's card count in each lane and its pickup state.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
+- `open [CARD_ID]` opens the board, or one card, in your browser (`$BROWSER`, else the system opener) and prints the URL. A card ID may be the 8-character prefix. `--print` only prints it, and so does a shell with no display.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
 - `board [--integration local|github-pr]` shows the board and switches its integration mode. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).

@@ -9,7 +9,7 @@ import { doctor, report } from "./doctor.mjs";
 import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
 import { c, columns, layout, paint, pretty } from "./cli-style.mjs";
 import { renderBoard } from "./cli-board.mjs";
-import { runTui } from "./cli-tui.mjs";
+import { openUrl, runTui } from "./cli-tui.mjs";
 import { formatVersion, readVersion } from "./version.mjs";
 
 
@@ -20,7 +20,7 @@ function options(argv) {
   const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch") result[arg.slice(2)] = true;
+    if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch" || arg === "--print") result[arg.slice(2)] = true;
     else if (arg === "--help" || arg === "-h") result.help = true;
     else if (arg === "--version" || arg === "-v") result.version = true;
     else if (arg.startsWith("--") && lists.has(arg.slice(2))) {
@@ -188,11 +188,11 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { doctor: 0, open: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
-  if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
+  if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
-  if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
+  if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
@@ -206,6 +206,7 @@ async function main() {
   if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (command === "attach") cardId(args[0]);
   if ((opts.all || opts.watch) && command !== "cards") throw new Error("--all and --watch are only valid with cards");
+  if (opts.print && command !== "open") throw new Error("--print is only valid with open");
   if (command === "tui" && (opts.json || !process.stdout.isTTY || !process.stdin.isTTY)) throw new Error("tui needs a terminal and no --json; use cards for a pipe");
   if (opts.watch && (opts.json || !process.stdout.isTTY)) throw new Error("--watch needs a terminal and no --json");
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
@@ -243,6 +244,25 @@ async function main() {
   if (command === "boards") {
     if (opts.board) throw new Error("--board is not valid with boards");
     print(boards, opts.json, boards.map(item => `${item.id}\t${item.repo}\tpickup:${item.autoPickupEnabled ? "on" : "off"}\treview:${item.autoReviewEnabled ? "on" : "off"}${item.autoPickupError ? `\tpaused:${item.autoPickupError}` : ""}`));
+    return;
+  }
+  if (command === "open") {
+    if (args.length) cardId(args[0]);
+    // With no card and no board to pick, open Bakery's home page rather than failing.
+    const target = !args.length && !opts.board && boards.length > 1 && !boards.some(item => process.cwd() === item.repo || process.cwd().startsWith(item.repo + sep)) ? null : selectBoard(boards, opts.board);
+    let route = "/";
+    if (target) {
+      route = `/board/${encodeURIComponent(target.id)}`;
+      if (args.length) {
+        // The CLI prints 8-character ids, so a unique prefix is enough.
+        const found = (await request(origin, `/api/boards/${encodeURIComponent(target.id)}/cards`)).filter(item => item.id === args[0] || item.id.startsWith(args[0]));
+        if (found.length !== 1) throw new Error(found.length ? `More than one card starts with ${args[0]}; give more of the ID` : `Card not found on this board: ${args[0]}`);
+        route += `/card/${encodeURIComponent(found[0].id)}`;
+      }
+    }
+    const url = new URL(route, origin).href;
+    const opened = !opts.print && openUrl(url);
+    print({ url, opened }, opts.json, [opened || opts.print ? url : `${url}\t(no browser here; open it yourself)`]);
     return;
   }
   const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -192,6 +192,34 @@ test("pickup enable needs consent; disable and concurrency changes use settings 
       { autoPickupEnabled: false, pickupConcurrency: 2, pickupDailyLimit: 6 },
     ]);
   } finally { await f.close(); }
+});
+
+test("open prints and opens the board or a card by its short ID, through $BROWSER", async () => {
+  const f = await fixture();
+  const dir = mkdtempSync(join(tmpdir(), "bakery-open-")), log = join(dir, "opened.txt"), browser = join(dir, "browser");
+  writeFileSync(browser, `#!/bin/sh\nprintf '%s\\n' "$1" >> '${log}'\n`); chmodSync(browser, 0o755);
+  const saved = process.env.BROWSER;
+  process.env.BROWSER = browser;
+  try {
+    const boardOnly = await f.run("open");
+    assert.equal(boardOnly.code, 0, boardOnly.stderr);
+    assert.match(boardOnly.stdout, /\/board\/board-one\n$/);
+    const card = await f.run("open", "card-on");
+    assert.equal(card.code, 0, card.stderr);
+    assert.match(card.stdout, /\/board\/board-one\/card\/card-one\n$/);
+    assert.match((await f.run("open", "card-")).stderr, /More than one card starts with card-/);
+    assert.match((await f.run("open", "nope")).stderr, /Card not found on this board: nope/);
+    const printed = await f.run("open", "card-one", "--print");
+    assert.match(printed.stdout, /\/board\/board-one\/card\/card-one\n$/);
+    assert.notEqual((await f.run("cards", "--print")).code, 0, "--print only goes with open");
+    // The browser runs detached; wait for both opens to land.
+    for (let i = 0; i < 50 && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n").map(url => new URL(url).pathname), ["/board/board-one", "/board/board-one/card/card-one"]);
+  } finally {
+    if (saved === undefined) delete process.env.BROWSER; else process.env.BROWSER = saved;
+    rmSync(dir, { recursive: true, force: true });
+    await f.close();
+  }
 });
 
 test("board shows the auto-review state, and the removed --merge-limit is refused", async () => {

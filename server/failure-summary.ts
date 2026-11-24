@@ -28,6 +28,7 @@ export function summarizeFailure(input: { error: string | null; failureKind: str
   if (/termination source unknown/.test(error)) return "Killed by unknown signal";
   if (error.startsWith("Worktrunk pre-start hooks")) return "Worktree setup failed";
   if (error.startsWith("Pi could not start")) return "Pi could not start";
+  if (error.startsWith("Rebase onto origin/main conflicted")) return "Rebase conflict";
   if (/Provider request failed/.test(error)) return "Provider request failed";
   if (/Invalid Pi event stream/.test(error)) return "Garbled Pi output";
   const exit = error.match(/^Pi exited \((\w+)\)/);

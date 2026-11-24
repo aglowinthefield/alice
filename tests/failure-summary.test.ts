@@ -20,6 +20,7 @@ test("a failed run's error reads as a few words on why it failed", () => {
     ["Pi exited (0); settled; Provider request failed; stderr logged on server", "unknown", "Provider request failed"],
     ["Pi exited (0); settled; Provider request failed; stderr logged on server", null, "Provider request failed"],
     ["Pi could not start: spawn pi ENOENT", null, "Pi could not start"],
+    ["Rebase onto origin/main conflicted in apps/web/gates.ts; the card branch is unchanged.", null, "Rebase conflict"],
     ["Worktrunk pre-start hooks failed: npm ci exited 1", null, "Worktree setup failed"],
     ["Pi exited (1); no settlement event", null, "Pi crashed (exit 1)"],
     ["Pi exited (0); no settlement event", null, "Pi ended without finishing"],

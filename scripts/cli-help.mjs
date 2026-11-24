@@ -24,8 +24,10 @@ export const COMMANDS = [
     examples: [["bakery-cli create --title 'Add the API' --key gh-42/t1", ""], ["bakery-cli create --title 'Use the API' --after CARD_ID", "start only after CARD_ID is done"]],
   },
   {
-    name: "cards", group: "Cards", summary: "list the board's cards",
-    full: "[--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
+    name: "cards", group: "Cards", summary: "the board's lanes and cards",
+    full: "[--board ID|PATH] [--all] [--watch] [--json]",
+    options: [BOARD, ["--all", "include Archive and every Done card"], ["--watch", "redraw every 2 seconds until Ctrl-C (terminal only)"], JSON_OUT],
+    details: "On a terminal, cards print in the board's lanes with its badges. Piped, each card is one tab-separated line.",
   },
   {
     name: "show", group: "Cards", args: "CARD_ID", summary: "a card with its dependencies, attempts and review",

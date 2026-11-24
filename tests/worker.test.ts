@@ -360,6 +360,35 @@ test("Pi termination distinguishes Bakery stop and shutdown from an unexplained 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a killed run's error names the tool call it was stuck in", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const event = { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "timeout 1800 sh -c 'until ! pgrep -f verify; do sleep 5; done'" } };
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(event).replace(/'/g, "'\\''")}'\nexec sleep 30\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Stuck", body: "", repo });
+    board.setStatus(card.id, "ready");
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => worker.withLive([board.getCard(card.id)!])[0].live?.tool === "bash");
+    worker.stop(run.id);
+    await waitFor(() => board.getRun(run.id)?.status === "failed");
+    assert.match(board.getRun(run.id)!.error!, /Bakery sent SIGTERM: manual stop; stuck in bash for 0 min: timeout 1800 sh -c 'until ! pgrep -f verify; do sleep 5; done'; no settlement event/);
+
+    writeFileSync(fakePi, "#!/bin/sh\nexec sleep 30\n");
+    const idle = worker.start(board.getCard(card.id)!);
+    worker.stop(idle.id);
+    await waitFor(() => board.getRun(idle.id)?.status === "failed");
+    assert.match(board.getRun(idle.id)!.error!, /manual stop; no tool was running;/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("an agent run is terminated after 60 minutes, not earlier", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");

@@ -124,6 +124,12 @@ export type PullRequestDraft = {
   problem: string;
   templatePath: string | null;
   semantic: SemanticTitleRules | null;
+  /** The repository's hooks on this run's work, checked when it reached Review; null when they were not. */
+  hooks?: {
+    state: "queued" | "running" | "passed" | "failed" | "unchecked";
+    candidate: string | null;
+    detail: string;
+  } | null;
 };
 export type ReviewDiff = {
   cardId: string;

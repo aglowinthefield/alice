@@ -2771,12 +2771,12 @@ export function App() {
                           </div>
                         </div>
                       )}
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         {laneCards.map((item) => {
                           const activity = cardActivity(item);
                           const content = (
                             <>
-                              <div className="flex items-start justify-between gap-2 empty:hidden [&:has(>span:empty)]:hidden mb-2">
+                              <div className="flex items-start justify-between gap-2 empty:hidden [&:has(>span:empty)]:hidden mb-1.5">
                                 <span className="flex flex-wrap items-center gap-1.5">
                                   {item.blocked && (
                                     <WaitingBadge
@@ -2813,7 +2813,7 @@ export function App() {
                                     <span
                                       data-testid="auto-retry"
                                       title="Automatic pickup retries a run that failed on a temporary provider or network error, at most 3 times"
-                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-500"
+                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-amber-500"
                                     >
                                       <RotateCcw size={10} aria-hidden />
                                       Retry {item.autoRetries}/3
@@ -2826,7 +2826,7 @@ export function App() {
                                     <span
                                       data-testid="attempt-count"
                                       title={reworkSummary(item)}
-                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-500"
+                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-amber-500"
                                     >
                                       <RotateCcw size={10} aria-hidden />
                                       {item.attempts} attempts
@@ -2834,7 +2834,7 @@ export function App() {
                                   )}
                                 </span>
                               </div>
-                              <div className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
+                              <div className="line-clamp-2 text-[13px] font-medium leading-[1.3] text-foreground">
                                 {item.title}
                               </div>
                               {(() => {
@@ -2853,7 +2853,7 @@ export function App() {
                                 )
                                   return null;
                                 return (
-                                  <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                                  <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
                                     {body}
                                   </p>
                                 );
@@ -2864,7 +2864,7 @@ export function App() {
                                 <div className="mt-2 flex flex-wrap gap-1">
                                   {item.planOnly && (
                                     <span
-                                      className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+                                      className="rounded border border-border px-1.5 py-px text-[11px] leading-4 font-medium text-muted-foreground"
                                       title="This run produced a plan, not code"
                                     >
                                       Plan
@@ -2886,9 +2886,9 @@ export function App() {
                                     )}
                                 </div>
                               )}
-                              <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-muted-foreground">
+                              <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] tabular-nums text-muted-foreground">
                                 <span className="flex min-w-0 items-center gap-1 truncate">
-                                  <GitBranch size={11} className="shrink-0" />{" "}
+                                  <GitBranch size={10} className="shrink-0" />{" "}
                                   {repoName(item.repo)}
                                 </span>
                                 <span
@@ -2899,7 +2899,7 @@ export function App() {
                                       : "Completed Pi turns across all attempts"
                                   }
                                 >
-                                  <Clock3 size={11} />{" "}
+                                  <Clock3 size={10} />{" "}
                                   {item.turnsIncomplete
                                     ? item.turns
                                       ? `~${item.turns}`
@@ -2918,7 +2918,7 @@ export function App() {
                             </>
                           );
                           const cardClass =
-                            "group block w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+                            "group block w-full rounded-lg border bg-card px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
                           if (selecting) {
                             const checked = laneSelection.has(item.id);
                             return (
@@ -2928,7 +2928,7 @@ export function App() {
                               >
                                 <input
                                   type="checkbox"
-                                  className="absolute top-3 right-3 size-4 accent-primary"
+                                  className="absolute top-2 right-3 size-4 accent-primary"
                                   aria-label={`Select ${item.title}`}
                                   checked={checked}
                                   onChange={() => toggleLaneSelection(item.id)}
@@ -2985,7 +2985,7 @@ export function App() {
                               className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50 data-[new]:border-primary data-[new]:ring-2 data-[new]:ring-primary/60`}
                             >
                               {newCardIds.has(item.id) && (
-                                <span className="mb-1 inline-block rounded-sm bg-primary px-2 py-px text-[10px] font-semibold uppercase tracking-[.1em] text-primary-foreground">
+                                <span className="mb-1 inline-block rounded-sm bg-primary px-1.5 py-px text-[11px] leading-4 font-semibold text-primary-foreground">
                                   New
                                 </span>
                               )}
@@ -4186,7 +4186,7 @@ function PullRequestBadge({
       ]
         .filter(Boolean)
         .join(" \u00b7 ")}
-      className={`rounded border px-2 py-0.5 font-mono text-[10px] font-medium ${tone}`}
+      className={`rounded border px-1.5 py-px font-mono text-[11px] leading-4 font-medium ${tone}`}
     >
       PR #{card.prNumber}
       {card.prChecks && card.prState === "OPEN"
@@ -4204,7 +4204,7 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
           ? "The merge commit is on origin/main, as of the last fetch"
           : "Merged into local main only; origin/main did not have it at the last fetch. Push main to publish it"
       }
-      className={`rounded border px-2 py-0.5 text-[10px] font-medium ${
+      className={`rounded border px-1.5 py-px text-[11px] leading-4 font-medium ${
         state === "pushed"
           ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
           : "border-amber-500/40 bg-amber-500/10 text-amber-500"
@@ -4226,7 +4226,7 @@ function ActivityBadge({
     return (
       <span
         data-testid="activity-badge"
-        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+        className="flex items-center gap-1 rounded border border-border px-1.5 py-px text-[11px] leading-4 font-medium text-muted-foreground"
       >
         <CirclePause size={10} aria-hidden />
         Interrupted
@@ -4236,7 +4236,7 @@ function ActivityBadge({
     return (
       <span
         data-testid="activity-badge"
-        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+        className="flex items-center gap-1 rounded border border-border px-1.5 py-px text-[11px] leading-4 font-medium text-muted-foreground"
       >
         {activity === "working" ? (
           <LoaderCircle size={10} className="animate-spin" aria-hidden />
@@ -4257,7 +4257,7 @@ function ActivityBadge({
               ? "The run's changes are ready for you to review and approve"
               : "Ready for your review"
         }
-        className="flex items-center gap-1 rounded border border-status-review bg-status-review px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] text-background"
+        className="flex items-center gap-1 rounded border border-status-review bg-status-review px-1.5 py-px text-[11px] leading-4 font-semibold text-background"
       >
         <Eye size={10} aria-hidden />
         {reviewActionText(card) || "Your turn"}
@@ -4271,7 +4271,7 @@ function ActivityBadge({
     <span
       data-testid="activity-badge"
       title="The agent has reported nothing for a while. A long command can be quiet; check the attempt log if it stays quiet."
-      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500"
+      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium text-amber-500"
     >
       <CirclePause size={10} aria-hidden />
       Quiet {minutes}m
@@ -4284,7 +4284,7 @@ function WaitingBadge({ waiting }: { waiting: Card[] }) {
     <span
       data-testid="waiting-badge"
       title={`Starts after ${waiting.map((item) => item.title).join(", ")} ${waiting.length === 1 ? "is" : "are"} Done`}
-      className="rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[.1em] text-sky-500"
+      className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-px text-[11px] leading-4 font-medium text-sky-500"
     >
       Waiting on {waiting.length}
     </span>

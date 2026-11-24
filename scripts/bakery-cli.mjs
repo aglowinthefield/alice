@@ -9,6 +9,7 @@ import { doctor, report } from "./doctor.mjs";
 import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
 import { c, columns, layout, paint, pretty } from "./cli-style.mjs";
 import { renderBoard } from "./cli-board.mjs";
+import { runTui } from "./cli-tui.mjs";
 import { formatVersion, readVersion } from "./version.mjs";
 
 
@@ -187,7 +188,7 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
   if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
@@ -207,6 +208,7 @@ async function main() {
   if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (command === "attach") cardId(args[0]);
   if ((opts.all || opts.watch) && command !== "cards") throw new Error("--all and --watch are only valid with cards");
+  if (command === "tui" && (opts.json || !process.stdout.isTTY || !process.stdin.isTTY)) throw new Error("tui needs a terminal and no --json; use cards for a pipe");
   if (opts.watch && (opts.json || !process.stdout.isTTY)) throw new Error("--watch needs a terminal and no --json");
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
   if (opts.on.length && command !== "depend" && command !== "undepend") throw new Error("--on is only valid with depend or undepend");
@@ -247,6 +249,13 @@ async function main() {
   }
   const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
   const path = `/api/boards/${encodeURIComponent(board.id)}`;
+  if (command === "tui") {
+    return runTui({
+      api: (method, route, input) => request(origin, route, method, input, 30_000),
+      board, title: board.repo.replace(homedir(), "~"),
+      webUrl: id => new URL(`/board/${encodeURIComponent(board.id)}/card/${encodeURIComponent(id)}`, origin).href,
+    });
+  }
   if (command === "cards") {
     const draw = cards => renderBoard(cards, { width: columns(), all: opts.all, title: board.repo.replace(homedir(), "~") });
     if (opts.watch) return watch(() => request(origin, `${path}/cards`).then(draw));

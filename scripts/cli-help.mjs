@@ -30,6 +30,11 @@ export const COMMANDS = [
     details: "On a terminal, cards print in the board's lanes with its badges. Piped, each card is one tab-separated line.",
   },
   {
+    name: "tui", group: "Cards", summary: "the board in the terminal, driven by keys",
+    full: "[--board ID|PATH]", options: [BOARD],
+    details: "Arrow keys or j/k move between cards, enter opens one, o opens it in the browser and ? lists every key. s starts a run, x stops one, a approves, r and t move between Ready and Triage. Paid runs and merges ask first. Refreshes every 2 seconds; q quits.",
+  },
+  {
     name: "show", group: "Cards", args: "CARD_ID", summary: "a card with its dependencies, attempts and review",
     full: "CARD_ID [--board ID|PATH] [--json]",
     details: "Prints the card with its dependencies, dependents, attempts and latest auto-review.",

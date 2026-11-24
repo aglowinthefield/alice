@@ -38,27 +38,32 @@ export function badges(card, cards, now = Date.now()) {
   return out;
 }
 
-/** Lines for the whole board: a count per lane, then each lane with cards. Archive and old Done cards need `all`. */
-export function renderBoard(cards, { width = 80, now = Date.now(), all = false, title = "" } = {}) {
+/**
+ * The whole board as rows: a count per lane, then each lane with cards. A card's row carries the card, so a TUI can
+ * select it. Archive and old Done cards need `all`.
+ */
+export function boardRows(cards, { width = 80, now = Date.now(), all = false, title = "" } = {}) {
   const groups = lanes.map(lane => ({ ...lane, cards: cards.filter(card => card.status === lane.status || lane.also?.includes(card.status)) }));
-  const lines = [];
+  const rows = [];
   const tally = groups.filter(lane => all || lane.status !== "archived").map(lane => `${lane.color(lane.label)} ${lane.cards.length}`);
   const wide = tally.join(c.dim("  ·  "));
-  const counts = visible(wide).length <= width ? wide : tally.join("  ");
-  if (title) lines.push(c.bold(title));
-  lines.push(counts, "");
+  if (title) rows.push({ text: c.bold(title) });
+  rows.push({ text: visible(wide).length <= width ? wide : tally.join("  ") }, { text: "" });
   for (const lane of groups) {
     if (!lane.cards.length || (lane.status === "archived" && !all)) continue;
     let shown = lane.cards;
     if (lane.status === "done" && !all) shown = [...lane.cards].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")).slice(0, doneShown);
-    lines.push(`${lane.color("▍")}${c.bold(lane.color(lane.label))} ${c.dim(String(lane.cards.length))}`);
+    rows.push({ text: `${lane.color("▍")}${c.bold(lane.color(lane.label))} ${c.dim(String(lane.cards.length))}`, lane: lane.status });
     for (const card of shown) {
       const tags = badges(card, cards, now).join(c.dim(" · "));
       const room = Math.max(20, width - 14 - visible(tags).length);
-      lines.push(`  ${c.dim(card.id.slice(0, 8))}  ${clip(card.title.replace(/\s+/g, " "), room)}${tags ? `  ${tags}` : ""}`);
+      rows.push({ text: `  ${c.dim(card.id.slice(0, 8))}  ${clip(card.title.replace(/\s+/g, " "), room)}${tags ? `  ${tags}` : ""}`, card, lane: lane.status });
     }
-    if (shown.length < lane.cards.length) lines.push(c.dim(`  … ${lane.cards.length - shown.length} more (--all)`));
-    lines.push("");
+    if (shown.length < lane.cards.length) rows.push({ text: c.dim(`  … ${lane.cards.length - shown.length} more (--all)`) });
+    rows.push({ text: "" });
   }
-  return lines;
+  return rows;
 }
+
+/** {@link boardRows} as plain lines, for `cards` on a terminal. */
+export const renderBoard = (cards, options) => boardRows(cards, options).map(row => row.text);

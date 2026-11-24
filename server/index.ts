@@ -874,7 +874,7 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
 // Set once the dev supervisor asks for a drain. /api/status reports it so the UI can say a restart is coming.
 const draining = { on: false };
 let shuttingDown = false;
-const shutdown = (signal: "SIGINT" | "SIGTERM") => {
+const shutdown = (signal: "SIGINT" | "SIGTERM" | "SIGBREAK" | "SIGHUP") => {
   // A second signal (systemctl restart after an update already began shutdown) must not close the database twice.
   if (shuttingDown) return;
   shuttingDown = true;
@@ -902,3 +902,6 @@ process.on("message", (message: unknown) => {
 // the server with whatever is on disk. scripts/update.sh sends it after pulling.
 process.on("SIGUSR2", () => { console.log("Update requested: draining active runs, then exiting."); startDrain(() => shutdown("SIGTERM")); });
 process.once("SIGINT", () => shutdown("SIGINT")); process.once("SIGTERM", () => shutdown("SIGTERM"));
+// Windows never delivers SIGTERM. Ctrl+Break arrives as SIGBREAK and closing the console window as SIGHUP, so those
+// run the same graceful shutdown; a service wrapper can also send the "shutdown" IPC message above.
+if (process.platform === "win32") for (const signal of ["SIGBREAK", "SIGHUP"] as const) process.once(signal, () => shutdown(signal));

@@ -18,7 +18,8 @@ async function freePort(): Promise<number> {
 
 // An open browser tab holds a chat event stream. If shutdown leaves it open, the process never exits, systemd never
 // restarts it, and the tab keeps talking to a server whose database is closed.
-test("SIGTERM exits the server even while a chat event stream is open", { skip: process.platform === "win32" && "Windows cannot deliver SIGTERM; child.kill() ends the process outright" }, async () => {
+// Windows cannot deliver SIGTERM (child.kill() ends the process outright), so there the same shutdown is asked for over IPC.
+test("a shutdown request exits the server even while a chat event stream is open", async () => {
   const home = mkdtempSync(join(tmpdir(), "bakery-shutdown-"));
   const repo = join(home, "code", "alpha"), dataDir = join(home, "data");
   mkdirSync(repo, { recursive: true });
@@ -27,7 +28,7 @@ test("SIGTERM exits the server even while a chat event stream is open", { skip: 
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
     env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_SENTINEL: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
   child.stderr?.on("data", chunk => { output += chunk.toString(); });
@@ -49,10 +50,10 @@ test("SIGTERM exits the server even while a chat event stream is open", { skip: 
     await new Promise<void>(resolve => { stream.on("response", response => { response.resume(); resolve(); }); stream.end(); });
 
     const exited = new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
-    child.kill("SIGTERM");
+    if (process.platform === "win32") child.send({ type: "shutdown" }); else child.kill("SIGTERM");
     const result = await Promise.race([exited, new Promise<"hung">(resolve => setTimeout(() => resolve("hung"), 10_000))]);
     stream.destroy();
-    assert.notEqual(result, "hung", `server did not exit after SIGTERM: ${output}`);
+    assert.notEqual(result, "hung", `server did not exit after the shutdown request: ${output}`);
     assert.equal(result, 0, `server exited with ${result}: ${output}`);
   } finally {
     child.kill("SIGKILL");

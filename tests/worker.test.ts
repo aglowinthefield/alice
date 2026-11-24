@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, chmodSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
-import { PoisonedSessionError, Worker } from "../server/worker.js";
+import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker } from "../server/worker.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
@@ -190,7 +191,7 @@ test("a run Anthropic blocks as output duplication is retried once, without narr
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
     const blocked = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms." } });
     // Records each call's session id and prompt, then fails with the block every time.
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n%s\\n---\\n' "$4" "$6" >> '${calls}'\nprintf '%s\\n' '${blocked.replace(/'/g, "'\\''")}' '{"type":"agent_settled","aborted":false}'\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n%s\\n---\\n' "$4" "$8" >> '${calls}'\nprintf '%s\\n' '${blocked.replace(/'/g, "'\\''")}' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Blocked", body: "", repo });
@@ -224,7 +225,7 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     writeFileSync(join(repo, "README.md"), "fixture\n");
     execFileSync("git", ["-C", repo, "add", "README.md"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"turn_start"}' '{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-5"}}' '{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-5","stopReason":"stop"}}' '{"type":"turn_end"}' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Worked offline."}}' '{"type":"agent_settled","aborted":false}'\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s\\n' '{"type":"turn_start"}' '{"type":"message_start","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-5"}}' '{"type":"message_end","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-4-5","stopReason":"stop"}}' '{"type":"turn_end"}' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Worked offline."}}' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "No network", repo });
@@ -259,7 +260,7 @@ test("the agent reviewer's requested changes still reach the run after a failed 
     writeFileSync(join(repo, "README.md"), "fixture\n");
     execFileSync("git", ["-C", repo, "add", "README.md"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "", repo });
@@ -288,7 +289,7 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
     writeFileSync(join(repo, "README.md"), "initial\n");
     git("add", "README.md");
     git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Resolve safely", body: "Update README", repo });
@@ -308,12 +309,12 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
     assert.equal(board.listRuns(card.id).length, 1);
     assert.equal(board.listMergeFailures(repo).length, 1);
     renameSync(`${first.worktree!}-moved`, first.worktree!);
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nexit 1\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nexit 1\n`);
     const failed = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(failed.id)?.status === "failed");
     assert.match(readFileSync(promptFile, "utf8"), /README\.md/);
     assert.equal(board.listMergeFailures(repo).length, 1);
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
     const retry = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(retry.id)?.status === "review");
     const prompt = readFileSync(promptFile, "utf8");
@@ -421,8 +422,8 @@ test("an agent run is terminated after 60 minutes, not earlier", async (t) => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-async function waitFor(predicate: () => boolean) {
-  const end = Date.now() + 5000;
+async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
+  const end = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > end) throw new Error("Worker did not finish");
     await new Promise(resolve => setTimeout(resolve, 25));
@@ -520,17 +521,17 @@ test("card runs and conflict repairs pass their resolved Pi model and thinking l
     const args = () => readFileSync(argsFile, "utf8").split("\n").slice(0, -1);
     const unset = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(unset.id)?.status === "review");
-    assert.deepEqual(args().slice(0, 5), ["--mode", "json", "--session-id", unset.sessionId, "--"]);
+    assert.deepEqual(args().slice(0, 7), ["--mode", "json", "--session-id", unset.sessionId, "-e", wrapUpExtension, "--"]);
     board.updateSettings({ agentModels: { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, review: { model: "", thinking: "" }, draft: { model: "", thinking: "" } } });
     board.setAgentModels(board.listBoards()[0].id, { conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
     const work = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(work.id)?.status === "review");
-    assert.deepEqual(args().slice(0, 9), ["--mode", "json", "--session-id", work.sessionId, "--model", "anthropic/claude-sonnet-4-5", "--thinking", "medium", "--"]);
+    assert.deepEqual(args().slice(0, 11), ["--mode", "json", "--session-id", work.sessionId, "--model", "anthropic/claude-sonnet-4-5", "--thinking", "medium", "-e", wrapUpExtension, "--"]);
     board.recordMergeFailure(card.id, ["README.md"], "conflict");
     const conflict = worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(conflict.id)?.status === "review");
-    assert.deepEqual(args().slice(0, 9), ["--mode", "json", "--session-id", conflict.sessionId, "--model", "openai-codex/gpt-5.5", "--thinking", "xhigh", "--"]);
-    assert.match(args().slice(9).join("\n"), /merge-conflict repair attempt/);
+    assert.deepEqual(args().slice(0, 11), ["--mode", "json", "--session-id", conflict.sessionId, "--model", "openai-codex/gpt-5.5", "--thinking", "xhigh", "-e", wrapUpExtension, "--"]);
+    assert.match(args().slice(11).join("\n"), /merge-conflict repair attempt/);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -699,7 +700,7 @@ function fakeProviderPi(dir: string, script: string[]) {
   writeFileSync(join(dir, "count"), "0");
   writeFileSync(pi, `#!/bin/sh
 n=$(( $(cat '${dir}/count') + 1 )); printf '%s' "$n" > '${dir}/count'
-printf '%s\\t%s\\n' "$4" "$(printf '%s' "$6" | head -c 100000 | tr '\\n' ' ')" >> '${calls}'
+printf '%s\\t%s\\n' "$4" "$(printf '%s' "$8" | head -c 100000 | tr '\\n' ' ')" >> '${calls}'
 printf 'edit from call %s\\n' "$n" >> README.md
 line=$(sed -n "\${n}p" '${scriptFile}')
 if [ "$line" = ok ]; then printf '%s\\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}' '{"type":"agent_settled","aborted":false}'
@@ -893,4 +894,100 @@ test("later runs resume the session of the latest run, including a successful na
     assert.notEqual(replacement.sessionId, original.sessionId);
     assert.equal(f.board.claim(f.card.id).sessionId, replacement.sessionId);
   } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+const wrapUpExtension = join(import.meta.dirname, "..", "scripts", "pi-wrap-up.mjs");
+
+// A fake Pi that loads the real wrap-up extension from its `-e` argument and works in turns until it is steered.
+// `obey` writes a report a moment after the steer and settles; `ignore` keeps working until it is killed.
+function wrapUpFixture(behaviour: "obey" | "ignore") {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), script = join(dir, "pi-fake.mjs"), steers = join(dir, "steers.jsonl");
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  writeFileSync(script, `import { appendFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const args = process.argv.slice(2), handlers = {};
+const emit = event => process.stdout.write(JSON.stringify(event) + "\\n");
+let steeredAt = 0;
+const pi = {
+  on: (name, handler) => { handlers[name] = handler; },
+  sendUserMessage: (text, options) => { steeredAt ||= Date.now(); appendFileSync(${JSON.stringify(steers)}, JSON.stringify({ text, options }) + "\\n"); },
+};
+(await import(pathToFileURL(args[args.indexOf("-e") + 1]).href)).default(pi);
+emit({ type: "agent_start" }); handlers.agent_start?.();
+setInterval(() => {
+  emit({ type: "turn_start" });
+  emit({ type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "Still working." }] } });
+  emit({ type: "turn_end" });
+  // Keep going a while after the steer, so a second delivery would show up.
+  if (${JSON.stringify(behaviour)} === "obey" && steeredAt && Date.now() - steeredAt > 2500) {
+    emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done: the parser. Remaining: the exporter. Evidence attached." }] } });
+    emit({ type: "agent_settled", aborted: false }); handlers.agent_settled?.();
+    process.exit(0);
+  }
+}, 200);
+`);
+  writeFileSync(fakePi, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+  chmodSync(fakePi, 0o755);
+  const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+  const card = board.createCard({ title: "Long work", body: "", repo });
+  board.setStatus(card.id, "ready");
+  const delivered = () => existsSync(steers) ? readFileSync(steers, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+  return { dir, board, worker, card, delivered, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("a run still going near its timeout is steered once to write its report, and the report is kept when it settles", async () => {
+  const f = wrapUpFixture("obey");
+  try {
+    f.worker.timing = { runTimeoutMs: 20_000, wrapUpLeadMs: 19_000 };
+    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
+    const finished = f.board.getRun(run.id)!;
+    assert.equal(finished.status, "review", finished.error ?? "");
+    assert.equal(finished.report, "Done: the parser. Remaining: the exporter. Evidence attached.");
+    assert.deepEqual(f.delivered(), [{ text: WRAP_UP_MESSAGE, options: { deliverAs: "steer" } }], "the message arrives once, as a steer");
+    assert.match(WRAP_UP_MESSAGE, /Stop starting new work and commit nothing/);
+    assert.match(finished.output, /Bakery asked Pi to stop starting new work and write its report/);
+    assert.deepEqual(readdirSync(join(f.dir, "data", "wrap-up")), [], "the mailbox is removed when the run ends");
+  } finally { f.cleanup(); }
+});
+
+test("a run that ignores the wrap-up message is still stopped at the run timeout", async () => {
+  const f = wrapUpFixture("ignore");
+  try {
+    f.worker.timing = { runTimeoutMs: 3000, wrapUpLeadMs: 2000 };
+    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running", 10_000);
+    const finished = f.board.getRun(run.id)!;
+    assert.equal(finished.status, "failed");
+    assert.match(finished.error ?? "", /Bakery sent SIGTERM: \d+-minute run timeout/);
+    assert.equal(f.delivered().length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("the wrap-up extension steers only a busy session, so it never starts a turn after the run settled", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-wrap-up-")), file = join(dir, "message");
+  const previous = process.env.BAKERY_WRAP_UP_FILE;
+  process.env.BAKERY_WRAP_UP_FILE = file;
+  try {
+    const handlers: Record<string, () => void> = {}, sent: unknown[] = [];
+    type Pi = { on(name: string, handler: () => void): void; sendUserMessage(text: string, options: unknown): void };
+    const { default: wrapUp } = await import(pathToFileURL(wrapUpExtension).href) as { default: (pi: Pi) => void };
+    wrapUp({ on: (name: string, handler: () => void) => { handlers[name] = handler; }, sendUserMessage: (text: string, options: unknown) => { sent.push({ text, options }); } });
+    writeFileSync(file, "wrap up");
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    assert.deepEqual(sent, [], "an idle session is left alone");
+    handlers.agent_start();
+    await waitFor(() => sent.length > 0);
+    handlers.agent_settled();
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    assert.deepEqual(sent, [{ text: "wrap up", options: { deliverAs: "steer" } }]);
+    handlers.session_shutdown();
+  } finally {
+    if (previous === undefined) delete process.env.BAKERY_WRAP_UP_FILE; else process.env.BAKERY_WRAP_UP_FILE = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

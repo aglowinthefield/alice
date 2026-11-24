@@ -2809,6 +2809,17 @@ export function App() {
                                     card={item}
                                     activity={activity}
                                   />
+                                  {item.status === "failed" &&
+                                    item.failureSummary && (
+                                      <span
+                                        data-testid="failure-summary"
+                                        title="Why the latest attempt failed. Open the card for the full error."
+                                        className="flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-500"
+                                      >
+                                        <CircleX size={10} aria-hidden />
+                                        {item.failureSummary}
+                                      </span>
+                                    )}
                                   {!!item.autoRetries && (
                                     <span
                                       data-testid="auto-retry"

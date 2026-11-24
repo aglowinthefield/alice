@@ -251,6 +251,8 @@ export type Card = {
   startQueued?: boolean;
   /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
   attachmentCount?: number;
+  /** A Failed card's reason in a few words; the latest attempt's error has the full text. */
+  failureSummary?: string | null;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
   /** Automatic retries (of 3) spent after temporary provider failures since the card's last successful run. */

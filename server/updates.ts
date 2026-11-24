@@ -1,14 +1,20 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, renameSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 
 // Updates for a hosted Bakery checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
 // brought in, plus anything merged into the checked-out main since the server started (approving a card merges it
 // locally), so the UI can show a changelog. It installs only on request.
-// Installing leaves the restart to the caller, which drains active runs first.
+// An update that touches only the browser UI swaps the new build in at once. Anything the server process runs (its
+// own files, the src modules it imports, dependencies, scripts) needs a restart, which the caller does after
+// draining active runs.
 
 export type UpdateCommit = { sha: string; subject: string };
-export type UpdateState = { commits: UpdateCommit[]; installing: boolean; error: string | null };
+/**
+ * `restart`: whether installing the pending commits restarts the server (and so waits for active runs).
+ * `ui`: the commit the served UI was built from; it changes when a UI-only update is swapped in, so open pages reload.
+ */
+export type UpdateState = { commits: UpdateCommit[]; installing: boolean; error: string | null; restart: boolean; ui: string | null };
 type Install = () => Promise<void>;
 
 /** Runs `scripts/update.sh install` (fast-forward, npm install, UI build into dist-next) in `root`. */
@@ -24,14 +30,27 @@ export class Updates {
   private commits: UpdateCommit[] = [];
   private installing = false;
   private error: string | null = null;
-  // The commit the server started on. Local merges move HEAD past it without touching origin/main.
-  private startHead: string | null;
+  private restart = false;
+  // The commit the server process started on: its code. Changes since then decide whether an install restarts.
+  private serverHead: string | null;
+  // The commit the installed code is at: serverHead, or later after UI-only installs. Local merges move HEAD past it.
+  private installedHead: string | null;
+  // Files the running server loads, read once at startup.
+  private serverFiles: Set<string>;
 
-  constructor(private root: string, private install: Install, private onInstalled: () => void) {
-    this.startHead = this.revParse("HEAD");
+  constructor(
+    private root: string,
+    private install: Install,
+    private onInstalled: () => void,
+    private onUiInstalled: () => void = () => promoteStagedUi(root, { keepOldAssets: true }),
+  ) {
+    this.serverHead = this.installedHead = this.revParse("HEAD");
+    this.serverFiles = serverModules(root);
   }
 
-  get state(): UpdateState { return { commits: this.commits, installing: this.installing, error: this.error }; }
+  get state(): UpdateState {
+    return { commits: this.commits, installing: this.installing, error: this.error, restart: this.restart, ui: this.installedHead };
+  }
 
   /**
    * Re-reads the pending commits: those on origin/main that the checked-out main lacks, and those merged into main
@@ -39,20 +58,25 @@ export class Updates {
    */
   refresh(): void {
     try {
-      if (this.git("rev-parse", "--abbrev-ref", "HEAD") !== "main") { this.commits = []; return; }
+      if (this.git("rev-parse", "--abbrev-ref", "HEAD") !== "main") { this.commits = []; this.restart = false; return; }
       // Newest first: what origin/main would bring in, then what was merged locally since startup. Merge commits are
       // left out: approving a card adds a "Merge card:" commit on top of the card's own, which would list it twice.
-      const ranges = [this.originMain() && "HEAD..refs/remotes/origin/main", this.startHead && `${this.startHead}..HEAD`];
+      const ranges = [this.originMain() && "HEAD..refs/remotes/origin/main", this.installedHead && `${this.installedHead}..HEAD`];
       const log = ranges.filter((range): range is string => !!range).map(range => this.git("log", "--no-merges", "--format=%h%x09%s", range)).filter(Boolean).join("\n");
       this.commits = log ? log.split("\n").map(line => { const [sha, ...subject] = line.split("\t"); return { sha, subject: subject.join("\t") }; }) : [];
+      const targets = [this.originMain() && "refs/remotes/origin/main", "HEAD"].filter((ref): ref is string => !!ref);
+      this.restart = this.commits.length > 0 && targets.some(target => this.needsRestart(target));
     } catch (error) {
       this.commits = [];
+      this.restart = false;
       console.warn(`Update check failed: ${error instanceof Error ? error.message : error}`);
     }
   }
 
-  /** Installs pending commits, then hands over to `onInstalled` to drain and restart. */
-  /** Throws right away when nothing is pending, so the API can answer 400. */
+  /**
+   * Installs pending commits. A UI-only install swaps the new build in and is done; otherwise `onInstalled` drains
+   * and restarts. Throws right away when nothing is pending, so the API can answer 400.
+   */
   apply(): Promise<void> {
     if (this.installing) return Promise.resolve();
     this.refresh();
@@ -71,11 +95,33 @@ export class Updates {
       console.error(`Update failed: ${this.error}`);
       return;
     }
-    console.log(`Installed update (${this.commits.length} commit${this.commits.length === 1 ? "" : "s"}); restarting once active runs finish.`);
-    this.onInstalled();
+    const count = `${this.commits.length} commit${this.commits.length === 1 ? "" : "s"}`;
+    // Decide on what actually landed, not on what refresh() saw before the install.
+    if (this.needsRestart("HEAD")) {
+      console.log(`Installed update (${count}); restarting once active runs finish.`);
+      this.onInstalled();
+      return;
+    }
+    try {
+      this.onUiInstalled();
+    } catch (error) {
+      this.installing = false;
+      this.error = error instanceof Error ? error.message : String(error);
+      console.error(`UI update failed: ${this.error}`);
+      return;
+    }
+    this.installedHead = this.revParse("HEAD");
+    this.installing = false;
+    console.log(`Installed UI-only update (${count}); no restart needed.`);
+    this.refresh();
   }
 
-  /** What an install would move to: the checked-out main and the fetched origin/main. */
+  /** Whether moving from the running server's commit to `target` changes anything the server process loads. */
+  private needsRestart(target: string): boolean {
+    if (!this.serverHead) return true;
+    const changed = this.git("diff", "--name-only", this.serverHead, target).split("\n").filter(Boolean);
+    return changed.some(path => !uiOnly(path, this.serverFiles));
+  }
 
   private originMain(): string | null { return this.revParse("refs/remotes/origin/main"); }
 
@@ -93,11 +139,44 @@ export class Updates {
  * draining server keeps serving the UI that matches its API; a new UI on the old server sends calls to routes the old
  * server lacks, which answer 404 until the restart. Call once at startup, holding the data directory lock.
  */
-export function promoteStagedUi(root: string): boolean {
+export function promoteStagedUi(root: string, { keepOldAssets = false } = {}): boolean {
   const staged = join(root, "dist-next");
   if (!existsSync(staged)) return false;
-  const dist = join(root, "dist");
-  rmSync(dist, { recursive: true, force: true });
+  const dist = join(root, "dist"), old = join(root, "dist-old");
+  // Pages still open on the old UI lazy-load chunks by hashed name; a live swap keeps them so those pages still work
+  // until they reload. Names are content hashes, so nothing in the new build is overwritten. A restart drops them.
+  if (keepOldAssets && existsSync(join(dist, "assets"))) cpSync(join(dist, "assets"), join(staged, "assets"), { recursive: true, force: false });
+  rmSync(old, { recursive: true, force: true });
+  if (existsSync(dist)) renameSync(dist, old);
   renameSync(staged, dist);
+  rmSync(old, { recursive: true, force: true });
   return true;
+}
+
+// Paths that never reach the server process: the browser UI and its build inputs, plus files nothing runs (tests,
+// docs, the desktop and iOS shells). A src file is UI-only unless the server imports it.
+const uiPaths = [/^src\//, /^public\//, /^assets\//, /^tests\//, /^docs\//, /^desktop\//, /^ios\//, /^src-tauri\//, /^index\.html$/, /^vite\.config\.ts$/, /^components\.json$/, /^[^/]+\.md$/];
+
+export function uiOnly(path: string, serverFiles: Set<string>): boolean {
+  return !serverFiles.has(path) && uiPaths.some(pattern => pattern.test(path));
+}
+
+/** Repo-relative paths of every module reachable from server/index.ts through relative imports. */
+export function serverModules(root: string, entry = "server/index.ts"): Set<string> {
+  const seen = new Set<string>();
+  const queue = [resolve(root, entry)];
+  while (queue.length) {
+    const file = queue.pop()!;
+    const path = relative(root, file);
+    if (seen.has(path) || !existsSync(file)) continue;
+    seen.add(path);
+    const source = readFileSync(file, "utf8");
+    for (const [, specifier] of source.matchAll(/(?:from|import|import\()\s*["'](\.{1,2}\/[^"']+)["']/g)) {
+      const base = resolve(dirname(file), specifier);
+      const stem = base.replace(/\.(js|mjs|cjs)$/, "");
+      const found = [base, `${stem}.ts`, `${stem}.tsx`, `${stem}.mts`, join(base, "index.ts")].find(candidate => statSync(candidate, { throwIfNoEntry: false })?.isFile());
+      if (found) queue.push(found);
+    }
+  }
+  return seen;
 }

@@ -77,3 +77,22 @@ test("no notice when the server is up to date or does not update itself", async 
     } finally { await close(); }
   }
 });
+
+test("a UI-only update installs without waiting on runs, then offers to reload onto the new UI", async () => {
+  const commits = [{ sha: "abc1234", subject: "Soften the theme" }];
+  const status: { draining: boolean; activeRuns: number; cards: never[]; updates: Record<string, unknown> } = {
+    draining: false, activeRuns: 2, cards: [], updates: { commits, installing: false, error: null, restart: false, ui: "old1234" },
+  };
+  const { page, close } = await openApp(status, () => {
+    status.updates = { commits: [], installing: false, error: null, restart: false, ui: "new5678" };
+    return status.updates;
+  });
+  try {
+    await page.getByTestId("update-notice-toggle").getByText("1 update available").click();
+    const changelog = page.getByTestId("update-notice-changelog");
+    await changelog.getByText("Only the interface changed, so runs keep going.").waitFor();
+    await changelog.getByRole("button", { name: "Update interface" }).click();
+    await page.getByTestId("update-notice-reload").waitFor({ timeout: 10_000 });
+    await page.getByRole("status").getByText("Bakery's interface was updated.").waitFor();
+  } finally { await close(); }
+});

@@ -156,7 +156,7 @@ function NewCardsBadge({ count }: { count: number }) {
       role="status"
       aria-label={label}
       title={label}
-      className="ml-auto mr-2 shrink-0 rounded-sm bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
+      className="ml-auto shrink-0 rounded-sm bg-primary/15 px-2 font-mono text-[length:var(--text-sidebar-meta)] text-primary"
     >
       {count}
     </span>
@@ -1723,10 +1723,10 @@ export function App() {
                       {!open && !!item.chatUnread && (
                         <ChatUnreadBadge count={item.chatUnread} />
                       )}
+                      {!open && !!item.newCards && (
+                        <NewCardsBadge count={item.newCards} />
+                      )}
                     </button>
-                    {!open && !!item.newCards && (
-                      <NewCardsBadge count={item.newCards} />
-                    )}
                     <ul
                       aria-label="Card counts"
                       className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-13.5 pr-3"

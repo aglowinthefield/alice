@@ -94,7 +94,7 @@ test("new cards from elsewhere badge the sidebar, then highlight on the board an
 
     // Another board's count shows on its collapsed repo row; this board's shows on its Kanban entry until the visit marks it seen.
     const otherRow = page
-      .getByRole("button", { name: "other", exact: true })
+      .getByRole("button", { name: /^other\b/ })
       .locator("xpath=..");
     await otherRow.getByRole("status", { name: "3 new cards" }).waitFor();
     await page
@@ -118,7 +118,7 @@ test("new cards from elsewhere badge the sidebar, then highlight on the board an
     );
     assert.equal(
       await page
-        .getByRole("button", { name: "repo", exact: true })
+        .getByRole("button", { name: /^repo\b/ })
         .locator("xpath=../..")
         .getByRole("status", { name: /new card/ })
         .count(),

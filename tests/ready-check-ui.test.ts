@@ -53,6 +53,8 @@ test("Move to Ready in the card's details flags a physical-device ask and moves 
     const lane = (status: string) => page.locator(`section[data-status="${status}"]`);
     const check = page.getByRole("dialog", { name: "This card may need another pass" });
 
+    // The first render waits on a cold Vite compile, so it gets the page-load timeout.
+    await lane("triage").getByRole("button", { name: /rename card/ }).waitFor({ timeout: 30_000 });
     // A plain code task moves straight away.
     await lane("triage").getByRole("button", { name: /rename card/ }).click();
     await page.getByRole("button", { name: "Move to Ready" }).click();
@@ -88,6 +90,7 @@ test("moving several Triage cards to Ready lists each flagged card once", async 
     const requests = await board(page, [card("vague", "Tidy up the sidebar."), card("staging", `Deploy to staging and confirm the banner.${"\n\n"}## Acceptance${"\n"}- It shows.`), card("rename", plain)]);
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     const triage = page.locator('section[data-status="triage"]');
+    await triage.getByRole("button", { name: "Select in Triage" }).waitFor({ timeout: 30_000 });
     await triage.getByRole("button", { name: "Select in Triage" }).click();
     await triage.getByRole("checkbox", { name: "Select all" }).check();
     await triage.getByLabel("Move selected cards to").selectOption({ label: "Ready" });

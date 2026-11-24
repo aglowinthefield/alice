@@ -127,6 +127,7 @@ import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
 import { UpdateNotice } from "./update-notice.js";
 import { ConfirmHost, confirmAction } from "./confirm.js";
+import { ReadyCheckHost, checkBeforeReady } from "./ready-check.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1474,6 +1475,12 @@ export function App() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
+  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead.
+  const readyAfterCheck = async (moving: Card[]) => {
+    const check = await checkBeforeReady(moving);
+    if (check.choice === "edit") setEditing(check.card);
+    return check.choice === "ready";
+  };
   const moveSelected = async () => {
     if (
       !boardId ||
@@ -1484,6 +1491,7 @@ export function App() {
     const to = bulkTarget as Status;
     const path = `/boards/${boardId}/cards`;
     const ids = selectedCards.map((item) => item.id);
+    if (to === "ready" && !(await readyAfterCheck(selectedCards))) return;
     if (
       to === "running" &&
       settings?.confirmRunStart &&
@@ -1513,6 +1521,7 @@ export function App() {
   const moveCard = async (card: Card, to: Status, along: Card[] = []) => {
     if (!boardId || !dropTargets(card).includes(to)) return;
     const path = `/boards/${boardId}/cards`;
+    if (to === "ready" && !(await readyAfterCheck([card, ...along]))) return;
     if (to === "ready" && along.length > 0) {
       const total = along.length + 1;
       if (
@@ -1594,6 +1603,7 @@ export function App() {
       />
       <div ref={pageFadeVeil} aria-hidden="true" className="page-fade-veil" />
       <ConfirmHost />
+      <ReadyCheckHost />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"

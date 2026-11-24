@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Moving a Triage card to Ready checks its text first. A card that asks for something only a person can do (a physical device, screenshots by hand, staging or production) or never says what done looks like shows its flags with **Edit** and **Ready anyway**; nothing is blocked. `bakery-cli ready` prints the flags and needs `--yes` to move a flagged card.
 - `bakery-cli open [CARD_ID]` opens the board, or a card by its short ID, in the browser and prints the URL. `--print` prints without opening.
 - The agent reviewer now gets the implementer's report and the paths of the card's attachments. It opens attached screenshots and judges them, instead of handing a card to you for screenshots it couldn't see.
 - Unattended review never merges into local main. On a local board an agent-approved card waits for your Approve; pull-request boards still open the PR. The verification command, the merge limit, `bakery-cli board --merge-limit` and `scripts/verify.sh` are gone.

@@ -222,7 +222,13 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.deepEqual(await request(`/boards/${first.id}/cards/${card.id}/push-progress`), { status: 200, data: null }, "card details poll push progress");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "running" })).status, 400);
+    // The check the CLI prints before Ready reads the card's current text and never blocks the move itself.
+    const readyCheck = async () => ((await request(`/boards/${first.id}/cards/${card.id}/ready-check`)).data.flags as { rule: string }[]).map(flag => flag.rule);
+    assert.deepEqual(await readyCheck(), ["no-acceptance"]);
+    await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "Verify on a physical iPhone.\n\n## Acceptance\n- It works.", priority: 0 });
+    assert.deepEqual(await readyCheck(), ["person-only"]);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
+    assert.deepEqual(await readyCheck(), [], "only Triage cards are checked");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "triage" })).data.status, "triage");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
     assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: [card.id] })).status, 400);

@@ -9,6 +9,7 @@ import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
 import { describeToolCall } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
+import { commitIdentityArgs } from "./git-identity.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -227,7 +228,7 @@ export class Worker {
     const tip = git(worktree, "rev-parse", "origin/main");
     this.board.append(run.id, "Merging origin/main into the card branch so the fix run sees what CI tested…\n");
     try {
-      git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-edit", "origin/main");
+      git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "origin/main");
     } catch {
       let files: string[] = [];
       try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean); } catch { /* Keep going without the list. */ }

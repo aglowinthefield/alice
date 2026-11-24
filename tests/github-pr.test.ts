@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 import { Integration, PushHookError } from "../server/integration.js";
+import { Readiness } from "../server/readiness.js";
 import { GitHub, GitHubSync, bakeryRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 import { diffSummary, draftPrompt, draftPullRequest, maxDraftPatchChars, readPullRequestRules, type PullRequestRules } from "../server/pr-draft.js";
@@ -1690,5 +1691,123 @@ test("publish as PR: a conflicting diverged bakery/<id> stops with nothing pushe
     assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs);
     assert.equal(f.board.getCard(card.id)?.locallyMerged, true, "the card is still offered for publishing");
     assert.equal(git(f.repo, "worktree", "list", "--porcelain").includes("bakery-publish-merge"), false);
+  } finally { f.cleanup(); }
+});
+
+/** Readiness wired like the server: a counting stand-in for the Pi drafter, and send-backs recorded instead of started. */
+function readinessFor(f: Fixture, integration = new Integration(f.board, f.data)) {
+  const drafts: string[] = [], sentBack: PushHookError[] = [];
+  const readiness = new Readiness(f.board, integration, {
+    draft: async (card) => { drafts.push(card.id); return { title: "feat: add feature", body: "Drafted at Review", source: "agent", problem: "", templatePath: null, semantic: null }; },
+    sendBack: (_card, error) => { sentBack.push(error); return true; },
+  });
+  return { integration, readiness, drafts, sentBack };
+}
+/** A pre-push hook that appends one line per run to `log`, with the stdin Git gave it, and exits `code`. */
+function prePushHook(f: Fixture, log: string, code = 0) {
+  const hook = join(f.repo, ".git", "hooks", "pre-push");
+  writeFileSync(hook, `#!/bin/sh\nprintf 'ran %s\\n' "$(cat)" >> "${log}"\necho 'Unused files (1)'\nexit ${code}\n`);
+  chmodSync(hook, 0o755);
+}
+const hookRuns = (log: string) => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
+
+test("github-pr readiness: at Review Bakery drafts the PR and runs the hooks, so Approve pushes without running them again", async () => {
+  const f = fixture();
+  try {
+    const log = join(f.dir, "hook.log");
+    prePushHook(f, log);
+    const card = await reviewedCard(f);
+    const { integration, readiness, drafts } = readinessFor(f);
+    const before = integration.reviewFingerprint(card);
+    readiness.prepare(card);
+    readiness.prepare(card);
+    const worktree = f.board.listRuns(card.id)[0].worktree!;
+    await waitFor(() => readiness.status(card.id).hooks?.state === "passed");
+    const candidate = git(worktree, "rev-parse", "HEAD");
+    assert.equal(git(worktree, "status", "--porcelain"), "", "the work is committed on the card branch");
+    assert.equal(readiness.status(card.id).hooks?.candidate, candidate);
+    assert.equal(hookRuns(log).length, 1, "the hook ran once, for both prepare calls");
+    assert.match(hookRuns(log)[0], new RegExp(`refs/heads/bakery/${card.id}`), "the dry run hands the hook the real push's refs");
+    assert.throws(() => git(f.repo, "ls-remote", "--exit-code", "origin", `refs/heads/bakery/${card.id}`), "the dry run pushed nothing");
+    assert.equal(integration.reviewFingerprint(card), before, "committing does not make the diff under review stale");
+    assert.equal(drafts.length, 1);
+    assert.equal((await readiness.draft(card)).body, "Drafted at Review");
+    assert.equal(drafts.length, 1, "the dialog gets the stored draft");
+
+    const opened = await integration.openPullRequest(f.board.getCard(card.id)!, before, f.github, await readiness.draft(card), "operator", () => readiness.passedCommit(card.id));
+    assert.equal(opened.prState, "OPEN");
+    assert.equal(hookRuns(log).length, 1, "Approve skipped the hook that already passed on this commit");
+    assert.match(integration.pushProgress(card.id)!.step, /Done/);
+    assert.equal(git(f.repo, "ls-remote", "origin", `refs/heads/bakery/${card.id}`).split("\t")[0], candidate);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: work that changed after the check runs the hook again on Approve", async () => {
+  const f = fixture();
+  try {
+    const log = join(f.dir, "hook.log");
+    prePushHook(f, log);
+    const card = await reviewedCard(f);
+    const { integration, readiness } = readinessFor(f);
+    readiness.prepare(card);
+    await waitFor(() => readiness.status(card.id).hooks?.state === "passed");
+    writeFileSync(join(f.board.listRuns(card.id)[0].worktree!, "later.txt"), "edited by hand\n");
+    await integration.openPullRequest(f.board.getCard(card.id)!, integration.reviewFingerprint(card), f.github, undefined, "operator", () => readiness.passedCommit(card.id));
+    assert.equal(hookRuns(log).length, 2, "a new commit goes through the hook");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: a hook refused at Review goes back to the agent, two times in a row at most", async () => {
+  const f = fixture();
+  try {
+    const log = join(f.dir, "hook.log");
+    prePushHook(f, log, 1);
+    const card = await reviewedCard(f);
+    const { readiness, sentBack } = readinessFor(f);
+    readiness.prepare(card);
+    await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
+    assert.equal(sentBack.length, 1);
+    assert.match(sentBack[0].output, /Unused files \(1\)/);
+    assert.equal(readiness.status(card.id).hooks?.sentBack, true);
+
+    // Two more attempts whose hooks were also sent back from Review: the third refusal is left for a person.
+    const worker = new Worker(f.board, f.data, f.fakePi);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const run = worker.start(f.board.getCard(card.id)!);
+      await waitFor(() => f.board.getRun(run.id)?.status !== "running");
+      if (attempt === 0) f.board.setReadiness(run.id, card.id, JSON.stringify({ hooks: { state: "failed", candidate: null, detail: "", sentBack: true } }));
+    }
+    readiness.prepare(f.board.getCard(card.id)!);
+    await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
+    assert.equal(sentBack.length, 1, "not sent back a third time");
+    assert.equal(readiness.status(card.id).hooks?.sentBack, false);
+    assert.ok(f.board.listCardEvents(card.id).some(event => /already sent it back 2 times/.test(event.reason)));
+    assert.equal(await readiness.passedCommit(card.id), null, "Approve runs the hook itself");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: a new attempt stops a running hook check, and boards that push on their own skip it", async () => {
+  const f = fixture();
+  try {
+    const started = join(f.dir, "started"), pidFile = join(f.dir, "hook.pid");
+    const hook = join(f.repo, ".git", "hooks", "pre-push");
+    writeFileSync(hook, `#!/bin/sh\necho $$ > "${pidFile}"\ntouch "${started}"\nsleep 30\n`);
+    chmodSync(hook, 0o755);
+    const card = await reviewedCard(f);
+    const { readiness } = readinessFor(f);
+    readiness.prepare(card);
+    await waitFor(() => existsSync(started));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    readiness.cancel(card.id);
+    await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
+    assert.equal(JSON.parse(f.board.getReadiness(f.board.listRuns(card.id)[0].id) ?? "{}").hooks, undefined, "no hook result is stored for a cancelled check");
+
+    rmSync(hook);
+    const other = await reviewedCard(f, "Second card");
+    f.board.setAutoPullRequest(f.repoBoard.id, true);
+    const second = readinessFor(f);
+    second.readiness.prepare(other);
+    assert.equal(second.readiness.status(other.id).hooks, null);
+    assert.equal(second.drafts.length, 0, "the automatic pull request drafts on demand instead");
   } finally { f.cleanup(); }
 });

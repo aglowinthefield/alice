@@ -211,6 +211,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pr_readiness (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, data TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS review_comments_card ON review_comments(cardId, runId, state);
       CREATE TABLE IF NOT EXISTS discussion_messages (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, createdAt TEXT NOT NULL);
@@ -970,6 +971,13 @@ export class Board {
     return card.prState === "CLOSED" || card.prChecks === "failing" ? null : "pr_ready";
   }
   /** Records how many files a run changes; see `Run.changedFiles`. */
+  /** What Bakery prepared for opening a run's pull request when the run reached Review (see `Readiness`), as stored JSON. */
+  getReadiness(runId: string): string | undefined {
+    return (this.db.prepare("SELECT data FROM pr_readiness WHERE runId=?").get(runId) as { data: string } | undefined)?.data;
+  }
+  setReadiness(runId: string, cardId: string, data: string): void {
+    this.db.prepare("INSERT INTO pr_readiness(runId, cardId, data, updatedAt) VALUES (?, ?, ?, ?) ON CONFLICT(runId) DO UPDATE SET data=excluded.data, updatedAt=excluded.updatedAt").run(runId, cardId, data, now());
+  }
   recordChangedFiles(runId: string, count: number) {
     this.db.prepare("UPDATE runs SET changedFiles=? WHERE id=? AND (changedFiles IS NULL OR changedFiles!=?)").run(count, runId, count);
   }

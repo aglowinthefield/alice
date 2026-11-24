@@ -272,6 +272,10 @@ export class GitHub {
     }
     return protection.required_pull_request_reviews ? "branch protection requires a pull request" : null;
   }
+  /** Marks a draft PR ready for review. */
+  async ready(repo: string, number: number): Promise<void> {
+    await this.gh(["pr", "ready", String(number), "--repo", repo]);
+  }
   /** Posts a comment on a PR. */
   async comment(repo: string, number: number, body: string): Promise<void> {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
@@ -346,8 +350,13 @@ const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/b
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
+  try { await postPullRequestComment(github, repo, number, body); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+/** Like `commentOnPullRequest`, but a failure to post is thrown, for comments that must not be lost. */
+export function postPullRequestComment(github: GitHub, repo: string, number: number, body: string): Promise<void> {
+  return github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`);
 }
 
 /** Runs a reaction; one that fails is logged, never blocking the work it acknowledges. */
@@ -465,6 +474,10 @@ export class GitHubSync {
         return;
       }
       const syncStart = Date.now();
+      for (const pending of this.board.listPendingHandoffs(repoBoard.repo)) {
+        try { await postPullRequestComment(this.github, repo, pending.prNumber, pending.handoff); this.board.setHandoffPending(pending.runId, false); }
+        catch (error) { console.error(`Could not post the reviewer's findings on ${repo}#${pending.prNumber}: ${error instanceof Error ? error.message : String(error)} (retrying)`); }
+      }
       await this.settleCards(repoBoard, repo);
       await fastForwardMain(repoBoard.repo);
       console.debug(`[sync ${repo}] settled ${this.board.listPullRequestCards(repoBoard.repo).length} PR card(s) in ${Date.now() - syncStart}ms`);

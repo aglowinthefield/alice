@@ -140,7 +140,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
  * board with automatic pull requests; empty for jobs from before it was kept. `sendBackWaiting` is 1 while the
  * reviewer's requested changes wait for a free run slot (see `Board.listWaitingSendBacks`).
  */
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string; handoff: string; sendBackWaiting: number } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string; handoff: string; handoffPending: number; sendBackWaiting: number } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 /** How many runs of one card Bakery pushes to open its pull request without Approve; see `listAutoPullRequestCandidates`. */
@@ -384,6 +384,7 @@ export class Board {
     if (!jobColumns.has("changes")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN changes TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("requeued")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN requeued INTEGER NOT NULL DEFAULT 0");
     if (!jobColumns.has("handoff")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN handoff TEXT NOT NULL DEFAULT ''");
+    if (!jobColumns.has("handoffPending")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN handoffPending INTEGER NOT NULL DEFAULT 0");
     if (!jobColumns.has("sendBackWaiting")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN sendBackWaiting INTEGER NOT NULL DEFAULT 0");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
@@ -927,12 +928,13 @@ export class Board {
     if (!repoBoard.autoReviewEnabled) return false;
     if (this.awaitsAutoReview(repoBoard, cardId, run)) return true;
     const job = this.getAutoReviewJob(run.id);
-    return !!job && (job.state !== "needs_human" || job.changes !== "");
+    return !!job && (job.state !== "needs_human" || (job.changes !== "" && job.handoff === ""));
   }
   /** What the agent reviewer left for a person on this run, for the draft pull request; null when it never reviewed it. */
   autoReviewHandoff(runId: string): string | null {
     const job = this.getAutoReviewJob(runId);
-    return job?.state === "needs_human" && job.changes === "" ? job.handoff || "The agent review did not reach a verdict." : null;
+    // Requested changes stay on the job for a manual retry; a handoff marks them as findings for a person instead of a rerun.
+    return job?.state === "needs_human" && (job.changes === "" || job.handoff !== "") ? job.handoff || "The agent review did not reach a verdict." : null;
   }
   /** Review cards whose reviewer-requested rerun is waiting for a run slot (see `Worker.startSendBack`), oldest first. */
   listWaitingSendBacks(): Card[] {
@@ -976,6 +978,8 @@ export class Board {
       // Before a pull request exists, an agent review in progress or queued is the agent's turn.
       if (!card.prState && (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run))) return "agent_review";
       if (card.prState === "MERGED") return "github";
+      // A draft opened for a reviewer handoff stays the person's turn until they act on it (a newer run replaces it).
+      if (card.prState === "OPEN" && card.prPushedRunId === run.id && this.autoReviewHandoff(run.id) !== null) return null;
       // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
       if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
       if (this.getCiFeedback(card.id)?.source === "conflict" || this.getCiFeedback(card.id)?.source === "comment") return "ci_fix";
@@ -1045,7 +1049,32 @@ export class Board {
   }
   finishAutoReview(runId: string, state: "needs_human" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[], handoff = ""): void {
     this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=?, handoff=? WHERE runId=? AND state='running'")
-      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", handoff.slice(0, 6000), runId);
+      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", handoff, runId);
+  }
+  /**
+   * The reviewer's requested rerun cannot start (not a capacity wait): the completed review becomes a human handoff, so
+   * its requested changes go to the draft pull request as findings and the card no longer waits on a rerun.
+   */
+  handOffSendBack(runId: string, why: string): void {
+    const job = this.getAutoReviewJob(runId);
+    if (!job) return;
+    const findings = (job.changes ? JSON.parse(job.changes) as { path: string; line?: number; comment: string }[] : []).map(change => `- \`${change.path}${change.line ? `:${change.line}` : ""}\`: ${change.comment}`).join("\n");
+    const reason = job.details.replace(/^Sent back to the implementer: /, "");
+    this.db.prepare("UPDATE auto_review_jobs SET sendBackWaiting=0, handoff=?, details=? WHERE runId=?")
+      .run(`The agent reviewer asked for changes, but Bakery could not start the rerun (${why}):\n\n${reason}${findings ? `\n\n${findings}` : ""}`, `Agent requested changes, but the rerun could not start: ${reason}`.slice(0, 4000), runId);
+  }
+  /** The operator approved the draft opened for a handoff: the person has decided, so the handoff no longer waits. */
+  resolveHandoff(runId: string): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state='pull_request', handoffPending=0 WHERE runId=? AND state='needs_human'").run(runId);
+  }
+  /** Marks the handoff's findings comment on an existing pull request as not yet posted, or as posted. */
+  setHandoffPending(runId: string, pending: boolean): void {
+    this.db.prepare("UPDATE auto_review_jobs SET handoffPending=? WHERE runId=?").run(pending ? 1 : 0, runId);
+  }
+  /** Findings comments whose posting failed, for pull requests on this repository, to be retried. */
+  listPendingHandoffs(repo: string): { runId: string; prNumber: number; handoff: string }[] {
+    return this.db.prepare(`SELECT j.runId AS runId, c.prNumber AS prNumber, j.handoff AS handoff FROM auto_review_jobs j JOIN cards c ON c.id=j.cardId
+      WHERE j.handoffPending=1 AND j.state='needs_human' AND c.repo=? AND c.prNumber IS NOT NULL AND c.prState='OPEN'`).all(repo) as { runId: string; prNumber: number; handoff: string }[];
   }
   /** What a running review is doing now; shown in the Reviews tab until it finishes. */
   setAutoReviewProgress(runId: string, details: string): void {

@@ -30,7 +30,7 @@ export class AutoPickup {
       try {
         if (this.worker.startSendBack(card)) this.board.setSendBackWaiting(runId, false);
       } catch (error) {
-        this.board.setSendBackWaiting(runId, false);
+        this.board.handOffSendBack(runId, "no rerun could be started");
         this.board.noteCard(card.id, `The agent reviewer sent this back, but Bakery could not start the new attempt: ${error instanceof Error ? error.message : String(error)}. Run it again to apply the requested changes, or review it yourself.`);
       }
     }

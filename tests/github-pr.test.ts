@@ -45,9 +45,14 @@ if (args[0] === "pr" && args[1] === "create") {
   if (fs.existsSync(path.join(dir, "create-error"))) { process.stderr.write(fs.readFileSync(path.join(dir, "create-error"), "utf8")); process.exit(1); }
   const number = 100 + prs.length, url = "https://github.com/" + flag("--repo") + "/pull/" + number;
   prs.push({ number, url, state: "OPEN", mergedAt: null, mergeCommit: null, headRefName: flag("--head"), headRefOid: "", statusCheckRollup: [],
-    title: flag("--title"), body: flag("--body"), base: flag("--base") });
+    title: flag("--title"), body: flag("--body"), base: flag("--base"), isDraft: args.includes("--draft") });
   fs.writeFileSync(file, JSON.stringify(prs));
   console.log(url); process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "ready") {
+  const pr = prs.find(item => item.number === Number(args[2]));
+  if (pr) pr.isDraft = false;
+  fs.writeFileSync(file, JSON.stringify(prs)); process.exit(0);
 }
 if (args[0] === "pr" && args[1] === "comment") {
   if (fs.existsSync(path.join(dir, "comment-error"))) { console.error("comment failed"); process.exit(1); }
@@ -204,6 +209,52 @@ test("a card's PR is found by its bakery/<id> branch, and an attached PR link ov
     const cleared = f.board.setPullRequestOverride(card.id, "");
     assert.equal(cleared.prOverrideUrl, null);
     assert.equal((await linkedPullRequest(f.github, "acme/widgets", cleared))?.number, 8);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a draft opened for a reviewer handoff carries the findings in its body, and stays the person's turn", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const run = f.board.listRuns(card.id)[0];
+    f.board.recordChangedFiles(run.id, 1);
+    f.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,details,handoff,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','x','The agent reviewer left this for a person:\n\nProduct call','')").run(card.id, run.id);
+    writeFileSync(join(f.ghDir, "comment-error"), "");
+    const integration = new Integration(f.board, f.data);
+    const opened = await integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "auto-pull-request", f.board.autoReviewHandoff(run.id)!);
+    assert.match(f.prs()[0].body, /Product call/, "findings are in the body, so a failed comment cannot lose them");
+    assert.equal((f.prs()[0] as { isDraft?: boolean }).isDraft, true);
+    assert.equal(opened.prState, "OPEN");
+    const current = f.board.getCard(card.id)!;
+    assert.equal(current.reviewWait, null, "the card is not waiting on GitHub: a person decides");
+    assert.equal(current.reviewAction, "pr_ready");
+    // Approving the draft makes it ready and clears the handoff wait.
+    await integration.openPullRequest(current, integration.review(current).fingerprint, f.github);
+    assert.equal((f.prs()[0] as { isDraft?: boolean }).isDraft, false, "GitHub shows it ready for review");
+    assert.equal(f.board.autoReviewHandoff(run.id), null);
+    assert.equal(f.board.getCard(card.id)!.reviewWait, "github");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: findings for an already open pull request that fail to post are kept and delivered by a later sync", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const run = f.board.listRuns(card.id)[0];
+    const integration = new Integration(f.board, f.data);
+    await integration.openPullRequest(card, integration.review(card).fingerprint, f.github);
+    f.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,details,handoff,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','x','Findings to post','')").run(card.id, run.id);
+    writeFileSync(join(f.ghDir, "comment-error"), "");
+    const again = f.board.getCard(card.id)!;
+    await integration.openPullRequest(again, integration.review(again).fingerprint, f.github, undefined, "auto-pull-request", "Findings to post");
+    assert.equal(f.comments().some(item => /Findings to post/.test(item.body)), false);
+    await f.sync.tick(true);
+    assert.equal(f.comments().some(item => /Findings to post/.test(item.body)), false, "still failing, still pending");
+    rmSync(join(f.ghDir, "comment-error"));
+    await f.sync.tick(true);
+    assert.equal(f.comments().filter(item => /Findings to post/.test(item.body)).length, 1);
+    await f.sync.tick(true);
+    assert.equal(f.comments().filter(item => /Findings to post/.test(item.body)).length, 1, "delivered once");
   } finally { f.cleanup(); }
 });
 
@@ -882,6 +933,7 @@ test("github-pr: a CI fix run starts from origin/main merged in, and hears about
     await sync.syncBoard(f.repoBoard.id);
     await waitFor(() => f.board.getCard(card.id)!.status === "review");
     const run = f.board.listRuns(card.id)[0];
+    f.board.recordChangedFiles(run.id, 1);
     assert.equal(run.status, "review", `${run.error} ${run.output}`);
     assert.match(run.output, /Merging origin\/main into the card branch so the fix run sees what CI tested/);
     const worktree = join(f.data, "worktrees", card.id);

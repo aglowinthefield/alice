@@ -689,6 +689,71 @@ test("a card the reviewer hands to a person, or sends back too often, becomes a 
   }
 });
 
+test("a rerun that cannot start for another reason hands the findings to a person, in the reviewer and in AutoPickup", async () => {
+  for (const where of ["reviewer", "pickup"]) {
+    const item = fixture(requestChanges);
+    try {
+      pullRequestBoard(item);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const current = item.reviewedCard();
+      const broken = () => { throw new Error("worktree is gone"); };
+      if (where === "reviewer") await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), broken).tick();
+      else {
+        await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new RunLimitError("full"); }).tick();
+        new AutoPickup(item.board, { startSendBack: broken } as unknown as Worker).tick();
+      }
+      assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [current.card.id], where);
+      assert.match(item.board.autoReviewHandoff(current.run.id) ?? "", /Missing test[\s\S]*README\.md:1/, where);
+      assert.equal(item.board.listWaitingSendBacks().length, 0, where);
+      assert.equal(item.board.getReviewerChanges(current.run.id).length, 1, "a manual retry still gets the requested fixes");
+    } finally { item.close(); }
+  }
+});
+
+test("a failed push never puts its output in the public handoff", async () => {
+  const item = fixture();
+  try {
+    pullRequestBoard(item);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined, async () => { throw new Error("pre-push hook failed: SECRET-MARKER"); }).tick();
+    const handoff = item.board.autoReviewHandoff(current.run.id) ?? "";
+    assert.match(handoff, /stopped before a verdict/);
+    assert.doesNotMatch(handoff, /SECRET-MARKER/);
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /SECRET-MARKER/, "raw diagnostics stay local");
+  } finally { item.close(); }
+});
+
+test("a long handoff keeps every requested change", async () => {
+  const changes = Array.from({ length: 10 }, (_, index) => ({ path: `file${index}.ts`, comment: `${"x".repeat(1900)} END${index}` }));
+  const item = fixture(JSON.stringify({ verdict: "request_changes", reason: "Many problems", changes }));
+  try {
+    pullRequestBoard(item);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    for (const id of ["old-1", "old-2"]) item.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','[{}]')").run(current.card.id, id);
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new Error("must not rerun"); }).tick();
+    const handoff = item.board.autoReviewHandoff(current.run.id) ?? "";
+    assert.ok(handoff.length > 19000);
+    assert.match(handoff, /END9/);
+  } finally { item.close(); }
+});
+
+test("reviewer stderr never reaches the public handoff", async () => {
+  const item = fixture();
+  try {
+    pullRequestBoard(item);
+    writeFileSync(join(item.dir, "fake-pi"), "#!/bin/sh\necho SECRET-MARKER >&2\nexit 3\n");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi")).tick();
+    const handoff = item.board.autoReviewHandoff(current.run.id) ?? "";
+    assert.match(handoff, /stopped before a verdict/);
+    assert.doesNotMatch(handoff, /SECRET-MARKER/);
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /SECRET-MARKER/, "raw diagnostics stay local");
+  } finally { item.close(); }
+});
+
 test("on a pull-request board the reviewer is told that no pull request exists yet", async () => {
   const item = fixture();
   try {

@@ -793,6 +793,38 @@ test("checks: only the newest run of each check counts, and cancelled checks are
   assert.equal(trimFailedLog(log), "DB test coverage: add a test\n##[error]Process completed with exit code 1.");
 });
 
+test("github-pr: a draft PR failing CI is not sent back until it is marked ready", async () => {
+  const f = fixture();
+  const started: string[] = [];
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => { started.push(card.id); });
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    const done = new Date(Date.now() - 1000).toISOString();
+    // Mergify fails its merge protection because CI skipped every job on the draft.
+    const rollup = [
+      { __typename: "CheckRun", name: "Mergify Merge Protections", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done },
+      { __typename: "CheckRun", name: "ci-heavy", workflowName: "CI", status: "COMPLETED", conclusion: "SKIPPED", startedAt: done, completedAt: done },
+    ];
+    const comments = f.comments().length;
+    f.setPrs([{ ...pr, isDraft: true, headRefOid: pushed, statusCheckRollup: rollup }]);
+    await sync.syncBoard(f.repoBoard.id);
+    let current = f.board.getCard(card.id)!;
+    assert.deepEqual(started, []);
+    assert.equal(current.ciReworks, 0);
+    assert.equal(current.reviewWait, null);
+    assert.match(current.prError ?? "", /draft PR.*mark the PR ready/);
+    assert.equal(f.comments().length, comments, "nothing is posted on the draft");
+
+    f.setPrs([{ ...pr, isDraft: false, headRefOid: pushed, statusCheckRollup: rollup }]);
+    await sync.syncBoard(f.repoBoard.id);
+    current = f.board.getCard(card.id)!;
+    assert.deepEqual(started, [card.id], "once ready, the failure goes back to the agent as usual");
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: a PR failing CI goes back to the agent with the failures, once per pushed commit", async () => {
   const f = fixture();
   const promptFile = join(f.dir, "prompt.txt");

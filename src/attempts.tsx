@@ -121,7 +121,7 @@ export function AttemptList({
   return (
     <div className="mt-8">
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">
+        <h3 className="text-sm font-semibold text-muted-foreground">
           Attempts
         </h3>
         {runs.length > 0 && (

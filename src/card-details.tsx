@@ -421,7 +421,7 @@ export function CardDetails({
             )}
           </div>
           <DialogDescription className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="rounded bg-primary/10 px-2 py-1 uppercase tracking-wider text-primary">
+            <span className="rounded bg-primary/10 capitalize px-2 py-1 text-primary">
               {card?.status}
             </span>{" "}
             <span title={card?.repo}>
@@ -629,7 +629,7 @@ export function CardDetails({
                       aria-label="Agent review progress"
                       className="mt-6 rounded-md border border-border bg-accent/10 px-4 py-3 text-sm"
                     >
-                      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      <div className="text-sm font-semibold text-muted-foreground">
                         Agent review
                       </div>
                       <p className="mt-1 whitespace-pre-line leading-6 text-foreground/80">
@@ -1636,9 +1636,7 @@ function LiveStatus({ run, turns }: { run: Run; turns: number }) {
       className="mt-6 rounded-md border border-border bg-accent/10 px-4 py-3 text-sm"
     >
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <span className="font-semibold uppercase tracking-wider">
-          Working now
-        </span>
+        <span className="font-semibold">Working now</span>
         <span>
           {elapsed} · {turns} {turns === 1 ? "turn" : "turns"}
         </span>
@@ -1874,9 +1872,7 @@ function RunReport({
       />
       {plan && (
         <div className="mt-4 border-t border-border pt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Plan
-          </h4>
+          <h4 className="text-sm font-semibold text-muted-foreground">Plan</h4>
           {"error" in plan ? (
             <p className="mt-2 text-sm text-destructive">{plan.error}</p>
           ) : (
@@ -1922,7 +1918,7 @@ function RunReport({
       )}
       {items.length > 0 && (
         <div className="mt-4 border-t border-border pt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h4 className="text-sm font-semibold text-muted-foreground">
             Follow-ups
           </h4>
           <ul className="mt-2 space-y-2">

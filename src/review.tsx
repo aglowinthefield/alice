@@ -127,7 +127,7 @@ export function ReviewPanel({
       className="mt-8 border-t border-border pt-5"
     >
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">
+        <h3 className="text-sm font-semibold text-muted-foreground">
           Review diff
         </h3>
         <div className="flex items-center gap-2">
@@ -262,7 +262,7 @@ export function ReviewPanel({
           aria-label="Review feedback"
           className="mt-6 border-t border-border pt-4"
         >
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h4 className="text-sm font-semibold text-muted-foreground">
             Review feedback
           </h4>
           <ul className="mt-3 space-y-2">

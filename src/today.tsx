@@ -71,7 +71,7 @@ export function Today({
   const spent = boards.reduce((sum, board) => sum + (board.cost24h ?? 0), 0);
   return (
     <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
+      <div className="mb-2 text-sm text-muted-foreground">
         {new Date().toLocaleDateString([], {
           weekday: "long",
           month: "long",
@@ -137,10 +137,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   const id = `today-${title.toLowerCase().replace(/\W+/g, "-")}`;
   return (
     <section aria-labelledby={id} className="mt-10">
-      <h2
-        id={id}
-        className="mb-3 text-[11px] font-semibold uppercase tracking-[.18em] text-muted-foreground"
-      >
+      <h2 id={id} className="mb-3 text-sm font-semibold text-muted-foreground">
         {title}
       </h2>
       {children}

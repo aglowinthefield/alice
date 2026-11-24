@@ -217,10 +217,22 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
   return { state, refresh, key, render };
 }
 
-function openUrl(url) {
-  const child = spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { detached: true, stdio: "ignore" });
+/**
+ * Opens `url` in the browser: `$BROWSER` when set, else the platform's opener. Returns false when there is nothing to
+ * open it with (no display over SSH), so the caller can rely on the printed URL instead.
+ */
+export function openUrl(url) {
+  const browser = process.env.BROWSER?.trim();
+  const headless = process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+  if (!browser && headless) return false;
+  const [command, args] = browser ? [browser, [url]]
+    : process.platform === "darwin" ? ["open", [url]]
+    : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]]
+    : ["xdg-open", [url]];
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
   child.on("error", () => {});
   child.unref();
+  return true;
 }
 
 /** Runs the TUI on this terminal until q or Ctrl-C, refreshing the board every 2 seconds. */

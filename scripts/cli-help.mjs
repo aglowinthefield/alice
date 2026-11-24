@@ -35,6 +35,12 @@ export const COMMANDS = [
     details: "Arrow keys or j/k move between cards, enter opens one, o opens it in the browser and ? lists every key. s starts a run, x stops one, a approves, r and t move between Ready and Triage. Paid runs and merges ask first. Refreshes every 2 seconds; q quits.",
   },
   {
+    name: "open", group: "Cards", args: "[CARD_ID]", summary: "open the board, or a card, in the browser",
+    full: "[CARD_ID] [--board ID|PATH] [--print] [--json]",
+    details: "CARD_ID may be the 8-character ID the other commands print. Uses $BROWSER when set, else the system's opener, and always prints the URL; with no display (over SSH) it only prints. With several boards and none chosen, it opens Bakery's home page.",
+    options: [["--print", "print the URL without opening it"], BOARD, JSON_OUT],
+  },
+  {
     name: "show", group: "Cards", args: "CARD_ID", summary: "a card with its dependencies, attempts and review",
     full: "CARD_ID [--board ID|PATH] [--json]",
     details: "Prints the card with its dependencies, dependents, attempts and latest auto-review.",

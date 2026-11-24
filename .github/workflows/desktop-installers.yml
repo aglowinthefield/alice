@@ -1,7 +1,14 @@
 name: Desktop installers
 
 on:
+  # Pull requests build installers only for desktop changes. Pushes to main also build when dependencies change.
+  pull_request:
+    paths:
+      - .github/workflows/desktop-installers.yml
+      - desktop/**
+      - src-tauri/**
   push:
+    branches: [main]
     paths:
       - .github/workflows/desktop-installers.yml
       - desktop/**

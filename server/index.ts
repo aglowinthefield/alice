@@ -1,4 +1,5 @@
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
+import { featureOffMessage, type Feature } from "../src/features.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -144,13 +145,21 @@ const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.reviewFingerprint(card), github, undefined, "ci-fix")));
+// Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
+const features = board.features;
+/** Routes that belong to one optional feature; with it off they are refused before any handler runs. */
+const featureRoutes: [Feature, RegExp][] = [
+  ["sentinels", /^\/api\/(boards\/[\w-]+\/sentinels|sentinels\/[\w-]+(\/(runs|run))?)$/],
+  ["pullRequests", /^\/api\/boards\/[\w-]+\/(pull-requests(\/\d{1,9}\/merge)?|sync|local-merges|main\/reset|cards\/[\w-]+\/(pull-request|publish|pr-draft))$/],
+];
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
-const runLocks = new RunLocks(board, prLocks, sentinelStore, process.env.BAKERY_SENTINEL !== "0");
+const sentinelsOn = board.features.sentinels && process.env.BAKERY_SENTINEL !== "0";
+const runLocks = new RunLocks(board, prLocks, sentinelStore, sentinelsOn);
 // Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or BAKERY_DISCORD_WEBHOOK_URL when Settings has none.
 new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.BAKERY_DISCORD_WEBHOOK_URL);
 const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
-  card => worker.start(card, "manual", "by Bakery's sentinel"), 15_000, process.env.BAKERY_SENTINEL !== "0");
+  card => worker.start(card, "manual", "by Bakery's sentinel"), 15_000, sentinelsOn);
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -250,6 +259,8 @@ const server = createServer(async (req, res) => {
       // The dev proxy preserves the public Host, which can differ from the internal listening port.
       if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
+    const disabled = featureRoutes.find(([feature, pattern]) => !features[feature] && pattern.test(path));
+    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled[0], error: featureOffMessage(disabled[0]) }); return; }
     if (path === "/api/status" && req.method === "GET") {
       // The cards behind the runs still going, so the update notice can say what it is waiting for.
       const cardIds = new Set<string>();
@@ -258,7 +269,7 @@ const server = createServer(async (req, res) => {
         for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
       return;
     }
     if (path === "/api/update" && req.method === "POST") {
@@ -449,6 +460,7 @@ const server = createServer(async (req, res) => {
       }
       if ("autoPullRequestEnabled" in input) {
         if (Object.keys(input).length !== 1 || typeof input.autoPullRequestEnabled !== "boolean") throw new Error("Update autoPullRequestEnabled as a boolean, separately from other board settings");
+        if (input.autoPullRequestEnabled && !features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
         if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
         send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
@@ -850,10 +862,12 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPullRequest.start(); autoPickup.start(); telemetry.start(); githubSync.start(); if (process.env.BAKERY_SENTINEL !== "0") sentinel.start(); pullFeed.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start();
+  if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
   if (updates) {
-    updates.refresh();
-    updateTimer = setInterval(() => updates.refresh(), 30_000);
+    void updates.poll();
+    // UI-only updates install on their own; ones that restart the server wait for the button.
+    updateTimer = setInterval(() => void updates.poll(), 30_000);
   }
   // Starts queued while the previous server drained for a restart.
   for (const cardId of board.takeQueuedStarts()) {

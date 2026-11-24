@@ -3,9 +3,9 @@ import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
 const board = { id: "board-one", repo: resolve("/tmp/bakery-project"), autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
@@ -75,7 +75,7 @@ async function fixture(boards: object[] = [board]) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
   const runAt = async (url: string, cwd: string | undefined, ...args: string[]) => {
-    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: url } });
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: url, FORCE_COLOR: "", NO_COLOR: "" } });
     let stdout = "", stderr = "";
     for await (const chunk of child.stdout) stdout += chunk;
     for await (const chunk of child.stderr) stderr += chunk;
@@ -413,7 +413,8 @@ test("create --after and depend/undepend manage card dependencies through the HT
     assert.match((await f.run("cards", "--after", "card-one")).stderr, /--after is only valid with create/);
     assert.match((await f.run("create", "--title", "x", "--on", "card-one")).stderr, /--on is only valid with depend or undepend/);
     assert.match((await f.run("create", "--title", "x", "--after", "../evil")).stderr, /card ID/);
-    assert.match((await f.run("--help")).stdout, /--after CARD_ID/);
+    assert.match((await f.run("help", "create")).stdout, /--after CARD_ID/);
+    assert.match((await f.run("create", "--help")).stdout, /--after CARD_ID/);
   } finally { await f.close(); }
 });
 
@@ -422,7 +423,7 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
   try {
     const result = await f.run("doctor");
     assert.equal(result.code, 1, "a board whose repository is missing fails the run");
-    assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(1 board\)/m);
+    assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(local, 1 board\)/m);
     assert.match(result.stdout, /^FAIL\tboard \/nonexistent\/bakery-doctor\trepository path does not exist/m);
     // pi, gh and Worktrunk may be missing on the machine running the tests, so count the failures instead of fixing them at 1.
     const failed = result.stdout.split("\n").filter(line => line.startsWith("FAIL\t")).length;
@@ -454,8 +455,40 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
   } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 
-test("doctor fails the server check when Bakery is not running", async () => {
-  const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: "http://127.0.0.1:1", BAKERY_PI_BIN: "bakery-no-such-pi" } });
+test("doctor ends with INFO rows for the CLI's BAKERY_* variables and the server's settings, hiding secrets", async () => {
+  const { doctor, report } = await import(new URL("../scripts/doctor.mjs", import.meta.url).href);
+  const checks = await doctor({
+    env: { BAKERY_URL: "mochi", BAKERY_DISCORD_WEBHOOK_URL: "https://discord.example/hook/secret", PATH: "/usr/bin" },
+    origin: new URL("http://mochi:4317"), local: false,
+    fetchBoards: async () => [],
+    fetchStatus: async () => ({ version: "1.2.3", hostname: "mochi", activeRuns: 2, draining: true, features: { sentinels: false, pullRequests: true } }),
+    fetchSettings: async () => ({ agentModels: { work: { model: "claude", thinking: "high" }, review: { model: "", thinking: "" } }, telemetryAvailable: true, telemetryEnabled: false, discordWebhookUrl: "https://discord.example/hook/secret" }),
+    cliPath: "/opt/bakery/scripts/bakery-cli.mjs",
+  });
+  const lines = report(checks);
+  const info = lines.filter((line: string) => line.startsWith("INFO\t"));
+  assert.deepEqual(info, [
+    "INFO\tcli path\t/opt/bakery/scripts/bakery-cli.mjs",
+    "INFO\tenv BAKERY_DISCORD_WEBHOOK_URL\tset (hidden)",
+    "INFO\tenv BAKERY_URL\tmochi",
+    "INFO\tserver host\tmochi",
+    "INFO\tserver features\tsentinels off, pullRequests on",
+    "INFO\tserver runs\t2 active, draining for an update",
+    "INFO\tserver models\twork claude (high), review default",
+    "INFO\tserver telemetry\toff",
+    "INFO\tserver discord\twebhook set",
+  ]);
+  assert.ok(!lines.some((line: string) => line.includes("secret")), "secret values never print");
+  assert.equal(lines.at(-1), "2 passed, 0 warnings, 0 failed", "INFO rows stay out of the count");
+  assert.ok(!(await doctor({ env: {}, origin: new URL("http://127.0.0.1:1"), local: false, fetchBoards: async () => { throw new Error("down"); } })).some((check: { name: string }) => check.name.startsWith("server ")), "no server rows when it is unreachable");
+});
+
+test("doctor fails the server check when Bakery is not running", async t => {
+  // An unreadable PATH directory makes a missing binary fail with EACCES, not ENOENT; it must still read as not found.
+  const locked = mkdtempSync(join(tmpdir(), "bakery-locked-path-"));
+  chmodSync(locked, 0o000);
+  t.after(() => { chmodSync(locked, 0o700); rmSync(locked, { recursive: true, force: true }); });
+  const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, PATH: `${locked}${delimiter}${process.env.PATH}`, BAKERY_URL: "http://127.0.0.1:1", BAKERY_PI_BIN: "bakery-no-such-pi" } });
   let stdout = "";
   for await (const chunk of child.stdout) stdout += chunk;
   const code = await new Promise<number | null>(resolve => child.once("close", resolve));
@@ -496,7 +529,7 @@ test("doctor starts with the CLI version, and adds the server's against a remote
   if (!lan) return;
   const stub = createServer((req, res) => {
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : []));
+    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/srv/remote-only" }]));
   });
   await new Promise<void>(resolve => stub.listen(0, "0.0.0.0", resolve));
   try {
@@ -507,5 +540,43 @@ test("doctor starts with the CLI version, and adds the server's against a remote
     const lines = stdout.split("\n");
     assert.match(lines[0], /^PASS\tbakery-cli\t\d+\.\d+\.\d+/);
     assert.equal(lines[1], "PASS\tbakery server\t9.8.7 (abc1234)");
+    assert.equal(lines[2], `PASS\tserver\thttp://${lan}:${port} (remote, 1 board)`, "the instance comes right after the versions");
+    assert.ok(lines.some(line => line.startsWith(`PASS\tboard ${lan}:/srv/remote-only\t`)), "a remote board's path names its host");
   } finally { await new Promise<void>(resolve => stub.close(() => resolve())); }
+});
+
+test("help lists every command the CLI runs, and renders plain off a terminal", async () => {
+  const { COMMANDS, commandHelp, overview, suggest } = await import(new URL("../scripts/cli-help.mjs", import.meta.url).href);
+  const source = readFileSync(cli, "utf8");
+  const expected = source.match(/const expected = \{([^}]*)\}/)![1];
+  const variadic = source.match(/const variadic = \[([^\]]*)\]/)![1];
+  const handled = new Set([...expected.matchAll(/"?([a-z][a-z-]*)"?:/g), ...variadic.matchAll(/"([a-z-]+)"/g)].map(m => m[1]).concat("pickup", "help"));
+  assert.deepEqual([...handled].sort(), COMMANDS.map((item: { name: string }) => item.name).sort());
+  assert.doesNotMatch(overview("1.0.0"), /\x1b\[|⣿|b a k e r y/, "no banner or colour when piped");
+  for (const item of COMMANDS) assert.match(commandHelp(item.name)!, new RegExp(`bakery-cli ${item.name}`));
+  assert.equal(suggest("crate"), "create");
+  assert.equal(suggest("zzzzzzzz"), undefined);
+});
+
+test("a terminal gets aligned, coloured columns; a pipe keeps the tabs", async () => {
+  const { layout } = await import(new URL("../scripts/cli-style.mjs", import.meta.url).href);
+  const before = process.env.FORCE_COLOR;
+  process.env.FORCE_COLOR = "1";
+  try {
+    const [a, b, plain] = layout(["card-one\ttriage\tpriority:high\tFirst", "c2\tdone\tpriority:normal\tSecond", "no tabs here"]);
+    const strip = (s: string) => s.replace(/\x1b\[[\d;]*m/g, "");
+    assert.equal(strip(a), "card-one  triage  priority:high    First");
+    assert.equal(strip(b), "c2        done    priority:normal  Second");
+    assert.match(b, /\x1b\[32mdone/);
+    assert.equal(plain, "no tabs here");
+  } finally { if (before === undefined) delete process.env.FORCE_COLOR; else process.env.FORCE_COLOR = before; }
+});
+
+test("an unknown command suggests the nearest one", async () => {
+  const f = await fixture();
+  try {
+    const result = await f.run("crate");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Unknown command: crate\. Did you mean create\?/);
+  } finally { await f.close(); }
 });

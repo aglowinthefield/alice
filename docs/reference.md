@@ -29,6 +29,7 @@ flowchart LR
 - [Reviewing and merging](#reviewing-and-merging)
 - [GitHub pull request mode](#github-pull-request-mode)
 - [Sentinels](#sentinels)
+- [Optional features](#optional-features)
 - [Watching a run](#watching-a-run)
 - [Automation (opt-in)](#automation-opt-in)
 - [CLI](#cli)
@@ -102,7 +103,7 @@ stateDiagram-v2
 ```
 
 - **A finished run only reaches Review.** Only your approval, or unattended review, moves a card to Done.
-- **Stop** and the 30-minute timeout both end a run as Failed.
+- **Stop** and the 60-minute run timeout both end a run as Failed.
 - **Close without merging** moves a Review card to Done after a confirmation, or from the CLI with `bakery-cli close CARD_ID`. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
 - **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
 - **Retries reuse the card's worktree and Pi session**, so Pi continues where it left off.
@@ -177,6 +178,8 @@ In the repository's settings, **Push main to origin after merging** (local-merge
 
 ## GitHub pull request mode
 
+Off unless `BAKERY_FEATURE_PULL_REQUESTS=1` (see [Optional features](#optional-features)).
+
 A board integrates either locally, where Approve merges into local `main`, or through GitHub pull requests, where a card is Done only when its PR has merged on GitHub and the merge commit is on `origin/main`.
 
 The default depends on the repository. When you give a board a GitHub remote link (`https://github.com/OWNER/REPO`), Bakery asks GitHub whether `main` accepts direct pushes: `gh api repos/OWNER/REPO/rules/branches/main` for rulesets, then `gh api repos/OWNER/REPO/branches/main/protection` for branch protection. If a ruleset requires a pull request or a merge queue, or branch protection requires pull request reviews, the board switches to **GitHub pull requests**. Otherwise it stays **Local merge**. The board's settings show what Bakery found.
@@ -198,7 +201,7 @@ What changes in this mode:
 - **Linking a PR.** Bakery finds a card's PR by its `bakery/<card>` branch. If your branch naming differs, attach the PR link on the card, or run `bakery-cli pr CARD_ID URL` (`off` clears it). A linked PR is only watched; Bakery doesn't push to it.
 - **Polling.** About once a minute per board, Bakery makes one `gh pr list` call for the board's Review cards:
   - **Open:** the card stays in Review and shows the PR number and checks state. The button becomes **Approve and update PR #N**, which pushes new reviewed work to that PR.
-  - **Open with failing CI:** once the failed checks have finished (and the rest have too, or 10 minutes have passed), Bakery sends the card back to Pi with each failed check's name, link, and the tail of its `gh run view --log-failed` log. When the fix run reaches Review, the next sync pushes it to the same PR without waiting for Approve, unless you've left review comments on it. Runs you start yourself still wait for Approve, and the PR still needs its normal review to merge. Each pushed commit is sent back once, only when the card worktree is clean and holds that commit, and at most 3 times per card; after that the card shows why it stopped. Cancelled and action-required checks are shown but not sent back, and only the newest run of each check counts. If CI passes before the fix run starts, the failures are dropped. A linked PR (one Bakery doesn't push to) is never sent back.
+  - **Open with failing CI:** once the failed checks have finished (and the rest have too, or 10 minutes have passed), Bakery sends the card back to Pi with each failed check's name, link, and the tail of its `gh run view --log-failed` log. When the fix run reaches Review, the next sync pushes it to the same PR without waiting for Approve, unless you've left review comments on it. Runs you start yourself still wait for Approve, and the PR still needs its normal review to merge. Each pushed commit is sent back once, only when the card worktree is clean and holds that commit, and at most 3 times per card; after that the card shows why it stopped. Cancelled and action-required checks are shown but not sent back, and only the newest run of each check counts. If CI passes before the fix run starts, the failures are dropped. A linked PR (one Bakery doesn't push to) is never sent back. Neither is a draft PR, since many repositories skip CI on drafts; the card says so, and marking the PR ready lets the next sync send it back.
   - **Merged:** Bakery fetches `origin` and checks that the merge commit is an ancestor of `origin/main`. If it is, the card moves to Done and the merge is recorded. If not yet, the card stays in Review and Bakery checks again next time.
   - **Closed without merging:** the card goes to Needs you with the reason.
 - **Cleanup.** After a card is Done, Bakery removes its worktree and local branch (with `wt remove` when Worktrunk is installed). Squash merges aren't ancestors of the branch, so the branch is force-deleted, but only after GitHub has confirmed the merge.
@@ -231,6 +234,8 @@ Publishing doesn't touch local `main`. Once every local commit on `main` is a Ba
 
 ## Sentinels
 
+Off unless `BAKERY_FEATURE_SENTINELS=1` (see [Optional features](#optional-features)).
+
 A sentinel is a persistent monitor, not a card. It never enters Triage, Ready, Running, Review or Done, is never reviewed or merged, and is not counted in lane counts, Today or SDLC stats. A pull-request board has two, listed under **Sentinels** in the sidebar:
 
 - **Broken pull requests** looks every 5 minutes (`BAKERY_SENTINEL_MS`) for open PRs by the repository owner that conflict with main or fail CI.
@@ -241,6 +246,25 @@ Each has instructions (added to every job's brief), a schedule, an enabled or pa
 What a sentinel finds becomes an ordinary job card, linked back by sentinel, run and a stable finding key (`pr:<number>` for a broken PR). The card runs on the usual worker, with the same logs, usage and budget, and Bakery pushes its result to the PR branch itself, so Approve, merge and auto-review do not apply to it. While a finding's card is open, later runs add no second card for it. Once that card is Done and the PR is still broken (a new head or main), the next run makes a new card, up to three per PR. Finishing a card never completes or pauses its sentinel. A run only one process can hold at a time, and a run cut off by a restart is marked interrupted.
 
 Jobs made before sentinels had records are linked to their sentinel on first start, keeping their ids, status, PR locks and any running agent. The link is made in one transaction and is safe to repeat.
+
+## Optional features
+
+Sentinels and GitHub pull requests are optional and **off by default**. Each has its own switch, and the two are independent:
+
+| Switch | Turns on |
+| --- | --- |
+| `BAKERY_FEATURE_SENTINELS=1` | Sentinels: the Sentinels page, their routes and their background scheduler. |
+| `BAKERY_FEATURE_PULL_REQUESTS=1` | GitHub pull request mode: the Pull requests page, the Integration mode choice, publishing, automatic pull requests, GitHub sync and polling. |
+
+Unset, empty or `0` means off; any other value is an error. Set the switch both when you build the UI and when you start the server, because the UI has it compiled in and the server reads it at start (`/api/status` reports what the server runs with). For example, `BAKERY_FEATURE_PULL_REQUESTS=1 npm run build && BAKERY_FEATURE_PULL_REQUESTS=1 BAKERY_SERVE_UI=1 npm start`; for a service, put both in its environment and in the environment of `scripts/update.sh`. `src/features.ts` is the one definition both sides read.
+
+With a feature off:
+
+- Its screens, navigation and settings are not shown, its routes answer `404` with `code: "feature_off"` and the switch to set, its timers never start, and it needs no configuration (`gh` included).
+- Stored data is kept, not deleted. A board set to GitHub pull requests reads as Local while pull requests are off, and goes back to its stored mode when you turn them on; sentinels, their runs and their job cards come back the same way.
+- Cards, runs, local review and Local merge work as usual.
+- Bakery never falls back to merging locally when the board needs a pull request. If the board is set to GitHub pull requests, or `main` on GitHub only accepts them and you haven't chosen Local merge, Approve is refused with a message saying so; set the switch or choose Local merge in the board's settings.
+- Sentinels need only a GitHub remote link on the board, not pull request mode, so with only Sentinels on they watch boards that merge locally too. A stored sync error is kept but ignored (it does not pause automatic pickup) while pull requests are off.
 
 ## Watching a run
 
@@ -324,7 +348,7 @@ npm run bakery -- board [--integration local|github-pr] [--merge-limit 0-99]
 npm run bakery -- pr CARD_ID [URL|off]
 ```
 
-- `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. Against a non-loopback `BAKERY_URL` it checks only the server and boards, since tools and paths are on the server's machine. `--json` prints the checks.
+- `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. The server line comes right after the versions and says which instance you reached and whether it's local or remote. Against a non-loopback `BAKERY_URL` it checks only the server and boards, since tools and paths are on the server's machine, and names each board `<host>:<path>`. After the checks come `INFO` rows that never pass or fail: the CLI's path, every `BAKERY_*` variable the CLI sees (names containing `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `WEBHOOK` or `ENDPOINT` print as `set (hidden)`), and what the server reports about itself: host, build features, active runs, agent models, telemetry and whether a Discord webhook is set. A remote server's own environment variables stay on its machine. `--json` prints the checks.
 - `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body` and `--priority` as `create`.
 - Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
@@ -340,7 +364,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
 - `board [--integration local|github-pr] [--merge-limit 0-99]` shows the board, switches its integration mode, or sets its unattended-merge limit. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
-- To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get a `bakery-cli` command on your `PATH`, run `npm link`.
+- To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get `bakery-cli` (and its shorter alias `bakery`) on your `PATH`, run `npm link`. `bakery-cli help` lists the commands, and `bakery-cli help COMMAND` shows one command's options. On a terminal the output is laid out in coloured columns (`NO_COLOR` turns the colour off); piped, it stays tab-separated.
 
 ## Boards and lanes
 
@@ -412,7 +436,7 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `npm start` has no file watcher. `deploy/bakery-update.service` and `deploy/bakery-update.timer` run `scripts/update.sh` every 2 minutes, which only fetches `origin/main`. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
 
-When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI into `dist-next`). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Until then it keeps serving the UI that matches its own API; the restarted server moves `dist-next` over `dist`. While no run or review is active, it installs pending updates by itself within 30 seconds. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
+When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI into `dist-next`). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Until then it keeps serving the UI that matches its own API; the restarted server moves `dist-next` over `dist`. When every pending change is UI-only (under `src/`, `public/` or `index.html`, outside the modules the server imports, plus tests and docs), the server installs them by itself within 30 seconds of the fetch (the button reads **Update interface** if you get there first): it swaps the new build over `dist` at once without draining or restarting, keeps the old build's chunks so open pages still work, and open pages offer **Reload**. Updates that need a restart install only when you ask. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
 
 ## Safety
 

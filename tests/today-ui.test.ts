@@ -120,7 +120,7 @@ test("review queue walks Review cards oldest first and moves on once a card leav
 
 // Resolves after the page has polled the card lists twice since now, so a change made to `state` was seen.
 const polled = async (page: Page, requests: { method: string; path: string }[]) => {
-  const count = () => requests.filter(item => item.method === "GET" && /\/cards$/.test(item.path)).length;
+  const count = () => requests.filter(item => item.method === "GET" && item.path.endsWith("/cards")).length;
   const start = count();
   for (let waited = 0; count() < start + 2; waited += 100) {
     assert.ok(waited < 10000, "the page polled the cards");

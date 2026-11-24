@@ -5,6 +5,8 @@
 #   scripts/update.sh install  fast-forward main, npm install, build the UI into dist-next. The server runs this,
 #                              then drains active runs and exits so the service manager restarts it on the new code.
 #                              The new server moves dist-next over dist, so the old one serves the matching old UI.
+#                              When every change is UI-only, the running server moves dist-next over dist at once
+#                              and keeps running (see server/updates.ts).
 #                              It also runs when only local merges (approved cards) moved main, so the fast-forward
 #                              is skipped when main already contains origin/main.
 set -euo pipefail

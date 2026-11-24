@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chromium } from "playwright";
+import { chromium, type Locator, type Page } from "playwright";
 import { createServer } from "vite";
+
+/**
+ * Press Escape once the confirm dialog owns it. React focuses Cancel (autoFocus) before Radix registers the dialog's
+ * dismiss layer, so for a few renders the card dialog underneath is still the top layer and an Escape closes the card.
+ * Radix turns pointer events off on every lower dialog in the same commit that hands the Escape listener over.
+ */
+async function escapeConfirm(page: Page, confirm: Locator) {
+  const top = await confirm.elementHandle();
+  await page.waitForFunction(el => (el as HTMLElement).style.pointerEvents === "auto"
+    && [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].every(dialog => dialog === el || dialog.style.pointerEvents === "none"), top);
+  await page.keyboard.press("Escape");
+}
 
 test("the card lists its attachments with image thumbnails and download links for other files", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
@@ -162,9 +174,7 @@ test("deleting an attachment asks first: Cancel or Escape keeps it, Delete remov
     await confirm.waitFor();
     // Cancel has focus, so a stray Enter cannot delete.
     assert.equal(await confirm.getByRole("button", { name: "Cancel" }).evaluate(el => el === document.activeElement), true);
-    // Radix attaches its Escape listener a tick after the dialog shows, so retry on a loaded machine. Retry only while
-    // the dialog is still open: during its closing animation it stays visible, and a second Escape would close the card.
-    for (let i = 0; i < 20 && await confirm.getAttribute("data-state", { timeout: 1_000 }).catch(() => null) === "open"; i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(100); }
+    await escapeConfirm(page, confirm);
     await confirm.waitFor({ state: "hidden" });
     await page.waitForTimeout(200);
     assert.deepEqual(deleted, [], "Cancel and Escape send no delete request");
@@ -230,9 +240,7 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
     await purge.click();
     await confirm.waitFor();
     assert.equal(await confirm.getByRole("button", { name: "Cancel" }).evaluate(el => el === document.activeElement), true);
-    // Radix attaches its Escape listener a tick after the dialog shows, so retry on a loaded machine. Retry only while
-    // the dialog is still open: during its closing animation it stays visible, and a second Escape would close the card.
-    for (let i = 0; i < 20 && await confirm.getAttribute("data-state", { timeout: 1_000 }).catch(() => null) === "open"; i++) { await page.keyboard.press("Escape"); await page.waitForTimeout(100); }
+    await escapeConfirm(page, confirm);
     await confirm.waitFor({ state: "hidden" });
     await page.waitForTimeout(200);
     assert.deepEqual(purges, [], "Cancel and Escape send no purge request");

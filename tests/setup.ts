@@ -7,6 +7,10 @@ import { posixShell } from "../server/platform.js";
 // environment carries Bakery's own remote-hosting settings, which would bind the test server to another address.
 delete process.env.BAKERY_HOST;
 delete process.env.BAKERY_ALLOWED_HOSTS;
+// Optional features are off in a default build (src/features.ts). Most tests cover them, so the suite turns them on;
+// tests/features.test.ts sets each combination itself.
+process.env.BAKERY_FEATURE_SENTINELS ??= "1";
+process.env.BAKERY_FEATURE_PULL_REQUESTS ??= "1";
 
 // Loaded by `npm test` before every test file. Playwright waits 30s by default for a locator that never appears,
 // and a UI test can wait several times, so one missing element stalled the suite for minutes. A wait that takes

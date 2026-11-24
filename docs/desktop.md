@@ -56,6 +56,8 @@ npm run desktop:build
 
 Installers appear under `src-tauri/target/release/bundle/`. For an unbundled debug executable, use `npm run desktop:build -- --debug --no-bundle`. Production distribution still requires platform signing and macOS notarization.
 
+To keep a Mac's `/Applications/Bakery.app` current with `origin/main`, run `scripts/install-desktop.sh`. It rebuilds and reinstalls the app only when `src-tauri/` or `desktop/` changed since its last install, and it builds in a temporary worktree so your checkout is untouched. `scripts/install-desktop.sh --launchd` installs a launchd job that runs it every hour and logs to `~/Library/Logs/bakery-desktop-update.log`. A running app keeps its old code until you quit and reopen it.
+
 ## Test Windows or Apple Silicon from a headless server
 
 The `Desktop installers` GitHub Actions workflow runs the Rust tests and builds installers on each target OS. It uploads each installer as an artifact for 14 days. It does not publish a release or require signing secrets. A successful build does not verify desktop interactions.

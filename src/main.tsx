@@ -1,13 +1,6 @@
 import { BrandIcon } from "./brand-icon";
 import { sharedCaches } from "../server/shared-caches.js";
-import {
-  Fragment,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type FormEvent,
-} from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   CircleCheck,
@@ -75,6 +68,8 @@ import { PullRequests } from "./pull-requests.js";
 import { Visualizer } from "./visualizer/visualizer.js";
 import { ChatView } from "./chat.js";
 import { Sentinels, isSentinelJob } from "./sentinels.js";
+import { features } from "./build-features.js";
+import { featureOffMessage } from "./features.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
@@ -91,7 +86,7 @@ import {
 } from "./repo-appearance.js";
 import {
   describeRemote,
-  supportsPullRequests,
+  supportsPullRequests as hasGithubRemote,
   type RemoteHost,
 } from "./remote-link.js";
 import {
@@ -130,7 +125,6 @@ import {
 import { SettingsPage } from "./settings.js";
 import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
-import { themeNames, themes } from "./themes.js";
 import { UpdateNotice } from "./update-notice.js";
 import { ConfirmHost, confirmAction } from "./confirm.js";
 
@@ -330,6 +324,11 @@ function ChatUnreadBadge({
   );
 }
 
+/** Pull request screens and links need the feature in this build and a GitHub remote for `gh`. */
+const supportsPullRequests = (board: { remoteUrl?: string }) =>
+  features.pullRequests && hasGithubRemote(board);
+const supportsSentinels = (board: { remoteUrl?: string }) =>
+  features.sentinels && hasGithubRemote(board);
 /** Sentinel jobs running or queued to start, shown beside the Sentinels entry. */
 function SentinelsBadge({ count }: { count: number }) {
   const label = `${count} sentinel ${count === 1 ? "job" : "jobs"} in progress`;
@@ -658,10 +657,10 @@ export function App() {
     if (initialRoute) return initialRoute.view;
     const saved = readTab("bakery-view") ?? localStorage.getItem("bakery-view");
     return saved === "board" ||
-      saved === "pulls" ||
+      (saved === "pulls" && features.pullRequests) ||
       saved === "visualizer" ||
       saved === "chat" ||
-      saved === "sentinels" ||
+      (saved === "sentinels" && features.sentinels) ||
       saved === "stats" ||
       saved === "logs" ||
       saved === "settings"
@@ -1071,8 +1070,8 @@ export function App() {
     open: (next) => {
       if (next === "today") openToday();
       else if (next === "stats" || next === "logs") openPage(next);
-      else if (boardId)
-        next === "pulls" ? openPulls(boardId) : openBoard(boardId);
+      else if (boardId && next === "pulls") openPulls(boardId);
+      else if (boardId) openBoard(boardId);
     },
     create: () => setCreating(true),
   };
@@ -1853,7 +1852,7 @@ export function App() {
                       <Workflow size={13} aria-hidden="true" /> Visualizer
                     </button>
                   )}
-                  {open && supportsPullRequests(item) && (
+                  {open && supportsSentinels(item) && (
                     <button
                       onClick={() => openSentinels(item.id)}
                       aria-current={sentinelsActive ? "page" : undefined}
@@ -2041,7 +2040,7 @@ export function App() {
       {view === "sentinels" &&
         boardId &&
         currentBoard &&
-        supportsPullRequests(currentBoard) && (
+        supportsSentinels(currentBoard) && (
           <main className="page-fade min-w-0 flex-1">
             <header className="border-b border-border px-6 py-6 lg:px-10">
               <h1 className="text-[27px] font-semibold tracking-[-.05em]">
@@ -2095,7 +2094,7 @@ export function App() {
           (view === "chat" && !!currentBoard) ||
           (view === "sentinels" &&
             !!currentBoard &&
-            supportsPullRequests(currentBoard)) ||
+            supportsSentinels(currentBoard)) ||
           view === "stats" ||
           view === "logs" ||
           view === "settings" ||
@@ -2385,6 +2384,45 @@ export function App() {
             </Button>
           </div>
         )}
+        {!features.pullRequests &&
+          (currentBoard?.integrationConfigured === "github-pr" ||
+            (currentBoard?.githubMainProtected &&
+              !currentBoard.integrationChosen)) && (
+            <div
+              role="alert"
+              data-testid="pull-requests-off-notice"
+              className="mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm lg:mx-10"
+            >
+              <span className="min-w-0 break-words">
+                <strong>Approve is unavailable here:</strong>{" "}
+                {currentBoard.integrationConfigured === "github-pr"
+                  ? "this board is set to GitHub pull requests"
+                  : "main on GitHub only accepts pull requests"}
+                , and pull requests are turned off in this build, so Bakery will
+                not merge into local main instead.{" "}
+                {featureOffMessage("pullRequests")} You can also keep Local
+                merge for this board.
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  const target = currentBoard;
+                  void action(async () => {
+                    updateBoard(
+                      await api<Board>(`/boards/${target.id}/settings`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ integration: "local" }),
+                      }),
+                    );
+                  });
+                }}
+              >
+                Keep Local merge
+              </Button>
+            </div>
+          )}
         {currentBoard?.integration === "github-pr" &&
           (currentBoard.integrationError ||
             currentBoard.integrationWarning) && (
@@ -2733,19 +2771,19 @@ export function App() {
                           </div>
                         </div>
                       )}
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         {laneCards.map((item) => {
                           const activity = cardActivity(item);
                           const content = (
                             <>
-                              <div className="flex items-start justify-between gap-2 empty:hidden [&:has(>span:empty)]:hidden mb-2">
+                              <div className="flex items-start justify-between gap-2 empty:hidden [&:has(>span:empty)]:hidden mb-1.5">
                                 <span className="flex flex-wrap items-center gap-1.5">
                                   {item.blocked && (
                                     <WaitingBadge
                                       waiting={waitingOn(item, cards)}
                                     />
                                   )}
-                                  {item.prNumber && (
+                                  {features.pullRequests && item.prNumber && (
                                     <PullRequestBadge
                                       card={item}
                                       onOpen={
@@ -2771,11 +2809,22 @@ export function App() {
                                     card={item}
                                     activity={activity}
                                   />
+                                  {item.status === "failed" &&
+                                    item.failureSummary && (
+                                      <span
+                                        data-testid="failure-summary"
+                                        title="Why the latest attempt failed. Open the card for the full error."
+                                        className="flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-500"
+                                      >
+                                        <CircleX size={10} aria-hidden />
+                                        {item.failureSummary}
+                                      </span>
+                                    )}
                                   {!!item.autoRetries && (
                                     <span
                                       data-testid="auto-retry"
                                       title="Automatic pickup retries a run that failed on a temporary provider or network error, at most 3 times"
-                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-500"
+                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-amber-500"
                                     >
                                       <RotateCcw size={10} aria-hidden />
                                       Retry {item.autoRetries}/3
@@ -2788,7 +2837,7 @@ export function App() {
                                     <span
                                       data-testid="attempt-count"
                                       title={reworkSummary(item)}
-                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-500"
+                                      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-amber-500"
                                     >
                                       <RotateCcw size={10} aria-hidden />
                                       {item.attempts} attempts
@@ -2796,7 +2845,7 @@ export function App() {
                                   )}
                                 </span>
                               </div>
-                              <div className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground">
+                              <div className="line-clamp-2 text-[13px] font-medium leading-[1.3] text-foreground">
                                 {item.title}
                               </div>
                               {(() => {
@@ -2815,7 +2864,7 @@ export function App() {
                                 )
                                   return null;
                                 return (
-                                  <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                                  <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
                                     {body}
                                   </p>
                                 );
@@ -2826,7 +2875,7 @@ export function App() {
                                 <div className="mt-2 flex flex-wrap gap-1">
                                   {item.planOnly && (
                                     <span
-                                      className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+                                      className="rounded border border-border px-1.5 py-px text-[11px] leading-4 font-medium text-muted-foreground"
                                       title="This run produced a plan, not code"
                                     >
                                       Plan
@@ -2848,9 +2897,9 @@ export function App() {
                                     )}
                                 </div>
                               )}
-                              <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-muted-foreground">
+                              <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] tabular-nums text-muted-foreground">
                                 <span className="flex min-w-0 items-center gap-1 truncate">
-                                  <GitBranch size={11} className="shrink-0" />{" "}
+                                  <GitBranch size={10} className="shrink-0" />{" "}
                                   {repoName(item.repo)}
                                 </span>
                                 <span
@@ -2861,7 +2910,7 @@ export function App() {
                                       : "Completed Pi turns across all attempts"
                                   }
                                 >
-                                  <Clock3 size={11} />{" "}
+                                  <Clock3 size={10} />{" "}
                                   {item.turnsIncomplete
                                     ? item.turns
                                       ? `~${item.turns}`
@@ -2880,7 +2929,7 @@ export function App() {
                             </>
                           );
                           const cardClass =
-                            "group block w-full rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+                            "group block w-full rounded-lg border bg-card px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
                           if (selecting) {
                             const checked = laneSelection.has(item.id);
                             return (
@@ -2890,7 +2939,7 @@ export function App() {
                               >
                                 <input
                                   type="checkbox"
-                                  className="absolute top-3 right-3 size-4 accent-primary"
+                                  className="absolute top-2 right-3 size-4 accent-primary"
                                   aria-label={`Select ${item.title}`}
                                   checked={checked}
                                   onChange={() => toggleLaneSelection(item.id)}
@@ -2947,7 +2996,7 @@ export function App() {
                               className={`${cardClass} card-activity border-border/80 ${targets.length > 0 ? "cursor-grab active:cursor-grabbing" : ""} data-[dragging]:opacity-50 data-[new]:border-primary data-[new]:ring-2 data-[new]:ring-primary/60`}
                             >
                               {newCardIds.has(item.id) && (
-                                <span className="mb-1 inline-block rounded-sm bg-primary px-2 py-px text-[10px] font-semibold uppercase tracking-[.1em] text-primary-foreground">
+                                <span className="mb-1 inline-block rounded-sm bg-primary px-1.5 py-px text-[11px] leading-4 font-semibold text-primary-foreground">
                                   New
                                 </span>
                               )}
@@ -3244,51 +3293,61 @@ export function App() {
           {editingBoard && (
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Integration</div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Local: Approve merges the card into local main. GitHub pull
-                requests: Approve pushes bakery/&lt;card&gt; and opens a PR with
-                gh; the card is Done once the PR merges and the merge is on
-                origin/main. Local main is then only fast-forwarded to
-                origin/main. Needs gh signed in and a GitHub remote link. When a
-                GitHub remote is set, Bakery picks GitHub pull requests if main
-                only accepts pull requests.
-              </p>
-              <label className="mt-4 block text-xs">
-                Integration mode
-                <select
-                  aria-label="Integration mode"
-                  value={editingBoard.integration ?? "local"}
-                  disabled={busy}
-                  onChange={(event) => {
-                    const integration = event.target.value;
-                    void action(async () => {
-                      const updated = await api<Board>(
-                        `/boards/${editingBoard.id}/settings`,
-                        {
-                          method: "PATCH",
-                          body: JSON.stringify({ integration }),
-                        },
-                      );
-                      setBoards((previous) =>
-                        previous.map((item) =>
-                          item.id === updated.id ? updated : item,
-                        ),
-                      );
-                      setEditingBoard(updated);
-                    });
-                  }}
-                  className="mt-2 block w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
-                >
-                  <option value="local">Local merge</option>
-                  <option value="github-pr">GitHub pull requests</option>
-                </select>
-              </label>
-              {editingBoard.integrationNote && (
+              {!features.pullRequests && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Approve merges the card into local main.
+                </p>
+              )}
+              {features.pullRequests && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Local: Approve merges the card into local main. GitHub pull
+                  requests: Approve pushes bakery/&lt;card&gt; and opens a PR
+                  with gh; the card is Done once the PR merges and the merge is
+                  on origin/main. Local main is then only fast-forwarded to
+                  origin/main. Needs gh signed in and a GitHub remote link. When
+                  a GitHub remote is set, Bakery picks GitHub pull requests if
+                  main only accepts pull requests.
+                </p>
+              )}
+              {features.pullRequests && (
+                <label className="mt-4 block text-xs">
+                  Integration mode
+                  <select
+                    aria-label="Integration mode"
+                    value={editingBoard.integration ?? "local"}
+                    disabled={busy}
+                    onChange={(event) => {
+                      const integration = event.target.value;
+                      void action(async () => {
+                        const updated = await api<Board>(
+                          `/boards/${editingBoard.id}/settings`,
+                          {
+                            method: "PATCH",
+                            body: JSON.stringify({ integration }),
+                          },
+                        );
+                        setBoards((previous) =>
+                          previous.map((item) =>
+                            item.id === updated.id ? updated : item,
+                          ),
+                        );
+                        setEditingBoard(updated);
+                      });
+                    }}
+                    className="mt-2 block w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
+                  >
+                    <option value="local">Local merge</option>
+                    <option value="github-pr">GitHub pull requests</option>
+                  </select>
+                </label>
+              )}
+              {features.pullRequests && editingBoard.integrationNote && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   {editingBoard.integrationNote}
                 </p>
               )}
-              {editingBoard.githubMainProtected &&
+              {features.pullRequests &&
+                editingBoard.githubMainProtected &&
                 !editingBoard.integrationChosen &&
                 (editingBoard.integration ?? "local") === "local" && (
                   <Button
@@ -3317,7 +3376,7 @@ export function App() {
                     Keep Local merge
                   </Button>
                 )}
-              {editingBoard.integrationError && (
+              {features.pullRequests && editingBoard.integrationError && (
                 <p role="alert" className="mt-2 text-xs text-destructive">
                   {editingBoard.integrationError}
                 </p>
@@ -3442,11 +3501,13 @@ export function App() {
                   </span>
                 </label>
               )}
-              <LocalMerges
-                boardId={editingBoard.id}
-                integration={editingBoard.integration ?? "local"}
-                onChanged={refresh}
-              />
+              {features.pullRequests && (
+                <LocalMerges
+                  boardId={editingBoard.id}
+                  integration={editingBoard.integration ?? "local"}
+                  onChanged={refresh}
+                />
+              )}
             </div>
           )}
           {pickupBoard && (
@@ -4136,7 +4197,7 @@ function PullRequestBadge({
       ]
         .filter(Boolean)
         .join(" \u00b7 ")}
-      className={`rounded border px-2 py-0.5 font-mono text-[10px] font-medium ${tone}`}
+      className={`rounded border px-1.5 py-px font-mono text-[11px] leading-4 font-medium ${tone}`}
     >
       PR #{card.prNumber}
       {card.prChecks && card.prState === "OPEN"
@@ -4154,7 +4215,7 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
           ? "The merge commit is on origin/main, as of the last fetch"
           : "Merged into local main only; origin/main did not have it at the last fetch. Push main to publish it"
       }
-      className={`rounded border px-2 py-0.5 text-[10px] font-medium ${
+      className={`rounded border px-1.5 py-px text-[11px] leading-4 font-medium ${
         state === "pushed"
           ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
           : "border-amber-500/40 bg-amber-500/10 text-amber-500"
@@ -4176,7 +4237,7 @@ function ActivityBadge({
     return (
       <span
         data-testid="activity-badge"
-        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+        className="flex items-center gap-1 rounded border border-border px-1.5 py-px text-[11px] leading-4 font-medium text-muted-foreground"
       >
         <CirclePause size={10} aria-hidden />
         Interrupted
@@ -4186,7 +4247,7 @@ function ActivityBadge({
     return (
       <span
         data-testid="activity-badge"
-        className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+        className="flex items-center gap-1 rounded border border-border px-1.5 py-px text-[11px] leading-4 font-medium text-muted-foreground"
       >
         {activity === "working" ? (
           <LoaderCircle size={10} className="animate-spin" aria-hidden />
@@ -4207,7 +4268,7 @@ function ActivityBadge({
               ? "The run's changes are ready for you to review and approve"
               : "Ready for your review"
         }
-        className="flex items-center gap-1 rounded border border-status-review bg-status-review px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] text-background"
+        className="flex items-center gap-1 rounded border border-status-review bg-status-review px-1.5 py-px text-[11px] leading-4 font-semibold text-background"
       >
         <Eye size={10} aria-hidden />
         {reviewActionText(card) || "Your turn"}
@@ -4221,7 +4282,7 @@ function ActivityBadge({
     <span
       data-testid="activity-badge"
       title="The agent has reported nothing for a while. A long command can be quiet; check the attempt log if it stays quiet."
-      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500"
+      className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[11px] leading-4 font-medium text-amber-500"
     >
       <CirclePause size={10} aria-hidden />
       Quiet {minutes}m
@@ -4234,7 +4295,7 @@ function WaitingBadge({ waiting }: { waiting: Card[] }) {
     <span
       data-testid="waiting-badge"
       title={`Starts after ${waiting.map((item) => item.title).join(", ")} ${waiting.length === 1 ? "is" : "are"} Done`}
-      className="rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[.1em] text-sky-500"
+      className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-px text-[11px] leading-4 font-medium text-sky-500"
     >
       Waiting on {waiting.length}
     </span>

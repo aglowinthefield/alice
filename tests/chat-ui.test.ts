@@ -108,6 +108,7 @@ function controlledPage(focused: boolean) {
   w.focused = focused;
   document.hasFocus = () => w.focused;
   const streams = new Set<{ onopen?: () => void; onerror?: () => void }>();
+  // oxlint-disable-next-line unicorn/no-useless-spread -- copies the set because the loop deletes from it
   w.dropStreams = () => { for (const stream of [...streams]) { streams.delete(stream); stream.onerror?.(); } };
   w.EventSource = class {
     onopen?: () => void; onerror?: () => void; onmessage?: (event: { data: string }) => void;

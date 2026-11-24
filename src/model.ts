@@ -21,6 +21,8 @@ export type Board = {
   remoteUrl?: string;
   /** local: Approve merges into local main. github-pr: Approve opens a PR; Done once it merges on GitHub. */
   integration?: "local" | "github-pr";
+  /** What is stored: "github-pr" while pull requests are off in this build, where `integration` reads "local". */
+  integrationConfigured?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
   /** A sync problem Bakery is retrying (a failed fetch); pickup is not paused. */
@@ -249,6 +251,8 @@ export type Card = {
   startQueued?: boolean;
   /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
   attachmentCount?: number;
+  /** A Failed card's reason in a few words; the latest attempt's error has the full text. */
+  failureSummary?: string | null;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
   /** Automatic retries (of 3) spent after temporary provider failures since the card's last successful run. */

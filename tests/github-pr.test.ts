@@ -575,7 +575,7 @@ test("github-pr: a failing pre-push hook's stdout and stderr both reach the erro
     const integration = new Integration(f.board, f.data);
     const pending = integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
     assert.equal(integration.pushProgress(card.id)?.finishedAt, null, "progress exists while the push runs");
-    await assert.rejects(pending, (error: Error) => error instanceof PushHookError && /^push failed: the repository's pre-push hook refused it\.\n\n/.test(error.message) && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
+    await assert.rejects(pending, (error: Error) => error instanceof PushHookError && error.message.startsWith("push failed: the repository's pre-push hook refused it.\n\n") && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
     const progress = integration.pushProgress(card.id)!;
     assert.match(progress.step, /^Pushing bakery\//, "the failed step is the push");
     assert.ok(progress.log.includes("SETTINGS_TAB_IDS  settingsTabs.ts:9:14"));
@@ -791,6 +791,38 @@ test("checks: only the newest run of each check counts, and cancelled checks are
   assert.deepEqual(fixableFailures(mixed).map(check => check.name), ["lint"]);
   const log = "CI\tCheck\t\uFEFF2026-10-27T14:18:49.5588276Z ##[group]Run node check.ts\nCI\tCheck\t2026-10-27T14:18:51.5173558Z \u001b[36;1mDB test coverage: add a test\u001b[0m\nCI\tCheck\t2026-10-27T14:18:51.5231714Z ##[error]Process completed with exit code 1.\n";
   assert.equal(trimFailedLog(log), "DB test coverage: add a test\n##[error]Process completed with exit code 1.");
+});
+
+test("github-pr: a draft PR failing CI is not sent back until it is marked ready", async () => {
+  const f = fixture();
+  const started: string[] = [];
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => { started.push(card.id); });
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    const done = new Date(Date.now() - 1000).toISOString();
+    // Mergify fails its merge protection because CI skipped every job on the draft.
+    const rollup = [
+      { __typename: "CheckRun", name: "Mergify Merge Protections", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done },
+      { __typename: "CheckRun", name: "ci-heavy", workflowName: "CI", status: "COMPLETED", conclusion: "SKIPPED", startedAt: done, completedAt: done },
+    ];
+    const comments = f.comments().length;
+    f.setPrs([{ ...pr, isDraft: true, headRefOid: pushed, statusCheckRollup: rollup }]);
+    await sync.syncBoard(f.repoBoard.id);
+    let current = f.board.getCard(card.id)!;
+    assert.deepEqual(started, []);
+    assert.equal(current.ciReworks, 0);
+    assert.equal(current.reviewWait, null);
+    assert.match(current.prError ?? "", /draft PR.*mark the PR ready/);
+    assert.equal(f.comments().length, comments, "nothing is posted on the draft");
+
+    f.setPrs([{ ...pr, isDraft: false, headRefOid: pushed, statusCheckRollup: rollup }]);
+    await sync.syncBoard(f.repoBoard.id);
+    current = f.board.getCard(card.id)!;
+    assert.deepEqual(started, [card.id], "once ready, the failure goes back to the agent as usual");
+  } finally { f.cleanup(); }
 });
 
 test("github-pr: a PR failing CI goes back to the agent with the failures, once per pushed commit", async () => {

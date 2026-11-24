@@ -13,7 +13,7 @@ import { githubMarkdown } from "./github-markdown.js";
 
 export type PullRequest = {
   number: number; url: string; state: "OPEN" | "CLOSED" | "MERGED"; mergedAt: string | null;
-  mergeCommit: { oid: string } | null; headRefName: string; headRefOid?: string;
+  mergeCommit: { oid: string } | null; headRefName: string; headRefOid?: string; isDraft?: boolean;
   statusCheckRollup?: Check[];
 };
 /** One entry of `statusCheckRollup`: a CheckRun (name, workflowName) or a commit StatusContext (context). */
@@ -27,10 +27,10 @@ export type RepoPullRequest = {
   author?: { login?: string } | null; createdAt?: string; mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
   labels?: { name: string; color?: string }[]; assignees?: { login: string }[]; additions?: number; deletions?: number; reviewDecision?: string | null; checks?: string | null;
 };
-const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,statusCheckRollup";
+const prFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,isDraft,statusCheckRollup";
 // statusCheckRollup is expensive: across 200 PRs on a busy repo GitHub's GraphQL API times out (HTTP 504).
 // The batched list leaves it out; checks are fetched per open PR instead.
-const listFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid";
+const listFields = "number,url,state,mergedAt,mergeCommit,headRefName,headRefOid,isDraft";
 
 type Exec = { stdout: string; stderr: string };
 function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promise<Exec> {
@@ -140,6 +140,8 @@ export function trimFailedLog(log: string, maxLines = 60, maxChars = 4000): stri
     .filter(line => line && !/^##\[(group|endgroup)\]/.test(line));
   return lines.slice(-maxLines).join("\n").slice(-maxChars);
 }
+
+const draftCi = "CI is failing on a draft PR. Bakery doesn't send drafts back for CI fixes; mark the PR ready for review and it will.";
 
 /** Most automatic CI fix runs per card. After that a failing PR waits for the operator. */
 export const maxCiReworks = 3;
@@ -631,6 +633,9 @@ export class GitHubSync {
     if (!this.rework || card.prOverrideUrl || !head) return {};
     // CI is re-running or went green (a label added, say) before the fix run started: those failures are stale.
     if (!failures.length) { this.board.dropCiFeedback(card.id); return {}; }
+    // Repositories often skip CI on drafts, so a draft's red checks (a merge protection waiting on a skipped job,
+    // say) are not something a code change can fix. Leave it to the person who marks it ready.
+    if (pr.isDraft) return { error: draftCi };
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} has failing CI: ${failures.map(check => check.name || check.context || "a check").join(", ").slice(0, 200)} (reworks ${card.ciReworks}/${maxCiReworks})`);
     const limit = `CI is failing after ${maxCiReworks} automatic fix runs. Fix it in the card worktree and run again, or push to the PR yourself.`;
     if (card.ciReworkSha === head) {

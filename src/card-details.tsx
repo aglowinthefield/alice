@@ -22,7 +22,7 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { followUps } from "./follow-ups.js";
-import { parsePlan, type Subtask } from "./plan.js";
+import { parsePlan } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
 import {
@@ -33,7 +33,6 @@ import {
   type BakerySettings,
   type Card,
   type MergeConflict,
-  type Priority,
   type ReviewComment,
   type ReviewDiff,
   type Run,
@@ -835,9 +834,10 @@ export function CardDetails({
                     className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm"
                   >
                     <strong>
-                      {runs[0].failureKind
-                        ? "Provider request failed"
-                        : "Run failed"}
+                      {card.failureSummary ??
+                        (runs[0].failureKind
+                          ? "Provider request failed"
+                          : "Run failed")}
                     </strong>
                     <p className="mt-1 text-destructive">{runs[0].error}</p>
                     <p className="mt-2 text-xs text-muted-foreground">

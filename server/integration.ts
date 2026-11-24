@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +24,8 @@ function gitCommand(repo: string, args: string[], index?: string, raw = false, m
 }
 function git(repo: string, ...args: string[]): string { return gitCommand(repo, args); }
 /** What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies. */
-export type ReviewSummary = { fingerprint: string; paths: string[]; patchChars: number | null; unsupported: boolean };
+/** `work` names the reviewed run and its tree. Unlike `fingerprint`, it ignores where local main is. */
+export type ReviewSummary = { fingerprint: string; work: string; paths: string[]; patchChars: number | null; unsupported: boolean };
 export type ReviewDiff = { fingerprint: string; files: { path: string; patch: string }[] };
 export class IntegrationConflictError extends Error {
   readonly code = "merge_conflict";
@@ -141,10 +142,48 @@ export class PushError extends Error {
 export class PushHookError extends PushError {
   constructor(error: PushError, readonly sha: string) { super(error.message, error.output, true); }
 }
+/** The repository's pre-commit or commit-msg hook refused the commit Bakery made of the card's work, so nothing was committed. */
+export class CommitHookError extends Error {
+  constructor(message: string, readonly output: string) { super(message); }
+}
 
-export function pushBranch(cwd: string, refspec: string, onLine: (line: string, replace: boolean) => void): Promise<void> {
+/** Kills a child started with `detached`, and what it started, such as a hook's test run. */
+function killGroup(child: ChildProcess) {
+  if (child.pid === undefined || child.exitCode !== null) return;
+  try { if (process.platform === "win32") child.kill(); else process.kill(-child.pid, "SIGTERM"); }
+  catch { child.kill(); }
+}
+
+/** Git without blocking the server, for commands that run hooks. Rejects with the end of their output; aborting kills them. */
+function gitAsync(cwd: string, args: string[], signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", cwd, "push", "--progress", "origin", refspec], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    if (signal.aborted) { reject(new Error("Cancelled")); return; }
+    const child = spawn("git", ["-C", cwd, ...args], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, detached: process.platform !== "win32" });
+    let stdout = "", output = "";
+    const abort = () => killGroup(child);
+    signal.addEventListener("abort", abort, { once: true });
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); output = (output + chunk.toString()).slice(-8000); });
+    child.stderr.on("data", (chunk: Buffer) => { output = (output + chunk.toString()).slice(-8000); });
+    child.on("error", error => { signal.removeEventListener("abort", abort); reject(error); });
+    child.on("close", code => {
+      signal.removeEventListener("abort", abort);
+      if (signal.aborted) reject(new Error("Cancelled"));
+      else if (code === 0) resolve(stdout.trim());
+      else reject(new Error(`${args.find(arg => !arg.includes("=") && arg !== "-c") ?? "git"} failed: ${output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim() || `exit code ${code}`}`));
+    });
+  });
+}
+
+/**
+ * `flags` go before the remote: `--dry-run` to run only the pre-push hook, `--no-verify` to skip it. Aborting
+ * `signal` kills Git and the hook it is running (their whole process group).
+ */
+export function pushBranch(cwd: string, refspec: string, onLine: (line: string, replace: boolean) => void, options: { flags?: string[]; signal?: AbortSignal } = {}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (options.signal?.aborted) { reject(new Error("Cancelled")); return; }
+    const child = spawn("git", ["-C", cwd, "push", "--progress", ...(options.flags ?? []), "origin", refspec], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, detached: !!options.signal && process.platform !== "win32" });
+    const abort = () => killGroup(child);
+    options.signal?.addEventListener("abort", abort, { once: true });
     const output: string[] = [];
     // Per stream: text not yet ended by a newline, and whether the next line redraws the last (after a bare \r).
     const state = { stdout: { pending: "", redraw: false }, stderr: { pending: "", redraw: false } };
@@ -166,7 +205,9 @@ export function pushBranch(cwd: string, refspec: string, onLine: (line: string, 
     child.stderr.on("data", read("stderr"));
     child.on("error", reject);
     child.on("close", code => {
+      options.signal?.removeEventListener("abort", abort);
       for (const stream of ["stdout", "stderr"] as const) if (state[stream].pending) emit(state[stream].pending, state[stream].redraw);
+      if (options.signal?.aborted) { reject(new Error("Cancelled")); return; }
       if (code === 0) { resolve(); return; }
       const detail = output.filter(line => line.trim()).join("\n") || `git push exited with code ${code}`;
       // The end of the output names the failing check; keep it when the output is long.
@@ -192,14 +233,14 @@ export class Integration {
   pushProgress(cardId: string): PushProgress | null { return this.progress.get(cardId) ?? null; }
 
   /** Runs `work` as a tracked push of `cardId`: steps and push output go to `pushProgress`, and so does the outcome. */
-  private async trackPush<T>(cardId: string, work: (step: (name: string) => void, push: (cwd: string, refspec: string) => Promise<void>) => Promise<T>): Promise<T> {
+  private async trackPush<T>(cardId: string, work: (step: (name: string) => void, push: (cwd: string, refspec: string, flags?: string[]) => Promise<void>) => Promise<T>): Promise<T> {
     const entry: PushProgress = { step: "Starting", log: [], startedAt: new Date().toISOString(), finishedAt: null, error: null };
     this.progress.set(cardId, entry);
     const step = (name: string) => { entry.step = name; };
-    const push = (cwd: string, refspec: string) => pushBranch(cwd, refspec, (line, replace) => {
+    const push = (cwd: string, refspec: string, flags?: string[]) => pushBranch(cwd, refspec, (line, replace) => {
       if (replace && entry.log.length) entry.log[entry.log.length - 1] = line; else entry.log.push(line);
       if (entry.log.length > progressLogLines) entry.log.splice(0, entry.log.length - progressLogLines);
-    });
+    }, { flags });
     try {
       const result = await work(step, push);
       entry.step = "Done";
@@ -250,7 +291,8 @@ export class Integration {
       gitCommand(worktree, ["add", "-A"], index);
       const tree = gitCommand(worktree, ["write-tree"], index);
       const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, base, tree })).digest("hex");
-      if (!includeFiles && !summary) return { fingerprint, tree, main, files: [] as ReviewDiff["files"], paths: [] as string[], patchChars: null as number | null, unsupported: false };
+      const work = `${run.id}:${tree}`;
+      if (!includeFiles && !summary) return { fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths: [] as string[], patchChars: null as number | null, unsupported: false };
       const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
       if (summary) {
         let patchChars: number | null = null;
@@ -262,7 +304,7 @@ export class Integration {
         // Binary files, symlinks and submodules need a person; modes and numstat show them without reading patches.
         const raw = paths.length ? gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--raw", "--numstat", "--no-color", base, tree], undefined, true, 64 * 1024 * 1024) : "";
         const unsupported = /^:(120000|160000) |^:\d+ (120000|160000) |^-\t-\t/m.test(raw);
-        return { fingerprint, tree, main, files: [] as ReviewDiff["files"], paths, patchChars, unsupported };
+        return { fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths, patchChars, unsupported };
       }
       if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Bakery");
       // One diff for every file, split at each header, instead of one git process per file. Git lists files
@@ -271,7 +313,7 @@ export class Integration {
       const patches = gitCommand(worktree, diffArgs, undefined, true).split(/^(?=diff --git )/m).filter(Boolean);
       const files = paths.map((path, i) => ({ path, patch: patches.length === paths.length ? patches[i].trim() : gitCommand(worktree, [...diffArgs, "--", path]) }));
       if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Bakery");
-      return { fingerprint, tree, main, files, paths, patchChars: null as number | null, unsupported: false };
+      return { fingerprint, work, tree, main, files, paths, patchChars: null as number | null, unsupported: false };
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }
 
@@ -298,10 +340,16 @@ export class Integration {
   // Cheap staleness check: the fingerprint alone, without building any patches.
   reviewFingerprint(card: Card): string { return this.snapshot(card, false).fingerprint; }
 
+  /** The fingerprint and the work it covers (run and tree), from one snapshot. */
+  reviewState(card: Card): { fingerprint: string; work: string } {
+    const { fingerprint, work } = this.snapshot(card, false);
+    return { fingerprint, work };
+  }
+
   /** Changed paths, and the patch size when `measureChars`, without the diff viewer's 200-file and 2 MB caps. */
   reviewSummary(card: Card, measureChars: boolean): ReviewSummary {
-    const { fingerprint, paths, patchChars, unsupported } = this.snapshot(card, false, { measureChars });
-    return { fingerprint, paths, patchChars, unsupported };
+    const { fingerprint, work, paths, patchChars, unsupported } = this.snapshot(card, false, { measureChars });
+    return { fingerprint, work, paths, patchChars, unsupported };
   }
 
   /** Notes how many files the card's reviewed run changes, so Review tiles can say Approve or Accept findings. Best effort. */
@@ -361,8 +409,10 @@ export class Integration {
    * title must pass the repository's semantic-PR check, when it has one, before anything is pushed.
    * `pushedBy` says who authorized the push, for the PR comment: the operator's Approve, an automatic CI fix, or
    * the agent reviewer's approval on a board with auto-review on. Only "operator" means a person reviewed it.
+   * `prechecked` waits for the hook check that started when the run reached Review (see `checkHooks`) and returns
+   * the commit whose pre-push hook passed, or null; pushing exactly that commit skips the hook.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator"): Promise<Card> {
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator", prechecked?: () => Promise<string | null>): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integrationConfigured === "github-pr" && !this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
@@ -371,6 +421,11 @@ export class Integration {
     return this.trackPush(card.id, async (step, push) => {
       step("Checking GitHub access");
       await github.check();
+      let passed: string | null = null;
+      if (prechecked) {
+        step("Waiting for the hook check that started when the run reached Review");
+        passed = await prechecked();
+      }
       const { repo, worktree, run } = this.location(card);
       if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
       if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
@@ -401,9 +456,10 @@ export class Integration {
         step(`Fast-forwarding the card worktree to origin/${branch}`);
         git(worktree, "merge", "--ff-only", "--quiet", `refs/remotes/origin/${branch}`);
       } else {
-        step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
+        const checked = passed === candidate;
+        step(checked ? `Pushing ${branch} (its pre-push hook already passed when the run reached Review)` : `Pushing ${branch} (the repository's pre-push hooks run first)`);
         // A plain push: if the branch on GitHub moved after the fetch, Git still refuses instead of overwriting it.
-        try { await push(worktree, `${candidate}:refs/heads/${branch}`); }
+        try { await push(worktree, `${candidate}:refs/heads/${branch}`, checked ? ["--no-verify"] : []); }
         catch (error) {
           if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
           // Origin's branch moved between the fetch and the push. Git refused rather than overwrite it; do not retry.
@@ -420,6 +476,40 @@ export class Integration {
       this.board.recordPullRequestPush(card.id, run.id);
       return this.board.getCard(card.id)!;
     });
+  }
+
+  /**
+   * Gets a github-pr card ready for Approve when its run reaches Review: commits the work on `bakery/<id>` as Approve
+   * would (the repository's pre-commit and commit-msg hooks run), then runs the pre-push hook on that commit with
+   * `git push --dry-run`, so nothing reaches origin. A refused commit throws `CommitHookError` and a refused pre-push
+   * hook `PushHookError`. "unchecked" means Git
+   * stopped the dry run for another reason (origin's branch moved, no network), so Approve runs the hook as before.
+   * A hook that rewrites files (a formatter) changes the diff under review, which then shows its changes.
+   */
+  async checkHooks(card: Card, signal: AbortSignal, step: (text: string) => void): Promise<{ candidate: string; state: "passed" | "unchecked"; detail: string }> {
+    const { worktree } = this.location(card);
+    await gitAsync(worktree, ["add", "-A"], signal);
+    if (await gitAsync(worktree, ["diff", "--cached", "--name-only"], signal)) {
+      await gitAsync(worktree, ["diff", "--cached", "--check"], signal);
+      step("Committing the card's work (the repository's pre-commit hooks run)");
+      try { await gitAsync(worktree, ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Identity and message are set above, so a failed commit here is the repository's commit hooks refusing it.
+        if (signal.aborted || !message.startsWith("commit failed: ")) throw error;
+        throw new CommitHookError(message, message.slice("commit failed: ".length));
+      }
+    }
+    if (!clean(worktree)) throw new Error("The card worktree has uncommitted changes after Bakery committed it; a hook may have changed files");
+    const candidate = git(worktree, "rev-parse", "HEAD");
+    step("Running the pre-push hook on that commit (git push --dry-run, nothing is pushed)");
+    try { await pushBranch(worktree, `${candidate}:refs/heads/bakery/${card.id}`, () => {}, { flags: ["--dry-run"], signal }); }
+    catch (error) {
+      if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
+      if (error instanceof PushError) return { candidate, state: "unchecked", detail: error.message };
+      throw error;
+    }
+    return { candidate, state: "passed", detail: "" };
   }
 
   /**
@@ -619,7 +709,7 @@ export class Integration {
     }
     return done;
   }
-  approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
+  approve(card: Card, reviewedFingerprint: string): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);
     // Pull requests are off in this build, so a board set to them has no safe way to deliver: never merge locally in their place.
@@ -631,8 +721,7 @@ export class Integration {
       throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, so merging into local main would leave it ahead of GitHub. Switch Integration to GitHub pull requests in the board's settings, or choose Local merge there to merge locally anyway`);
     const { repo, worktree, run } = this.location(card);
     const job = this.board.getAutoReviewJob(run.id);
-    if (job?.state === "running" && origin !== "auto") throw new Error("Agent review is in progress; wait for its result");
-    if (origin === "auto" && job?.state !== "running") throw new Error("Agent review is no longer active");
+    if (job?.state === "running") throw new Error("Agent review is in progress; wait for its result");
     if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
     if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
     if (git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
@@ -682,12 +771,8 @@ export class Integration {
         throw error;
       }
       const merged = git(scratch, "rev-parse", "HEAD");
-      if (origin === "auto" && !verifyMerged) throw new Error("Auto-review requires verification of the merged result");
-      verifyMerged?.(scratch);
-      if (!clean(scratch) || git(scratch, "rev-parse", "HEAD") !== merged) throw new Error("Verification changed the merged worktree");
       git(repo, "diff", "--check", base, merged);
       if (git(repo, "rev-parse", "main") !== base || gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true) !== localStatus) throw new Error("Main or its local changes changed during approval; retry before merging");
-      if (origin === "auto" && this.board.getAutoReviewJob(run.id)?.state !== "running") throw new Error("Agent review was interrupted before merge");
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
       git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.

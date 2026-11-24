@@ -102,7 +102,7 @@ stateDiagram-v2
   Done --> Archived: archive
 ```
 
-- **A finished run only reaches Review.** Only your approval, or unattended review, moves a card to Done.
+- **A finished run only reaches Review.** Only your approval, or a pull request opened by unattended review merging on GitHub, moves a card to Done.
 - **Stop** and the 60-minute run timeout both end a run as Failed.
 - **Close without merging** moves a Review card to Done after a confirmation, or from the CLI with `bakery-cli close CARD_ID`. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
 - **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
@@ -198,6 +198,7 @@ What changes in this mode:
 
 - **New card worktrees** start from a freshly fetched `origin/main`, not from the local checkout's `HEAD`.
 - **Approve and open PR** opens a dialog with a draft title and body to edit, then commits the reviewed changes on `bakery/<card>`, pushes that branch to `origin`, and runs `gh pr create` with them. Bakery appends a footer naming the card, plus the run summary. If the repository has a pull request template (`.github/PULL_REQUEST_TEMPLATE.md`, also at the root or in `docs/`) or a semantic-PR title check (an `amannn/action-semantic-pull-request` workflow, or `.github/semantic.yml`), Pi drafts the title and body from them, the card, the run output, and the diff. The drafting run has no tools and uses the board's review model. Otherwise the draft is the card title and description, and no agent runs. A title that fails the check's types or scopes is refused before anything is pushed. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it and leaves its title and body alone. `gh` errors appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization (or the agent reviewer's approval, with unattended review on). Bakery comments on the PR at each turning point: when it pushes an update (and whether a person approved it or it was an automatic CI fix), when it sends the card back for failing CI, and when it gives up after the fix-run limit. A CI fix run may also add or remove labels on its own PR, edit its description, and comment to explain why, for checks that a label or description line satisfies.
+- **Getting ready at Review.** When a run reaches Review, Bakery drafts the PR title and body and runs the repository's hooks on the work while you review it, so Approve only pushes. It commits the work on `bakery/<card>` (pre-commit and commit-msg hooks run), then runs the pre-push hook on that commit with `git push --dry-run`, which pushes nothing. It checks one card at a time per repository. If you approve exactly that commit, Bakery pushes with `--no-verify`. If the work changed since, or Bakery couldn't run the check, the hooks run on Approve as before. A hook that refuses the work at Review goes back to the implementer right away, as a refused push does, up to 2 times in a row; after that the card waits for you. A hook that rewrites files (a formatter) changes the diff under review. Boards with auto-review or automatic pull requests skip this, since they push at Review anyway. A new attempt stops a check that's still running.
 - **Linking a PR.** Bakery finds a card's PR by its `bakery/<card>` branch. If your branch naming differs, attach the PR link on the card, or run `bakery-cli pr CARD_ID URL` (`off` clears it). A linked PR is only watched; Bakery doesn't push to it.
 - **Polling.** About once a minute per board, Bakery makes one `gh pr list` call for the board's Review cards:
   - **Open:** the card stays in Review and shows the PR number and checks state. The button becomes **Approve and update PR #N**, which pushes new reviewed work to that PR.
@@ -299,25 +300,22 @@ The server starts Ready cards for you, highest priority first, then oldest first
 
 ### Unattended review
 
-Bakery reviews and merges finished cards without you. On a [GitHub pull request](#github-pull-request-mode) board it opens the PR instead of merging, and GitHub decides the merge.
+A separate Pi agent reviews finished cards without you. It never merges into local `main`: on a local board an approved card waits for your **Approve**, and on a [GitHub pull request](#github-pull-request-mode) board Bakery opens the PR and GitHub decides the merge.
 
 ```mermaid
 flowchart LR
-  A[Run reaches Review] --> B[Verification command<br/>on the card worktree]
-  B --> C[Separate Pi reviewer<br/>full tools, read-only by instruction]
-  C --> D[Verification command<br/>on the tentative merge]
-  D --> E[Fast-forward main]
-  B -. fails .-> H[Left for human review,<br/>with the reason]
-  C -. finding or unclear verdict .-> H
-  D -. fails or conflicts .-> H
+  A[Run reaches Review] --> C[Separate Pi reviewer<br/>runs the repo's checks itself]
+  C -- request_changes --> S[Sent back to the implementer<br/>at most twice]
+  C -- approve, local board --> H[Waits for your Approve]
+  C -- approve, pull-request board --> P[Pushes and opens the PR]
+  C -. needs a person or unclear verdict .-> H
 ```
 
-- It's set per repository. Open the repository's edit (pencil) dialog, enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
-- Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
+- It's set per repository. Open the repository's edit (pencil) dialog and enable it.
+- Bakery only considers runs that reach Review after you enable it.
 - Failed reviews aren't retried.
-- Each board has a limit on unattended merges per rolling 24 hours (0, the default, means no limit). Set it next to the toggle or with `bakery-cli board --merge-limit N`. Once it's reached, new cards wait in Review with the reason, and no verification or reviewer tokens are spent on them.
-- Turning the setting off stops a review in progress from merging or opening a PR.
-- The verification command runs locally with your permissions.
+- The reviewer reads the repository's `AGENTS.md`, `CLAUDE.md` and review instructions and runs the checks they ask for itself, instead of sending the card back for missing proof. Checks only a person can do, such as device runs, screenshots or staging access, leave the card for you.
+- Turning the setting off stops a review in progress from opening a PR.
 - The reviewer is a full Pi agent in the card's worktree, with the same tools, extensions, skills, and context files as a card run. It can read code and run builds or tests, and runs locally with your permissions. It's told not to change anything; if the work changes during review, the card is left for you.
 
 ## CLI
@@ -328,7 +326,8 @@ The CLI talks to the running server's HTTP API, so it goes through the same chec
 npm run bakery -- add fix the flaky login test [--priority 80]
 npm run bakery -- doctor
 npm run bakery -- boards
-npm run bakery -- cards
+npm run bakery -- cards [--all] [--watch]
+npm run bakery -- tui
 npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]...
 npm run bakery -- show CARD_ID
 npm run bakery -- depend CARD_ID --on CARD_ID
@@ -344,7 +343,7 @@ npm run bakery -- recover CARD_ID --yes
 npm run bakery -- runs CARD_ID
 npm run bakery -- conflicts
 npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
-npm run bakery -- board [--integration local|github-pr] [--merge-limit 0-99]
+npm run bakery -- board [--integration local|github-pr]
 npm run bakery -- pr CARD_ID [URL|off]
 ```
 
@@ -353,7 +352,8 @@ npm run bakery -- pr CARD_ID [URL|off]
 - Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
 - `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
-- `cards` prints each card's ID, status, attempt count, review rounds, and title.
+- `cards` on a terminal prints the board's lanes with the web board's badges (failure reason, Your turn, quiet, retries, PR). Archive and all but the 5 newest Done cards need `--all`; `--watch` redraws every 2 seconds. Piped, it prints one tab-separated line per card: ID, status, priority, attempt count, review rounds, and title.
+- `tui` is the board driven by keys: arrows or `j`/`k` move, `h`/`l` jump lanes, enter shows a card's latest attempt, `o` opens it in the browser and `?` lists every key. `s` starts or reruns, `x` stops, `a` approves, accepts findings or updates an open PR, `R` recovers, and `r`/`t` move between Ready and Triage. Paid runs, merges and stops ask for `y` first. Opening a new pull request needs its drafted title and body, so the TUI sends that to the browser.
 - `show` prints a card's title, status, repository, description, each attempt's status, agent and error, the latest auto-review verdict, and the cards it depends on and that depend on it, each with its status.
 - `create --after CARD_ID` makes the new card depend on that card. Repeat it for several. `depend` and `undepend` add or remove one dependency on an existing card. See [Dependencies](#dependencies).
 - `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.
@@ -363,7 +363,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
-- `board [--integration local|github-pr] [--merge-limit 0-99]` shows the board, switches its integration mode, or sets its unattended-merge limit. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
+- `board [--integration local|github-pr]` shows the board and switches its integration mode. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
 - To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get `bakery-cli` (and its shorter alias `bakery`) on your `PATH`, run `npm link`. `bakery-cli help` lists the commands, and `bakery-cli help COMMAND` shows one command's options. On a terminal the output is laid out in coloured columns (`NO_COLOR` turns the colour off); piped, it stays tab-separated.
 
 ## Boards and lanes
@@ -392,7 +392,7 @@ A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-c
 ## Server, data, and restarts
 
 - The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.
-- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, `BAKERY_PI_BIN` to use a different `pi` binary, and `BAKERY_WT_BIN` to use a different `wt` binary. Set `BAKERY_WT_BIN=` (empty) to turn off Worktrunk hooks. Paste a Discord channel webhook into Settings (or set `BAKERY_DISCORD_WEBHOOK_URL`, which applies when Settings has none) and Bakery posts a message when a run finishes: the card title and the run summary for a card ready for review, or the error for a failed run. Stopped runs are not posted. The URL is a secret: Settings hides it, and it must be a discord.com webhook. Set `BAKERY_TELEMETRY_ENDPOINT` to an OTLP/HTTP endpoint to show an opt-in Settings toggle for anonymous usage counts; nothing is sent without both. [docs/telemetry.md](telemetry.md) lists every field.
+- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, `BAKERY_PI_BIN` to use a different `pi` binary, and `BAKERY_WT_BIN` to use a different `wt` binary. Set `BAKERY_WT_BIN=` (empty) to turn off Worktrunk hooks. Paste a Discord channel webhook into Settings (or set `BAKERY_DISCORD_WEBHOOK_URL`, which applies when Settings has none) and Bakery posts a message when a run finishes: the card title and the run summary for a card ready for review, or the error for a failed run. Stopped runs are not posted. The URL is a secret: Settings hides it, and it must be a discord.com webhook. **Notify this browser when a card needs you** in Settings turns on Web Push for that browser: a notification when a card becomes your turn in Review (nothing else, such as the agent reviewer or GitHub CI, still holds it) or fails, even with no Bakery tab open. Clicking one opens the card. Each browser turns it on separately, it needs HTTPS or localhost (see [HTTPS on a tailnet](#https-on-a-tailnet)), and cards that already needed you are not replayed. Brave needs **Use Google services for push messaging** turned on (Settings → Privacy and security); without it, and in Chromium builds without Google services, subscribing fails with "push service error". The server checks every 10 seconds and keeps its push key in `push-vapid.json` in the data directory. Set `BAKERY_TELEMETRY_ENDPOINT` to an OTLP/HTTP endpoint to show an opt-in Settings toggle for anonymous usage counts; nothing is sent without both. [docs/telemetry.md](telemetry.md) lists every field. Set `BAKERY_METRICS=1` to serve Prometheus metrics on `/metrics` for your own scraper; [docs/metrics.md](metrics.md) lists them.
 - On Windows, Bakery finds `pi`, `wt` and `gh` through `PATH` and `PATHEXT`, and runs npm's `pi.cmd` shim as `node cli.js`. Repository paths can be `C:\\code\\app` or `~\\code\\app`. Data lives in `%USERPROFILE%\\.local\\share\\bakery`. A run's **Stop** ends Pi but not any processes Pi started. An auto-review verification command runs under `cmd.exe`, so write it for that shell.
 - Files attached to cards and discussion messages live in `<data dir>/attachments/<card id>/`. Clicking an image thumbnail opens it in a lightbox: the arrow keys, the side buttons or the thumbnail strip step through the other images in the same list, **Full size** shows the image at its natural size (scroll to pan), and **Open original** opens the file in a new tab. Cmd- or Ctrl-click on a thumbnail still opens the file in a new tab directly. Deleting an attachment removes its file. Archiving a card or removing its board keeps the files, because both can be undone. To reclaim the space, use **Purge attachments** on an archived card or `bakery-cli purge-attachments CARD_ID... --yes`. It deletes the card's folder and its attachment records, and it cannot be undone, even if you restore the card.
 - Agents keep evidence as attachments too. A work run's prompt tells the agent to save screenshots and other generated files with `bakery-cli attach CARD_ID FILE... --board ID` instead of reporting `/tmp` paths. The command reads each file as the agent's own user, uploads it through the normal attachment route (nothing leaves Bakery), and prints a markdown line such as `![before.png](/api/boards/…/cards/…/attachments/…)` to paste into the report. The report shows attached images inline and falls back to a link when a file is missing. Only Bakery's own attachment and chat-image URLs render as images; a local path in report text is never read. In a GitHub pull request body or comment, Bakery rewrites those relative links to plain text saying the file is kept in Bakery, because screenshots are never published to GitHub.
@@ -430,6 +430,16 @@ BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE
 
 `BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=mochi BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Like the desktop and iOS apps, an address without a scheme tries HTTPS, then HTTP, and one without a port uses 4317. Repository paths and merges are on the server's disk.
 
+### HTTPS on a tailnet
+
+Browsers only allow notifications, service workers and installing the page as an app on HTTPS or localhost, so a server reached at `http://<tailnet IP>:4317` can't use them. `tailscale serve` adds HTTPS with the tailnet's own certificate, reachable only from the tailnet:
+
+```sh
+tailscale serve --bg --https=443 http://<tailnet IP>:4317
+```
+
+Then open `https://<machine>.<tailnet>.ts.net`. Add that name to `BAKERY_ALLOWED_HOSTS`; Bakery accepts HTTPS origins for allowed hosts, so nothing else changes. Serve on a port Bakery isn't using: when `BAKERY_HOST` is the tailnet IP, `--https=4317` collides with Bakery's own listener on that IP and the TLS handshake fails. `tailscale serve status` lists what is served, and `tailscale serve --https=443 off` removes it. The plain HTTP address keeps working for the CLI and the apps.
+
 **Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u bakery`.
 
 ### Keeping a hosted server up to date
@@ -441,7 +451,7 @@ When the fetch brings new commits, a notice in the bottom-left corner says how m
 ## Safety
 
 - Pi is told not to commit, push, or publish during a run. **That instruction isn't a sandbox.** Only run agents on repositories you trust.
-- Verification commands for unattended review run with your permissions.
+- The unattended reviewer runs builds and tests with your permissions.
 - Every run, retry, pickup, and review can spend model tokens. Bakery records the tokens and cost Pi reports, but only a daily cost budget stops automatic pickup. Nothing stops a run that is already going.
 
 ## Development

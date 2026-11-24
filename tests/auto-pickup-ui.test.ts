@@ -13,7 +13,7 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
     const page = await browser.newPage();
     let board = { id: "board", repo: "/tmp/bakery", autoPickupEnabled: true, pickupConcurrency: 2,
       pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z" as string | null,
-      autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false, verificationCommand: "" };
+      autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false };
     let resets = 0, dialogs = 0;
     page.on("dialog", dialog => { dialogs++; void (dialogs === 1 ? dialog.dismiss() : dialog.accept()); });
     await page.route("**/api/**", async route => {

@@ -194,21 +194,16 @@ test("pickup enable needs consent; disable and concurrency changes use settings 
   } finally { await f.close(); }
 });
 
-test("board --merge-limit sets the unattended merge limit through the settings API and validates it", async () => {
+test("board shows the auto-review state, and the removed --merge-limit is refused", async () => {
   const f = await fixture();
   try {
-    assert.notEqual((await f.run("board", "--merge-limit", "100")).code, 0);
-    assert.notEqual((await f.run("board", "--merge-limit", "-1")).code, 0);
-    assert.notEqual((await f.run("stats", "--merge-limit", "3")).code, 0);
+    assert.notEqual((await f.run("board", "--merge-limit", "3")).code, 0);
     assert.equal(f.requests.filter(r => r.method === "PATCH").length, 0);
-    const set = await f.run("board", "--merge-limit", "3");
-    assert.equal(set.code, 0, set.stderr);
-    const cleared = await f.run("board", "--merge-limit", "0");
-    assert.equal(cleared.code, 0, cleared.stderr);
-    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ autoReviewMergeLimit: 3 }, { autoReviewMergeLimit: 0 }]);
+    const shown = await f.run("board");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /review:(on|off)/);
   } finally { await f.close(); }
 });
-
 test("pickup shows the rolling limit and requires consent to reset it", async () => {
   const f = await fixture();
   try {
@@ -578,5 +573,54 @@ test("an unknown command suggests the nearest one", async () => {
     const result = await f.run("crate");
     assert.equal(result.code, 1);
     assert.match(result.stderr, /Unknown command: crate\. Did you mean create\?/);
+  } finally { await f.close(); }
+});
+
+test("cards on a terminal show the board's lanes and badges; Archive and old Done cards need --all", async () => {
+  const { renderBoard } = await import(new URL("../scripts/cli-board.mjs", import.meta.url).href);
+  const now = Date.parse("2026-11-24T10:00:00Z");
+  const card = (id: string, status: string, extra: object = {}) => ({ id: `${id}-0000-0000`, title: `${id} card`, status, attempts: 1, ...extra });
+  const cards = [
+    card("parent", "ready"),
+    card("blocked", "ready", { blocked: true, dependsOn: ["parent-0000-0000"] }),
+    card("quiet", "running", { lastActivityAt: "2026-11-24T09:50:00Z" }),
+    card("busy", "running", { lastActivityAt: "2026-11-24T09:59:30Z", live: { tool: "bash", turn: 4, since: "" } }),
+    card("mine", "review", { prNumber: 12, prState: "OPEN", prChecks: "passing", reviewAction: "pr_ready" }),
+    card("agent", "review", { reviewWait: "agent_review", reviewQueue: { position: 2, of: 3 } }),
+    card("broken", "failed", { failureSummary: "Timed out: bash ran 31 min", attempts: 3 }),
+    card("cut", "interrupted"),
+    ...Array.from({ length: 7 }, (_, i) => card(`done${i}`, "done", { updatedAt: `2026-11-0${i + 1}` })),
+    card("old", "archived"),
+  ];
+  const strip = (lines: string[]) => lines.map(line => line.replace(/\x1b\[[\d;]*m/g, "")).join("\n");
+  const text = strip(renderBoard(cards, { width: 120, now }));
+  assert.match(text, /^Triage 0 {2}· {2}Ready 2 {2}· {2}Running 2 {2}· {2}Review 2 {2}· {2}Failed 2 {2}· {2}Done 7$/m);
+  assert.doesNotMatch(text, /▍Triage|old card|▍Archive/);
+  assert.match(text, /blocked- {2}blocked card {2}waiting on 1/);
+  assert.match(text, /quiet-00 {2}quiet card {2}quiet 10m/);
+  assert.match(text, /busy-000 {2}busy card {2}bash · turn 4/);
+  assert.match(text, /mine-000 {2}mine card {2}PR #12 · passing · PR ready/);
+  assert.match(text, /agent-00 {2}agent card {2}Waiting for agent review \(#2 of 3\)/);
+  assert.match(text, /▍Failed 2\n {2}broken-0 {2}broken card {2}Timed out: bash ran 31 min · 3 attempts\n {2}cut-0000 {2}cut card {2}interrupted/);
+  assert.match(text, /done6-00[^\n]*\n(.*\n){4} {2}… 2 more \(--all\)/);
+  assert.doesNotMatch(text, /done0 card/, "the oldest Done cards are left out");
+  const everything = strip(renderBoard(cards, { width: 120, now, all: true }));
+  assert.match(everything, /▍Archive 1\n {2}old-0000 {2}old card/);
+  assert.match(everything, /done0 card/);
+  const narrow = strip(renderBoard([card("long", "ready", { title: "x".repeat(200) })], { width: 60, now }));
+  assert.ok(narrow.split("\n").every(line => line.length <= 60), narrow);
+});
+
+test("cards --all and --watch are cards-only, and --watch needs a terminal", async () => {
+  const f = await fixture();
+  try {
+    const piped = await f.run("cards", "--watch");
+    assert.equal(piped.code, 1);
+    assert.match(piped.stderr, /--watch needs a terminal/);
+    const elsewhere = await f.run("stats", "--all");
+    assert.match(elsewhere.stderr, /--all and --watch are only valid with cards/);
+    const all = await f.run("cards", "--all");
+    assert.equal(all.code, 0);
+    assert.match(all.stdout, /^card-one\ttriage\t/m, "piped output keeps the tab-separated lines");
   } finally { await f.close(); }
 });

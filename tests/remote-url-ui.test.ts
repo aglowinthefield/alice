@@ -10,7 +10,7 @@ test("remote repository link is saved in repository settings and listed below th
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
-    let board = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", remoteUrl: "", autoCollapseEmptySwimlanes: false, verificationCommand: "" };
+    let board = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", remoteUrl: "", autoCollapseEmptySwimlanes: false };
     const patches: unknown[] = [];
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;

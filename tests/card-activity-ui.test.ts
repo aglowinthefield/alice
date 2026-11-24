@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("Review cards marked as your turn come first, cards an agent or GitHub still has sit apart and show who has them, and only notify once they need you", async () => {
+test("Review cards marked as your turn come first, cards an agent or GitHub still has sit apart and show who has them", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
@@ -32,18 +32,9 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     assert.ok(path in data, `Unexpected API request: ${path}`);
     await route.fulfill({ json: data[path] });
   });
-  const notices = () => page.evaluate(() => (window as unknown as { notices: string[] }).notices);
   const tile = (id: string) => page.getByRole("button", { name: new RegExp(`${id} card`) });
   try {
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
-    await page.evaluate(`
-      window.notices = [];
-      window.Notification = class {
-        static permission = "granted";
-        constructor(title, options) { window.notices.push(options.body); }
-        close() {}
-      };
-    `);
     await tile("mine").waitFor();
     assert.equal(await tile("busy").getAttribute("data-activity"), "working");
     assert.equal(await tile("quiet").getAttribute("data-activity"), "quiet");
@@ -66,7 +57,8 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     assert.equal(await nav.locator('[data-group="review"]').getAttribute("aria-label"), "Review: 3", "only the cards you can act on count as Review");
     assert.equal(await nav.locator('[data-group="in-progress"]').getAttribute("aria-label"), "In progress: 5");
 
-    // The run finishes and an agent reviews it: no notice yet, and it sits below the cards that need you.
+    // The run finishes and an agent reviews it: it sits below the cards that need you. (tests/push.test.ts covers
+    // that its notification waits until the agent hands it over.)
     cards.agent = { status: "review", reviewWait: "agent_review" };
     await tile("agent").getByText("Agent reviewing").waitFor();
     assert.equal(await tile("agent").getAttribute("data-activity"), "working");
@@ -74,12 +66,6 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     const order = await lane.locator('button[data-activity], button:not([data-activity]), [role="separator"]').evaluateAll(els =>
       els.map(el => el.getAttribute("role") === "separator" ? el.getAttribute("aria-label") : el.textContent?.match(/(mine|agent|github) card/)?.[1]).filter(Boolean));
     assert.deepEqual(order, ["Your turn", "mine", "Not your turn yet", "agent", "github"]);
-    assert.deepEqual(await notices(), []);
-
-    // The agent hands it to you: now it notifies.
-    cards.agent = { status: "review", reviewWait: null };
-    await page.waitForFunction(() => (window as unknown as { notices: string[] }).notices.length === 1);
-    assert.deepEqual(await notices(), ["agent card"]);
   } finally {
     await page.close();
     await browser.close();

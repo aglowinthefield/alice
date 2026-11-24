@@ -41,13 +41,10 @@ export type Board = {
   sharedCaches?: string[];
   autoPullRequestEnabled?: boolean;
   autoReviewEnabled: boolean;
-  verificationCommand: string;
   autoReviewEnabledAt: string | null;
-  autoReviewMergeLimit?: number;
   autoReviewConcurrency?: number;
   autoReviewMaxFiles?: number;
   autoReviewMaxPatchChars?: number;
-  autoReviewMerges?: number;
   autoPickupEnabled: boolean;
   pickupConcurrency: number;
   pickupDailyLimit: number;
@@ -124,6 +121,14 @@ export type PullRequestDraft = {
   problem: string;
   templatePath: string | null;
   semantic: SemanticTitleRules | null;
+  /** The repository's hooks on this run's work, checked when it reached Review; null when they were not. */
+  hooks?: {
+    state: "queued" | "running" | "passed" | "failed" | "unchecked";
+    candidate: string | null;
+    detail: string;
+    /** On "failed": the hook that refused, a commit hook (nothing was committed) or the pre-push hook. */
+    hook?: "commit" | "push";
+  } | null;
 };
 export type ReviewDiff = {
   cardId: string;

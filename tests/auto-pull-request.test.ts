@@ -100,7 +100,7 @@ test("auto-review takes precedence, and a local board never opens pull requests"
   const item = fixture();
   try {
     item.board.setAutoPullRequest(item.repoBoard.id, true);
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await later();
     item.reviewedCard();
     assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "the agent reviewer's approval opens it instead");
@@ -123,7 +123,7 @@ test("nothing is pushed when, while the draft is written, auto-review is turned 
       const card = item.reviewedCard();
       let pushed = 0;
       const auto = new AutoPullRequest(item.board, () => "f".repeat(64), async () => {
-        if (change === "auto-review") item.board.setAutoReview(item.repoBoard.id, true, "true");
+        if (change === "auto-review") item.board.setAutoReview(item.repoBoard.id, true);
         else if (change === "override") item.board.setPullRequestOverride(card.id, "https://github.com/example/repo/pull/99");
         else item.board.setAutoPullRequest(item.repoBoard.id, false);
         return { title: "t", body: "b" };

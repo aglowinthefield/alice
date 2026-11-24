@@ -42,7 +42,7 @@ flowchart LR
 - **Changes land unreviewed.** Review shows the diff, lets you comment on lines and send the card back, and only your approval merges it.
 - **Work gets lost between sessions.** Cards, attempts, transcripts, costs and review history stay on the board, and a retry continues the same Pi session.
 - **Spend is invisible.** Each attempt shows its tokens and cost, the board shows the last 24 hours, and an optional daily budget stops automatic pickup.
-- **Babysitting.** Opt-in automatic pickup starts Ready cards for you, and opt-in unattended review verifies, reviews and merges (or opens a PR) without you.
+- **Babysitting.** Opt-in automatic pickup starts Ready cards for you, and opt-in unattended review checks finished cards, sends fixable problems back, and opens the PR on pull-request boards without you.
 
 ## Bakery and Hermes
 
@@ -59,8 +59,7 @@ flowchart LR
 | Line comments on the diff, sent back as feedback | ✅ | ❌ |
 | One-click merge into local `main` | ✅ | ❌ |
 | Open a PR on approval | ✅ | ✅ |
-| Unattended reviewer agent and verification | ✅ Opt-in, with a verification command | ✅ Automatic `sdlc-review` reviewer |
-| Unattended merge into `main` | ✅ Opt-in, with a merge limit | ❌ |
+| Unattended reviewer agent | ✅ Opt-in, runs the repository's checks itself | ✅ Automatic `sdlc-review` reviewer |
 | Per-attempt tokens and cost | ✅ | ❌ |
 | 24-hour spend and a daily budget that stops pickup | ✅ | ❌ |
 | Dependency graph visualizer | ✅ | ❌ |

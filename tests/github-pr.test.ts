@@ -8,7 +8,8 @@ import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
-import { Integration, PushHookError } from "../server/integration.js";
+import { Integration, PushHookError, type CommitHookError } from "../server/integration.js";
+import { Readiness } from "../server/readiness.js";
 import { GitHub, GitHubSync, bakeryRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 import { diffSummary, draftPrompt, draftPullRequest, maxDraftPatchChars, readPullRequestRules, type PullRequestRules } from "../server/pr-draft.js";
@@ -1692,3 +1693,167 @@ test("publish as PR: a conflicting diverged bakery/<id> stops with nothing pushe
     assert.equal(git(f.repo, "worktree", "list", "--porcelain").includes("bakery-publish-merge"), false);
   } finally { f.cleanup(); }
 });
+
+/** Readiness wired like the server: a counting stand-in for the Pi drafter, and send-backs recorded instead of started. */
+function readinessFor(f: Fixture, integration = new Integration(f.board, f.data)) {
+  const drafts: string[] = [], sentBack: (PushHookError | CommitHookError)[] = [];
+  const readiness = new Readiness(f.board, integration, {
+    draft: async (card) => { drafts.push(card.id); return { title: "feat: add feature", body: "Drafted at Review", source: "agent", problem: "", templatePath: null, semantic: null }; },
+    sendBack: (_card, error) => { sentBack.push(error); return true; },
+  });
+  return { integration, readiness, drafts, sentBack };
+}
+/** A pre-push hook that appends one line per run to `log`, with the stdin Git gave it, and exits `code`. */
+function prePushHook(f: Fixture, log: string, code = 0) {
+  const hook = join(f.repo, ".git", "hooks", "pre-push");
+  writeFileSync(hook, `#!/bin/sh\nprintf 'ran %s\\n' "$(cat)" >> "${log}"\necho 'Unused files (1)'\nexit ${code}\n`);
+  chmodSync(hook, 0o755);
+}
+const hookRuns = (log: string) => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
+
+test("github-pr readiness: at Review Bakery drafts the PR and runs the hooks, so Approve pushes without running them again", async () => {
+  const f = fixture();
+  try {
+    const log = join(f.dir, "hook.log");
+    prePushHook(f, log);
+    const card = await reviewedCard(f);
+    const { integration, readiness, drafts } = readinessFor(f);
+    const before = integration.reviewFingerprint(card);
+    readiness.prepare(card);
+    readiness.prepare(card);
+    const worktree = f.board.listRuns(card.id)[0].worktree!;
+    await waitFor(() => readiness.status(card.id).hooks?.state === "passed");
+    const candidate = git(worktree, "rev-parse", "HEAD");
+    assert.equal(git(worktree, "status", "--porcelain"), "", "the work is committed on the card branch");
+    assert.equal(readiness.status(card.id).hooks?.candidate, candidate);
+    assert.equal(hookRuns(log).length, 1, "the hook ran once, for both prepare calls");
+    assert.match(hookRuns(log)[0], new RegExp(`refs/heads/bakery/${card.id}`), "the dry run hands the hook the real push's refs");
+    assert.throws(() => git(f.repo, "ls-remote", "--exit-code", "origin", `refs/heads/bakery/${card.id}`), "the dry run pushed nothing");
+    assert.equal(integration.reviewFingerprint(card), before, "committing does not make the diff under review stale");
+    assert.equal(drafts.length, 1);
+    assert.equal((await readiness.draft(card)).body, "Drafted at Review");
+    assert.equal(drafts.length, 1, "the dialog gets the stored draft");
+
+    const opened = await integration.openPullRequest(f.board.getCard(card.id)!, before, f.github, await readiness.draft(card), "operator", () => readiness.passedCommit(card.id));
+    assert.equal(opened.prState, "OPEN");
+    assert.equal(hookRuns(log).length, 1, "Approve skipped the hook that already passed on this commit");
+    assert.match(integration.pushProgress(card.id)!.step, /Done/);
+    assert.equal(git(f.repo, "ls-remote", "origin", `refs/heads/bakery/${card.id}`).split("\t")[0], candidate);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: work that changed after the check runs the hook again on Approve", async () => {
+  const f = fixture();
+  try {
+    const log = join(f.dir, "hook.log");
+    prePushHook(f, log);
+    const card = await reviewedCard(f);
+    const { integration, readiness } = readinessFor(f);
+    readiness.prepare(card);
+    await waitFor(() => readiness.status(card.id).hooks?.state === "passed");
+    writeFileSync(join(f.board.listRuns(card.id)[0].worktree!, "later.txt"), "edited by hand\n");
+    await integration.openPullRequest(f.board.getCard(card.id)!, integration.reviewFingerprint(card), f.github, undefined, "operator", () => readiness.passedCommit(card.id));
+    assert.equal(hookRuns(log).length, 2, "a new commit goes through the hook");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: a hook refused at Review is sent back, two attempts in a row at most", async () => {
+  const f = fixture();
+  try {
+    prePushHook(f, join(f.dir, "hook.log"), 1);
+    const card = await reviewedCard(f);
+    const { readiness, sentBack } = readinessFor(f);
+    const worker = new Worker(f.board, f.data, f.fakePi);
+    // Each refusal is checked on its own attempt; the stand-in records the send-back, so the next attempt starts here.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (attempt > 1) {
+        const run = worker.start(f.board.getCard(card.id)!);
+        await waitFor(() => f.board.getRun(run.id)?.status !== "running");
+      }
+      readiness.prepare(f.board.getCard(card.id)!);
+      await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
+      assert.equal(readiness.status(card.id).hooks?.sentBack, attempt <= 2, `attempt ${attempt}`);
+    }
+    assert.equal(sentBack.length, 2);
+    assert.match(sentBack[0].output, /Unused files \(1\)/);
+    assert.ok(f.board.listCardEvents(card.id).some(event => /already sent it back 2 times/.test(event.reason)));
+    assert.equal(await readiness.passedCommit(card.id), null, "Approve runs the hook itself");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: a commit hook refused at Review starts a run with its output, two attempts in a row at most", async () => {
+  const f = fixture();
+  const promptFile = join(f.dir, "prompt.txt"), fixPi = join(f.dir, "pi-fix");
+  // Records the prompt and changes nothing, so the work stays uncommitted and the hook refuses it again.
+  writeFileSync(fixPi, `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > "${promptFile}"\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fixPi, 0o755);
+  try {
+    const hook = join(f.repo, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, "#!/bin/sh\necho 'lint: 2 problems in feature.txt'\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const card = await reviewedCard(f);
+    const worker = new Worker(f.board, f.data, fixPi);
+    const sentBack: Error[] = [];
+    // Sends back as the server does, so each refusal starts the agent's next run.
+    const readiness = new Readiness(f.board, new Integration(f.board, f.data), {
+      draft: async () => ({ title: "feat: add feature", body: "Drafted", source: "agent", problem: "", templatePath: null, semantic: null }),
+      sendBack: (current, error) => { sentBack.push(error); return worker.sendBackHookFailure(current, "commit", "", error.output); },
+    });
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const runs = f.board.listRuns(card.id).length;
+      readiness.prepare(f.board.getCard(card.id)!);
+      if (attempt <= 2) {
+        await waitFor(() => f.board.listRuns(card.id).length > runs && f.board.listRuns(card.id)[0].status === "review");
+        assert.equal(sentBack.length, attempt);
+        assert.equal(JSON.parse(f.board.getReadiness(f.board.listRuns(card.id)[1].id) ?? "{}").hooks?.hook, "commit");
+        const prompt = readFileSync(promptFile, "utf8");
+        assert.match(prompt, /pre-commit or commit-msg hook refused the commit/, `attempt ${attempt}`);
+        assert.match(prompt, /lint: 2 problems in feature\.txt/);
+        assert.doesNotMatch(prompt, /pre-push hook refused it/, "a refused commit has no SHA to name");
+        assert.equal(f.board.getCiFeedback(card.id), undefined, "the output is handed over once");
+      } else {
+        await waitFor(() => readiness.status(card.id).hooks?.state === "failed");
+        assert.equal(readiness.status(card.id).hooks?.sentBack, false);
+      }
+    }
+    assert.equal(sentBack.length, 2, "the third refusal in a row is left for a person");
+    assert.equal(f.board.listRuns(card.id).length, 3);
+    assert.ok(f.board.listCardEvents(card.id).some(event => /commit hook refused this attempt at Review too\. Bakery already sent it back 2 times/.test(event.reason)));
+    assert.equal(await readiness.passedCommit(card.id), null, "Approve runs the hooks itself");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr readiness: a new attempt stops a running hook check and its child processes", async () => {
+  const f = fixture();
+  try {
+    const started = join(f.dir, "started"), pidFile = join(f.dir, "hook.pid");
+    const hook = join(f.repo, ".git", "hooks", "pre-push");
+    // The hook's own child (sleep) must die too, or a killed check would leave a test suite running.
+    writeFileSync(hook, `#!/bin/sh\nsleep 30 &\necho $! > "${pidFile}"\ntouch "${started}"\nwait\n`);
+    chmodSync(hook, 0o755);
+    const card = await reviewedCard(f);
+    const { readiness } = readinessFor(f);
+    readiness.prepare(card);
+    await waitFor(() => existsSync(started));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    readiness.cancel(card.id);
+    await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
+    assert.equal(JSON.parse(f.board.getReadiness(f.board.listRuns(card.id)[0].id) ?? "{}").hooks, undefined, "no hook result is stored for a cancelled check");
+  } finally { f.cleanup(); }
+});
+
+for (const mode of ["auto-review", "automatic pull requests"] as const) {
+  test(`github-pr readiness: with ${mode} on, which push at Review themselves, nothing is prepared`, async () => {
+    const f = fixture();
+    try {
+      if (mode === "auto-review") f.board.setAutoReview(f.repoBoard.id, true);
+      else f.board.setAutoPullRequest(f.repoBoard.id, true);
+      const card = await reviewedCard(f);
+      const { readiness, drafts } = readinessFor(f);
+      readiness.prepare(card);
+      // A started check shows as queued at once, so this would catch one that would race their push.
+      assert.equal(readiness.status(card.id).hooks, null);
+      assert.equal(drafts.length, 0, "they draft on demand instead");
+    } finally { f.cleanup(); }
+  });
+}

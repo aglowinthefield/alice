@@ -24,8 +24,15 @@ export const COMMANDS = [
     examples: [["bakery-cli create --title 'Add the API' --key gh-42/t1", ""], ["bakery-cli create --title 'Use the API' --after CARD_ID", "start only after CARD_ID is done"]],
   },
   {
-    name: "cards", group: "Cards", summary: "list the board's cards",
-    full: "[--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
+    name: "cards", group: "Cards", summary: "the board's lanes and cards",
+    full: "[--board ID|PATH] [--all] [--watch] [--json]",
+    options: [BOARD, ["--all", "include Archive and every Done card"], ["--watch", "redraw every 2 seconds until Ctrl-C (terminal only)"], JSON_OUT],
+    details: "On a terminal, cards print in the board's lanes with its badges. Piped, each card is one tab-separated line.",
+  },
+  {
+    name: "tui", group: "Cards", summary: "the board in the terminal, driven by keys",
+    full: "[--board ID|PATH]", options: [BOARD],
+    details: "Arrow keys or j/k move between cards, enter opens one, o opens it in the browser and ? lists every key. s starts a run, x stops one, a approves, r and t move between Ready and Triage. Paid runs and merges ask first. Refreshes every 2 seconds; q quits.",
   },
   {
     name: "show", group: "Cards", args: "CARD_ID", summary: "a card with its dependencies, attempts and review",
@@ -121,10 +128,10 @@ export const COMMANDS = [
     options: [JSON_OUT],
   },
   {
-    name: "board", group: "Boards", args: "[ID|PATH]", summary: "a board's integration and merge limit",
-    full: "[ID|PATH] [--integration local|github-pr] [--merge-limit 0-99] [--json]",
-    details: "--integration github-pr makes a card Done when its GitHub pull request merges onto origin/main (needs gh and a GitHub remote); --integration local merges on Approve.\n--merge-limit sets the most unattended review merges per rolling 24 hours (0 means no limit). At the limit, cards wait in Review for a person.",
-    options: [["--integration MODE", "local or github-pr"], ["--merge-limit N", "0 (no limit) to 99 merges per 24 hours"], JSON_OUT],
+    name: "board", group: "Boards", args: "[ID|PATH]", summary: "a board's integration and auto-review state",
+    full: "[ID|PATH] [--integration local|github-pr] [--json]",
+    details: "--integration github-pr makes a card Done when its GitHub pull request merges onto origin/main (needs gh and a GitHub remote); --integration local merges on Approve.",
+    options: [["--integration MODE", "local or github-pr"], JSON_OUT],
   },
   {
     name: "pr", group: "Boards", args: "CARD_ID [URL|off]", summary: "link a card to a pull request",

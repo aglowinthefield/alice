@@ -181,6 +181,11 @@ export function PullRequestDialog({
               Bakery appends “Opened by Bakery for card {card.id}” and the run
               summary.
             </div>
+            {draft.hooks && (
+              <div role="status" className="text-xs text-muted-foreground">
+                {hooksNote(draft.hooks)}
+              </div>
+            )}
             {pushProgress &&
               (!pushProgress.finishedAt ||
                 (submitError && pushProgress.error)) && (
@@ -204,6 +209,19 @@ export function PullRequestDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** What happens to the repository's hooks on Approve, given the check Bakery ran when the run reached Review. */
+function hooksNote(hooks: NonNullable<PullRequestDraft["hooks"]>): string {
+  if (hooks.state === "passed")
+    return `The pre-push hook already passed on ${hooks.candidate?.slice(0, 12)} when the run reached Review, so Bakery pushes without running it again.`;
+  if (hooks.state === "queued" || hooks.state === "running")
+    return "The repository's hooks are still running from Review; Approve waits for them.";
+  if (hooks.state === "failed" && hooks.hook === "commit")
+    return "A commit hook refused this work at Review. It runs again when you approve.";
+  if (hooks.state === "failed")
+    return "The pre-push hook refused this work at Review. It runs again when you approve.";
+  return "Bakery could not check the hooks at Review, so they run when you approve.";
 }
 
 /** Push failures carry a summary line, then the hook's own output, whose line breaks matter. */

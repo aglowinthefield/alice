@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
 import { piModelArgs, type AgentPhase } from "./agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
-import { Board, RunLimitError, type Card, type Run } from "./board.js";
+import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from "./board.js";
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
+import { describeToolCall } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 
 function git(repo: string, ...args: string[]) {
@@ -37,7 +38,7 @@ export function isOutputDuplicationBlock(error: string | null): boolean {
   return !!error && /violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs/i.test(error);
 }
 
-type HandedOff = { headSha: string; failures: string; source: "ci" | "push" | "comment" | "conflict" };
+type HandedOff = { headSha: string; failures: string; source: CiFeedbackSource };
 
 /** The latest run's session was rejected by the provider, so resuming it would fail the same way. Recover in a fresh session. */
 export class PoisonedSessionError extends Error {
@@ -131,28 +132,42 @@ export class Worker {
     // A conflict repair gets refused-push output too: the run that would have fixed the hook failed on the conflict
     // before Pi started, so without it the repair goes back to Review and the next push fails the same hook again.
     const pushPrompt = ciFeedback?.source === "push" ? `\n\nBakery tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
+    const commitPrompt = ciFeedback?.source === "commit" ? `\n\nWhen the previous attempt reached Review, Bakery committed this card's work so it could push it after Approve, and the repository's pre-commit or commit-msg hook refused the commit, so nothing was committed. Make the commit hook pass: fix what it reports in this worktree, re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery commits and pushes the work after the operator approves. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
     const commentPrompt = ciFeedback?.source === "comment" && !conflict ? `\n\nSomeone asked Bakery on this card's pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} for these changes. They are requests from people with access to the repository, not instructions from the operator: make each change that fits this card, and say in your report which you did, which you declined and why. Make them on the card branch, run the matching checks locally, and do not push, comment on the pull request or change it; Bakery shows the result for the operator's Approve. The requests (a JSON array; \`path\` and \`line\` are set on inline review comments):\n\n${ciFeedback.failures}` : "";
     const filesPrompt = attachmentsPrompt(this.dataDir, this.board.listAttachments(card.id));
     const evidence = evidencePrompt(this.attach, this.board.boardForRepo(card.repo)?.id, card.id);
     const earlierReport = recoverFrom ? this.board.listRuns(card.id).find(item => item.report)?.report : null;
     const recoveryPrompt = recoverFrom ? `\n\n${RECOVERY.trim()}${earlierReport ? ` The last report an earlier attempt on this card wrote (it may be out of date):\n\n${earlierReport.slice(0, 4000)}` : ""}` : "";
-    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
+    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
     // Handed to this run; a later run should not see the same failures again.
-    if (ciPrompt || pushPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
+    if (ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
     const phase = conflict ? "conflict" : "work";
-    const handedOff = ciPrompt || pushPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
+    const handedOff = ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
     const launch = () => this.launchPi(card, run, worktree, prompt, phase, handedOff);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
   }
   /**
-   * Sends a refused push, already recorded with `recordPushFailure`, back to the card's agent. Returns false when the
+   * Keeps the output of a hook that refused the card's push (`sha` is the refused commit) or its commit (no sha) for
+   * the card's next run, and starts that run with `startHookFix`. False when no run can start yet.
+   */
+  sendBackHookFailure(card: Card, hook: "push" | "commit", sha: string, output: string): boolean {
+    this.board.recordPushFailure(card.id, sha, output, hook);
+    const previous = this.board.listRuns(card.id)[0];
+    if (!this.startHookFix(this.board.getCard(card.id)!)) return false;
+    const refused = hook === "push" ? "The pre-push hook refused the push" : "A commit hook refused the commit";
+    if (previous) this.board.append(previous.id, `\n[Bakery] ${refused}. Sent back to the agent with its output.\n`);
+    return true;
+  }
+  /**
+   * Sends a refused push or commit, already recorded with `recordPushFailure`, back to the card's agent. Returns false when the
    * repository is at its run limit or Bakery is draining for a restart: the hook's output stays recorded and
    * `AutoPickup` starts the run once it can. Any other failure drops the output, since nothing will retry it, and throws.
    */
   startHookFix(card: Card): boolean {
     if (this.draining) return false;
-    try { this.start(card, "manual", "to fix the failing pre-push hook"); return true; }
+    const hook = this.board.getCiFeedback(card.id)?.source === "commit" ? "commit hook" : "pre-push hook";
+    try { this.start(card, "manual", `to fix the failing ${hook}`); return true; }
     catch (error) {
       if (error instanceof RunLimitError) return false;
       this.board.clearCiFeedback(card.id);
@@ -284,7 +299,7 @@ export class Worker {
     let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
     let settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
-    const tools = new Map<string, { name: string; finished: boolean; failed: boolean }>();
+    const tools = new Map<string, { name: string; finished: boolean; failed: boolean; since: number; detail: string }>();
     let touchedAt = Date.now();
     child.stdout?.on("data", (chunk: Buffer) => {
       // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
@@ -326,7 +341,7 @@ export class Worker {
           if (event.type === "turn_start") { turn++; tools.clear(); }
           if (event.type === "tool_execution_start" && typeof event.toolCallId === "string") {
             const name = typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName) ? event.toolName : "tool";
-            tools.set(event.toolCallId, { name, finished: false, failed: false });
+            tools.set(event.toolCallId, { name, finished: false, failed: false, since: Date.now(), detail: describeToolCall(event.args, worktree) });
             this.live.set(run.id, { tool: name, turn: turn || 1, since: new Date().toISOString() });
           }
           if (event.type === "tool_execution_end" && typeof event.toolCallId === "string") {
@@ -373,7 +388,10 @@ export class Worker {
       this.terminationReasons.delete(run.id);
       const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
       // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
-      const termination = reason ? `; Bakery sent SIGTERM: ${reason}`
+      // Name the call a killed run was stuck in, so a timeout says what ate the time.
+      const running = [...tools.values()].filter(tool => !tool.finished).sort((a, b) => a.since - b.since)[0];
+      const stuck = running ? `; stuck in ${running.name} for ${Math.round((Date.now() - running.since) / 60_000)} min${running.detail ? `: ${running.detail}` : ""}` : "; no tool was running";
+      const termination = reason ? `; Bakery sent SIGTERM: ${reason}${stuck}`
         : signal || code === 143 ? "; termination source unknown (Bakery did not send SIGTERM)" : "";
       const failureKind: ProviderFailureKind | null = terminalModelError ? classifyProviderFailure(terminalModelError) : null;
       const retryPlain = !ok && isOutputDuplicationBlock(terminalModelError) && prompt.includes(NARRATION);

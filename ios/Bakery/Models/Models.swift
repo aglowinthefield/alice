@@ -150,8 +150,6 @@ struct Board: Codable, Identifiable, Hashable {
     var integrationWarning: String?
     var autoCollapseEmptySwimlanes: Bool?
     var autoReviewEnabled: Bool?
-    var verificationCommand: String?
-    var autoReviewMergeLimit: Int?
     var autoPickupEnabled: Bool?
     var pickupConcurrency: Int?
     var pickupDailyLimit: Int?

@@ -7,7 +7,9 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { doctor, report } from "./doctor.mjs";
 import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
-import { c, layout, paint, pretty } from "./cli-style.mjs";
+import { c, columns, layout, paint, pretty } from "./cli-style.mjs";
+import { renderBoard } from "./cli-board.mjs";
+import { runTui } from "./cli-tui.mjs";
 import { formatVersion, readVersion } from "./version.mjs";
 
 
@@ -15,10 +17,10 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration", "merge-limit"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--json" || arg === "--yes") result[arg.slice(2)] = true;
+    if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch") result[arg.slice(2)] = true;
     else if (arg === "--help" || arg === "-h") result.help = true;
     else if (arg === "--version" || arg === "-v") result.version = true;
     else if (arg.startsWith("--") && lists.has(arg.slice(2))) {
@@ -152,6 +154,22 @@ function print(data, json, lines) {
   else for (const line of pretty() ? layout(lines) : lines) console.log(line);
 }
 
+// Redraws on the terminal's alternate screen until Ctrl-C, keeping the last good board when a fetch fails.
+async function watch(render) {
+  const out = process.stdout;
+  let last = [], problem = "";
+  const leave = () => { out.write("\x1b[?25h\x1b[?1049l"); process.exit(0); };
+  process.on("SIGINT", leave);
+  out.write("\x1b[?1049h\x1b[?25l");
+  for (;;) {
+    try { last = await render(); problem = ""; } catch (error) { problem = error instanceof Error ? error.message : String(error); }
+    const footer = problem ? c.bad(problem) : c.dim(`updated ${new Date().toLocaleTimeString()} · Ctrl-C to quit`);
+    const room = (out.rows || 24) - 1;
+    out.write(`\x1b[H\x1b[2J${[...last.slice(0, room - 1), footer].join("\n")}`);
+    await new Promise(done => setTimeout(done, 2000));
+  }
+}
+
 function unknown(name) {
   const near = suggest(name);
   return `Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run bakery-cli help to see them all.`;
@@ -170,7 +188,7 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
   if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
@@ -183,12 +201,13 @@ async function main() {
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
   if (opts.integration !== undefined && command !== "board") throw new Error("--integration is only valid with board");
   if (opts.integration !== undefined && !["local", "github-pr"].includes(opts.integration)) throw new Error("Integration must be local or github-pr");
-  if (opts["merge-limit"] !== undefined && command !== "board") throw new Error("--merge-limit is only valid with board");
-  if (opts["merge-limit"] !== undefined && !/^\d{1,2}$/.test(opts["merge-limit"])) throw new Error("Merge limit must be a whole number from 0 (no limit) to 99");
   if (command === "board" && args.length && opts.board) throw new Error("Name the board once, as ID|PATH or with --board");
   if (command === "pr") cardId(args[0]);
   if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (command === "attach") cardId(args[0]);
+  if ((opts.all || opts.watch) && command !== "cards") throw new Error("--all and --watch are only valid with cards");
+  if (command === "tui" && (opts.json || !process.stdout.isTTY || !process.stdin.isTTY)) throw new Error("tui needs a terminal and no --json; use cards for a pipe");
+  if (opts.watch && (opts.json || !process.stdout.isTTY)) throw new Error("--watch needs a terminal and no --json");
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
   if (opts.on.length && command !== "depend" && command !== "undepend") throw new Error("--on is only valid with depend or undepend");
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
@@ -228,9 +247,19 @@ async function main() {
   }
   const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
   const path = `/api/boards/${encodeURIComponent(board.id)}`;
+  if (command === "tui") {
+    return runTui({
+      api: (method, route, input) => request(origin, route, method, input, 30_000),
+      board, title: board.repo.replace(homedir(), "~"),
+      webUrl: id => new URL(`/board/${encodeURIComponent(board.id)}/card/${encodeURIComponent(id)}`, origin).href,
+    });
+  }
   if (command === "cards") {
+    const draw = cards => renderBoard(cards, { width: columns(), all: opts.all, title: board.repo.replace(homedir(), "~") });
+    if (opts.watch) return watch(() => request(origin, `${path}/cards`).then(draw));
     const cards = await request(origin, `${path}/cards`);
-    print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tpriority:${priorityName(item.priority)}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
+    if (pretty() && !opts.json) for (const line of draw(cards)) console.log(line);
+    else print(cards, opts.json, cards.map(item => `${item.id}\t${item.status}\tpriority:${priorityName(item.priority)}\tattempts:${item.attempts ?? 0}\treview-rounds:${item.reviewRounds ?? 0}\t${item.title}`));
   } else if (command === "create" || command === "add") {
     if (command === "add") opts.title = args.join(" ");
     if (!opts.title?.trim()) throw new Error(command === "add" ? "add requires a title" : "create requires --title TITLE");
@@ -337,8 +366,7 @@ async function main() {
   } else if (command === "board") {
     let updated = board;
     if (opts.integration !== undefined) updated = await request(origin, `${path}/settings`, "PATCH", { integration: opts.integration });
-    if (opts["merge-limit"] !== undefined) updated = await request(origin, `${path}/settings`, "PATCH", { autoReviewMergeLimit: Number(opts["merge-limit"]) });
-    print(updated, opts.json, [`${updated.id}\t${updated.repo}\tintegration:${updated.integration ?? "local"}\treview-merges:${updated.autoReviewMerges ?? 0}/${updated.autoReviewMergeLimit ? updated.autoReviewMergeLimit : "no limit"} in 24h${updated.remoteUrl ? `\tremote:${updated.remoteUrl}` : ""}${updated.integrationError ? `\terror:${updated.integrationError}` : ""}`]);
+    print(updated, opts.json, [`${updated.id}\t${updated.repo}\tintegration:${updated.integration ?? "local"}\treview:${updated.autoReviewEnabled ? "on" : "off"}${updated.remoteUrl ? `\tremote:${updated.remoteUrl}` : ""}${updated.integrationError ? `\terror:${updated.integrationError}` : ""}`]);
   } else if (command === "pr") {
     const card = args.length === 1 ? await findCard(origin, path, args[0])
       : await request(origin, `${path}/cards/${encodeURIComponent(args[0])}/pull-request`, "PUT", { url: args[1] === "off" ? "" : args[1] });

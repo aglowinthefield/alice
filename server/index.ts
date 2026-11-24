@@ -10,9 +10,10 @@ import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
+import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
-import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
+import { CommitHookError, Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
@@ -21,10 +22,9 @@ import { discuss, discussionPrompt } from "./discuss.js";
 import { Chats, writeTopic } from "./chat.js";
 import { chatImagePath, publishChatImages, rasterType } from "./chat-images.js";
 import { draftPullRequest } from "./pr-draft.js";
+import { Readiness } from "./readiness.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
-/** One PR draft job per card, kept after it settles so a closed or refreshed dialog rejoins it instead of starting over. */
-const draftJobs = new Map<string, { fingerprint: string; progress: { startedAt: number; steps: { at: number; text: string }[] }; result: Promise<unknown> }>();
 import { PullRequestFeed } from "./pull-request-feed.js";
 import { cardHistory } from "./card-history.js";
 import { PrLocks } from "./pr-locks.js";
@@ -37,6 +37,7 @@ import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
+import { PushNotifications } from "./push.js";
 import { Telemetry, doctorCheck, errorType, runOutcome } from "./telemetry.js";
 
 // The Logs view reads this process's console output from here.
@@ -73,14 +74,29 @@ const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "w
   env: { BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
 });
 const integration = new Integration(board, dataDir);
+// github-pr boards: the PR draft and the repository's hooks run when a run reaches Review, so Approve only pushes.
+const readiness = new Readiness(board, integration, {
+  draft: (card, run, onProgress) => {
+    const patch = integration.review(card).files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
+    return draftPullRequest({ card, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")), onProgress });
+  },
+  sendBack: (card, error) => sendBackHookFailure(card, error),
+});
+/** Approve's push on a github-pr board: skips the pre-push hook for a commit that passed it at Review. */
+const openPullRequest = (card: Card, fingerprint: string, draft?: { title: string; body: string }, pushedBy?: "operator" | "ci-fix" | "agent-review" | "auto-pull-request") =>
+  integration.openPullRequest(card, fingerprint, github, draft, pushedBy, () => readiness.passedCommit(card.id));
 board.onRun((event, run) => {
+  if (event === "started") readiness.cancel(run.cardId);
   if (event === "finished" && run.worktree && board.boardForRepo(board.getCard(run.cardId)?.repo ?? "")?.sharedCaches.includes("turbo")) {
     const usage = turboCacheUsage(run.worktree, Date.parse(run.startedAt));
     if (usage) board.recordCacheUsage(run.id, usage);
   }
   const card = event === "finished" && run.status === "review" ? board.getCard(run.cardId) : undefined;
   if (card) integration.recordChangedFiles(card);
+  if (card) setImmediate(() => readiness.prepare(board.getCard(card.id) ?? card));
 });
+// Review cards whose readiness a restart interrupted, or that reached Review before Bakery prepared it.
+setImmediate(() => { for (const card of board.listCards().filter(item => item.status === "review")) readiness.prepare(card); });
 // Runs that reached Review before the count was kept; one at a time so a big backlog does not hold the server up.
 void (async () => {
   for (const card of board.listCards().filter(item => item.status === "review" && board.listRuns(item.id)[0]?.changedFiles === null)) {
@@ -90,15 +106,14 @@ void (async () => {
 })();
 /** Drafts a pull request title and body like the Approve dialog does. Takes minutes; callers recheck the card afterwards. */
 async function draftForPullRequest(card: Card, fingerprint: string, lead: string): Promise<{ title: string; body: string }> {
-  const run = board.listRuns(card.id)[0], diff = integration.review(card);
-  if (!run?.worktree || diff.fingerprint !== fingerprint) throw new Error("Work changed before the pull request could be drafted");
-  const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
-  const draft = await draftPullRequest({ card, run, worktree: run.worktree, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")) });
+  const run = board.listRuns(card.id)[0];
+  if (!run?.worktree || integration.reviewFingerprint(card) !== fingerprint) throw new Error("Work changed before the pull request could be drafted");
+  const draft = await readiness.draft(card);
   if (draft.problem) throw new Error(`${lead}: ${draft.problem}. Use Approve and open PR`);
   return draft;
 }
 async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request"): Promise<Card> {
-  const opened = await sendBackRefusedPush(card, () => integration.openPullRequest(card, fingerprint, github, draft, pushedBy));
+  const opened = await sendBackRefusedPush(card, () => openPullRequest(card, fingerprint, draft, pushedBy));
   void githubSync.syncBoard(board.boardForRepo(card.repo)!.id);
   return opened;
 }
@@ -137,6 +152,8 @@ board.onRun((event, run) => {
 integration.onDelivered = kind => telemetry.count(kind === "merge" ? "bakery.merges" : "bakery.pull_requests.opened");
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;
+// Browser notifications through Web Push, for browsers that turned them on in Settings. See server/push.ts.
+const push = new PushNotifications(board, board.sqlite, dataDir);
 // github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
 const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
@@ -144,7 +161,7 @@ const sentinelStore = new SentinelStore(board.sqlite);
 const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
-  card => sendBackRefusedPush(card, () => integration.openPullRequest(card, integration.reviewFingerprint(card), github, undefined, "ci-fix")));
+  card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
 // Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
 const features = board.features;
 /** Routes that belong to one optional feature; with it off they are refused before any handler runs. */
@@ -169,15 +186,14 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
   try {
     const pushed = await push();
     // Pushed after all (the operator fixed it by hand, say): an earlier refusal still waiting for a slot is stale.
-    if (board.getCiFeedback(card.id)?.source === "push") board.clearCiFeedback(card.id);
+    const waiting = board.getCiFeedback(card.id)?.source;
+    if (waiting === "push" || waiting === "commit") board.clearCiFeedback(card.id);
     return pushed;
   }
   catch (error) {
     if (!(error instanceof PushHookError)) throw error;
-    board.recordPushFailure(card.id, error.sha, error.output);
-    const previous = board.listRuns(card.id)[0];
     let started: boolean;
-    try { started = worker.startHookFix(board.getCard(card.id)!); }
+    try { started = sendBackHookFailure(card, error); }
     catch (startError) {
       throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
     }
@@ -185,9 +201,12 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
       board.noteCard(card.id, "The pre-push hook refused the push. Its output goes to the agent once a run can start (the repository is at its run limit, or Bakery is restarting)");
       throw new Error(`${error.message}\n\nBakery cannot start a run yet (the repository is at its run limit, or Bakery is restarting), so it sends this to the agent as soon as one can start.`);
     }
-    if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
     return board.getCard(card.id)!;
   }
+}
+/** Keeps a refused hook's output for the card's next run and starts it; false when no run can start yet. */
+function sendBackHookFailure(card: Card, error: PushHookError | CommitHookError): boolean {
+  return error instanceof PushHookError ? worker.sendBackHookFailure(card, "push", error.sha, error.output) : worker.sendBackHookFailure(card, "commit", "", error.output);
 }
 // Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
 const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
@@ -261,6 +280,13 @@ const server = createServer(async (req, res) => {
     }
     const disabled = featureRoutes.find(([feature, pattern]) => !features[feature] && pattern.test(path));
     if (disabled) { send(res, 404, { code: "feature_off", feature: disabled[0], error: featureOffMessage(disabled[0]) }); return; }
+    // Prometheus metrics for the operator's own monitoring; off unless BAKERY_METRICS=1. See docs/metrics.md.
+    if (path === "/metrics" && req.method === "GET") {
+      if (process.env.BAKERY_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set BAKERY_METRICS=1 to serve them." }); return; }
+      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount }, version.version));
+      return;
+    }
     if (path === "/api/status" && req.method === "GET") {
       // The cards behind the runs still going, so the update notice can say what it is waiting for.
       const cardIds = new Set<string>();
@@ -272,6 +298,9 @@ const server = createServer(async (req, res) => {
       send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
       return;
     }
+    if (path === "/api/push/key" && req.method === "GET") { send(res, 200, { publicKey: push.publicKey() }); return; }
+    if (path === "/api/push/subscriptions" && req.method === "POST") { push.subscribe(await body(req)); send(res, 201, { ok: true }); return; }
+    if (path === "/api/push/subscriptions" && req.method === "DELETE") { push.unsubscribe((await body(req)).endpoint); send(res, 200, { ok: true }); return; }
     if (path === "/api/update" && req.method === "POST") {
       if (!updates) throw new Error("Only a server started with npm start installs updates");
       void updates.apply();
@@ -464,10 +493,6 @@ const server = createServer(async (req, res) => {
         if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
         send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
-      if ("autoReviewMergeLimit" in input) {
-        if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewMergeLimit)) throw new Error("Update autoReviewMergeLimit as an integer (0 for no limit), separately from other board settings");
-        send(res, 200, board.setAutoReviewMergeLimit(repoBoard.id, Number(input.autoReviewMergeLimit))); return;
-      }
       if ("autoReviewMaxFiles" in input || "autoReviewMaxPatchChars" in input) {
         const keys = Object.keys(input);
         if (keys.some(key => key !== "autoReviewMaxFiles" && key !== "autoReviewMaxPatchChars") || [input.autoReviewMaxFiles, input.autoReviewMaxPatchChars].some(value => value !== undefined && !Number.isSafeInteger(value))) throw new Error("Update autoReviewMaxFiles and autoReviewMaxPatchChars as integers (0 for no limit), separately from other board settings");
@@ -477,9 +502,10 @@ const server = createServer(async (req, res) => {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewConcurrency)) throw new Error("Update autoReviewConcurrency as an integer from 1 to 4, separately from other board settings");
         send(res, 200, board.setAutoReviewConcurrency(repoBoard.id, Number(input.autoReviewConcurrency))); return;
       }
-      if ("autoReviewEnabled" in input || "verificationCommand" in input) {
-        if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
-        send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled, input.verificationCommand)); return;
+      if ("autoReviewEnabled" in input) {
+        // Older clients still send the removed verificationCommand alongside; it is ignored.
+        if (Object.keys(input).some(key => key !== "autoReviewEnabled" && key !== "verificationCommand") || typeof input.autoReviewEnabled !== "boolean") throw new Error("Update autoReviewEnabled as a boolean, separately from other board settings");
+        send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled)); return;
       }
       if (typeof input.autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
       send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;
@@ -768,24 +794,13 @@ const server = createServer(async (req, res) => {
           send(res, 202, worker.recover(id)); return;
         }
         if (req.method === "DELETE" && action === "start") { send(res, 200, { cancelled: board.cancelQueuedStart(id) }); return; }
-        if (req.method === "GET" && action === "pr-draft") { const job = draftJobs.get(id); send(res, 200, { ...(job?.progress ?? { startedAt: 0, steps: [] }), fingerprint: job?.fingerprint ?? null }); return; }
+        if (req.method === "GET" && action === "pr-draft") { const { progress, hooks } = readiness.status(id); send(res, 200, { ...progress, hooks }); return; }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
           if (repoBoard.integration !== "github-pr") throw new Error("This board merges locally; it opens no pull request");
-          const diff = integration.review(item), run = board.listRuns(id)[0];
-          if (typeof fingerprint !== "string" || diff.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
-          let job = draftJobs.get(id);
-          if (!job || job.fingerprint !== fingerprint) {
-            const patch = diff.files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
-            const progress = { startedAt: Date.now(), steps: [] as { at: number; text: string }[] };
-            const onProgress = (text: string) => { progress.steps.push({ at: Date.now(), text }); if (progress.steps.length > 200) progress.steps.shift(); };
-            const result = draftPullRequest({ card: item, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(item.repo, "draft")), onProgress });
-            job = { fingerprint, progress, result };
-            draftJobs.set(id, job);
-            const started = job;
-            result.catch(() => { if (draftJobs.get(id) === started) draftJobs.delete(id); });
-          }
-          send(res, 200, await job.result); return;
+          if (typeof fingerprint !== "string" || integration.reviewFingerprint(item) !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
+          const draft = await readiness.draft(item);
+          send(res, 200, { ...draft, hooks: readiness.status(id).hooks }); return;
         }
         if (req.method === "POST" && action === "approve") {
           const { fingerprint, title, body: prBody } = await body(req);
@@ -793,8 +808,7 @@ const server = createServer(async (req, res) => {
           if (repoBoard.integration === "github-pr") {
             if ((title !== undefined || prBody !== undefined) && (typeof title !== "string" || !title.trim() || title.length > 250 || typeof prBody !== "string" || prBody.length > 20_000))
               throw new Error("Pull request title (up to 250 characters) and body (up to 20,000) are required");
-            const card = await sendBackRefusedPush(item, () => integration.openPullRequest(item, fingerprint, github, typeof title === "string" ? { title, body: prBody as string } : undefined));
-            draftJobs.delete(id);
+            const card = await sendBackRefusedPush(item, () => openPullRequest(item, fingerprint, typeof title === "string" ? { title, body: prBody as string } : undefined));
             void githubSync.syncBoard(repoBoard.id);
             send(res, 200, card); return;
           }
@@ -862,7 +876,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start();
+server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start(); push.start();
   if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
   if (updates) {
     void updates.poll();
@@ -893,7 +907,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM" | "SIGBREAK" | "SIGHUP") => {
   if (shuttingDown) return;
   shuttingDown = true;
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
-  server.close(); server.closeAllConnections(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
+  server.close(); server.closeAllConnections(); clearInterval(updateTimer); push.stop(); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
   worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so

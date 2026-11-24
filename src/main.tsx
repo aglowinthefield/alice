@@ -921,8 +921,6 @@ export function App() {
     if (scope.some((item) => item.id === id)) setSelected(id);
     else writeTab("bakery-card", null);
   };
-  const [verificationDraft, setVerificationDraft] = useState("");
-  const [mergeLimitDraft, setMergeLimitDraft] = useState("0");
   const [remoteUrlDraft, setRemoteUrlDraft] = useState("");
   const [budgetDraft, setBudgetDraft] = useState("");
   const [creating, setCreating] = useState(false);
@@ -1262,8 +1260,6 @@ export function App() {
     setIconDraft(item.icon);
     setColorDraft(item.color);
     setRemoteUrlDraft(item.remoteUrl ?? "");
-    setVerificationDraft(item.verificationCommand ?? "");
-    setMergeLimitDraft(String(item.autoReviewMergeLimit ?? 0));
     setEditingBoard(item);
   }
   const scopeCards = view === "today" ? allCards : cards;
@@ -1322,13 +1318,6 @@ export function App() {
       editing?.id === updated.id ? updated : editing,
     );
   };
-  const mergeLimitValid = /^\d{1,2}$/.test(mergeLimitDraft.trim());
-  const mergeLimit = mergeLimitValid ? Number(mergeLimitDraft) : 0;
-  const saveMergeLimit = (boardId: string) =>
-    api<Board>(`/boards/${boardId}/settings`, {
-      method: "PATCH",
-      body: JSON.stringify({ autoReviewMergeLimit: mergeLimit }),
-    });
   const saveSettings = (patch: Partial<BakerySettings>) => {
     if (!settings) return;
     const previous = settings;
@@ -3655,55 +3644,13 @@ export function App() {
               <div className="font-medium">Unattended review</div>
               <p className="mt-2 text-xs text-muted-foreground">
                 A Pi reviewer with full tools inspects new Review cards in their
-                worktrees; the verification command runs first.{" "}
-                {mergeLimit === 0
-                  ? "No limit on merges per 24 hours."
-                  : `At most ${mergeLimit} merge${mergeLimit === 1 ? "" : "s"} per 24 hours.`}{" "}
-                Findings, errors, or changes require human review. Local merge
-                only, never push. Auto-review alone does not start Ready cards;
-                enable Auto pickup above.
+                worktrees and runs the repository's checks itself. It can send a
+                card back to its implementer. When it approves, a pull-request
+                board opens the pull request; on a local board the card waits
+                for your Approve. Nothing merges into main without you.
+                Auto-review alone does not start Ready cards; enable Auto pickup
+                above.
               </p>
-              <label className="mt-4 block text-xs">
-                Verification command
-                <input
-                  aria-label="Auto-review verification command"
-                  value={verificationDraft}
-                  onChange={(event) => setVerificationDraft(event.target.value)}
-                  disabled={busy}
-                  placeholder="npm test && npm run build"
-                  className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
-                />
-              </label>
-              <label className="mt-3 flex items-center gap-2 text-xs">
-                Most unattended merges per 24 hours
-                <input
-                  type="number"
-                  min={0}
-                  max={99}
-                  step={1}
-                  aria-label="Auto-review merge limit"
-                  value={mergeLimitDraft}
-                  onChange={(event) => setMergeLimitDraft(event.target.value)}
-                  disabled={busy}
-                  className="w-20 rounded-md border border-border bg-background px-2 py-1"
-                />
-                <span className="text-muted-foreground">0 means no limit</span>
-                {mergeLimitValid &&
-                  mergeLimit !== (editingBoard.autoReviewMergeLimit ?? 0) && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          updateBoard(await saveMergeLimit(editingBoard.id));
-                        })
-                      }
-                    >
-                      Save limit
-                    </Button>
-                  )}
-              </label>
               <label className="mt-3 flex items-center gap-2 text-xs">
                 Agent reviews at the same time
                 <select
@@ -3733,9 +3680,6 @@ export function App() {
                     </option>
                   ))}
                 </select>
-                <span className="text-muted-foreground">
-                  Each runs the verification command too
-                </span>
               </label>
               <label className="mt-3 flex items-center gap-2 text-xs">
                 Largest diff the agent reviewer takes (files)
@@ -3822,62 +3766,31 @@ export function App() {
                   person.
                 </span>
               </label>
-              {!mergeLimitValid && (
-                <p role="alert" className="mt-1 text-xs text-destructive">
-                  Enter a whole number from 0 to 99.
-                </p>
-              )}
               <Button
                 className="mt-3"
                 variant={editingBoard.autoReviewEnabled ? "outline" : "default"}
-                disabled={
-                  busy ||
-                  !mergeLimitValid ||
-                  (!editingBoard.autoReviewEnabled && !verificationDraft.trim())
-                }
+                disabled={busy}
                 onClick={async () => {
-                  const enable =
-                    !editingBoard.autoReviewEnabled ||
-                    verificationDraft.trim() !==
-                      editingBoard.verificationCommand;
+                  const enable = !editingBoard.autoReviewEnabled;
                   if (
                     enable &&
                     !(await confirmAction(
-                      `Enable unattended agent review and ${mergeLimit === 0 ? "local merges with no limit per 24 hours" : `up to ${mergeLimit} local merge${mergeLimit === 1 ? "" : "s"} per 24 hours`} for ${editingBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
+                      `Enable agent review for ${editingBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
                     ))
                   )
                     return;
                   void action(async () => {
-                    if (mergeLimit !== (editingBoard.autoReviewMergeLimit ?? 0))
-                      await saveMergeLimit(editingBoard.id);
-                    const updated = await api<Board>(
-                      `/boards/${editingBoard.id}/settings`,
-                      {
+                    updateBoard(
+                      await api<Board>(`/boards/${editingBoard.id}/settings`, {
                         method: "PATCH",
-                        body: JSON.stringify({
-                          autoReviewEnabled: enable,
-                          verificationCommand: verificationDraft,
-                        }),
-                      },
-                    );
-                    setBoards((previous) =>
-                      previous.map((item) =>
-                        item.id === updated.id ? updated : item,
-                      ),
-                    );
-                    setEditingBoard(updated);
-                    setVerificationDraft(updated.verificationCommand);
-                    setMergeLimitDraft(
-                      String(updated.autoReviewMergeLimit ?? 0),
+                        body: JSON.stringify({ autoReviewEnabled: enable }),
+                      }),
                     );
                   });
                 }}
               >
                 {editingBoard.autoReviewEnabled
-                  ? verificationDraft.trim() !==
-                    editingBoard.verificationCommand
-                    ? "Save and re-enable"
-                    : "Disable auto-review"
+                  ? "Disable auto-review"
                   : "Enable auto-review"}
               </Button>
               {editingBoard.autoReviewEnabled && (
@@ -3885,7 +3798,7 @@ export function App() {
                   Enabled since{" "}
                   {editingBoard.autoReviewEnabledAt &&
                     date(editingBoard.autoReviewEnabledAt)}
-                  . New reviewed runs can merge without approval.
+                  .
                 </p>
               )}
             </div>

@@ -102,7 +102,7 @@ stateDiagram-v2
   Done --> Archived: archive
 ```
 
-- **A finished run only reaches Review.** Only your approval, or unattended review, moves a card to Done.
+- **A finished run only reaches Review.** Only your approval, or a pull request opened by unattended review merging on GitHub, moves a card to Done.
 - **Stop** and the 60-minute run timeout both end a run as Failed.
 - **Close without merging** moves a Review card to Done after a confirmation, or from the CLI with `bakery-cli close CARD_ID`. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
 - **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
@@ -300,25 +300,22 @@ The server starts Ready cards for you, highest priority first, then oldest first
 
 ### Unattended review
 
-Bakery reviews and merges finished cards without you. On a [GitHub pull request](#github-pull-request-mode) board it opens the PR instead of merging, and GitHub decides the merge.
+A separate Pi agent reviews finished cards without you. It never merges into local `main`: on a local board an approved card waits for your **Approve**, and on a [GitHub pull request](#github-pull-request-mode) board Bakery opens the PR and GitHub decides the merge.
 
 ```mermaid
 flowchart LR
-  A[Run reaches Review] --> B[Verification command<br/>on the card worktree]
-  B --> C[Separate Pi reviewer<br/>full tools, read-only by instruction]
-  C --> D[Verification command<br/>on the tentative merge]
-  D --> E[Fast-forward main]
-  B -. fails .-> H[Left for human review,<br/>with the reason]
-  C -. finding or unclear verdict .-> H
-  D -. fails or conflicts .-> H
+  A[Run reaches Review] --> C[Separate Pi reviewer<br/>runs the repo's checks itself]
+  C -- request_changes --> S[Sent back to the implementer<br/>at most twice]
+  C -- approve, local board --> H[Waits for your Approve]
+  C -- approve, pull-request board --> P[Pushes and opens the PR]
+  C -. needs a person or unclear verdict .-> H
 ```
 
-- It's set per repository. Open the repository's edit (pencil) dialog, enter a verification command, then enable it. For Bakery itself, use `npm test && npm run build`.
-- Bakery only considers runs that reach Review after you enable it. Cards already in Review don't merge.
+- It's set per repository. Open the repository's edit (pencil) dialog and enable it.
+- Bakery only considers runs that reach Review after you enable it.
 - Failed reviews aren't retried.
-- Each board has a limit on unattended merges per rolling 24 hours (0, the default, means no limit). Set it next to the toggle or with `bakery-cli board --merge-limit N`. Once it's reached, new cards wait in Review with the reason, and no verification or reviewer tokens are spent on them.
-- Turning the setting off stops a review in progress from merging or opening a PR.
-- The verification command runs locally with your permissions.
+- The reviewer reads the repository's `AGENTS.md`, `CLAUDE.md` and review instructions and runs the checks they ask for itself, instead of sending the card back for missing proof. Checks only a person can do, such as device runs, screenshots or staging access, leave the card for you.
+- Turning the setting off stops a review in progress from opening a PR.
 - The reviewer is a full Pi agent in the card's worktree, with the same tools, extensions, skills, and context files as a card run. It can read code and run builds or tests, and runs locally with your permissions. It's told not to change anything; if the work changes during review, the card is left for you.
 
 ## CLI
@@ -346,7 +343,7 @@ npm run bakery -- recover CARD_ID --yes
 npm run bakery -- runs CARD_ID
 npm run bakery -- conflicts
 npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
-npm run bakery -- board [--integration local|github-pr] [--merge-limit 0-99]
+npm run bakery -- board [--integration local|github-pr]
 npm run bakery -- pr CARD_ID [URL|off]
 ```
 
@@ -366,7 +363,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
-- `board [--integration local|github-pr] [--merge-limit 0-99]` shows the board, switches its integration mode, or sets its unattended-merge limit. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
+- `board [--integration local|github-pr]` shows the board and switches its integration mode. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
 - To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get `bakery-cli` (and its shorter alias `bakery`) on your `PATH`, run `npm link`. `bakery-cli help` lists the commands, and `bakery-cli help COMMAND` shows one command's options. On a terminal the output is laid out in coloured columns (`NO_COLOR` turns the colour off); piped, it stays tab-separated.
 
 ## Boards and lanes
@@ -454,7 +451,7 @@ When the fetch brings new commits, a notice in the bottom-left corner says how m
 ## Safety
 
 - Pi is told not to commit, push, or publish during a run. **That instruction isn't a sandbox.** Only run agents on repositories you trust.
-- Verification commands for unattended review run with your permissions.
+- The unattended reviewer runs builds and tests with your permissions.
 - Every run, retry, pickup, and review can spend model tokens. Bakery records the tokens and cost Pi reports, but only a daily cost budget stops automatic pickup. Nothing stops a run that is already going.
 
 ## Development

@@ -493,10 +493,6 @@ const server = createServer(async (req, res) => {
         if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
         send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
-      if ("autoReviewMergeLimit" in input) {
-        if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewMergeLimit)) throw new Error("Update autoReviewMergeLimit as an integer (0 for no limit), separately from other board settings");
-        send(res, 200, board.setAutoReviewMergeLimit(repoBoard.id, Number(input.autoReviewMergeLimit))); return;
-      }
       if ("autoReviewMaxFiles" in input || "autoReviewMaxPatchChars" in input) {
         const keys = Object.keys(input);
         if (keys.some(key => key !== "autoReviewMaxFiles" && key !== "autoReviewMaxPatchChars") || [input.autoReviewMaxFiles, input.autoReviewMaxPatchChars].some(value => value !== undefined && !Number.isSafeInteger(value))) throw new Error("Update autoReviewMaxFiles and autoReviewMaxPatchChars as integers (0 for no limit), separately from other board settings");
@@ -506,9 +502,10 @@ const server = createServer(async (req, res) => {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewConcurrency)) throw new Error("Update autoReviewConcurrency as an integer from 1 to 4, separately from other board settings");
         send(res, 200, board.setAutoReviewConcurrency(repoBoard.id, Number(input.autoReviewConcurrency))); return;
       }
-      if ("autoReviewEnabled" in input || "verificationCommand" in input) {
-        if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
-        send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled, input.verificationCommand)); return;
+      if ("autoReviewEnabled" in input) {
+        // Older clients still send the removed verificationCommand alongside; it is ignored.
+        if (Object.keys(input).some(key => key !== "autoReviewEnabled" && key !== "verificationCommand") || typeof input.autoReviewEnabled !== "boolean") throw new Error("Update autoReviewEnabled as a boolean, separately from other board settings");
+        send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled)); return;
       }
       if (typeof input.autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
       send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;

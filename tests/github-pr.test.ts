@@ -1846,7 +1846,7 @@ for (const mode of ["auto-review", "automatic pull requests"] as const) {
   test(`github-pr readiness: with ${mode} on, which push at Review themselves, nothing is prepared`, async () => {
     const f = fixture();
     try {
-      if (mode === "auto-review") f.board.setAutoReview(f.repoBoard.id, true, "true");
+      if (mode === "auto-review") f.board.setAutoReview(f.repoBoard.id, true);
       else f.board.setAutoPullRequest(f.repoBoard.id, true);
       const card = await reviewedCard(f);
       const { readiness, drafts } = readinessFor(f);

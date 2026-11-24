@@ -194,21 +194,16 @@ test("pickup enable needs consent; disable and concurrency changes use settings 
   } finally { await f.close(); }
 });
 
-test("board --merge-limit sets the unattended merge limit through the settings API and validates it", async () => {
+test("board shows the auto-review state, and the removed --merge-limit is refused", async () => {
   const f = await fixture();
   try {
-    assert.notEqual((await f.run("board", "--merge-limit", "100")).code, 0);
-    assert.notEqual((await f.run("board", "--merge-limit", "-1")).code, 0);
-    assert.notEqual((await f.run("stats", "--merge-limit", "3")).code, 0);
+    assert.notEqual((await f.run("board", "--merge-limit", "3")).code, 0);
     assert.equal(f.requests.filter(r => r.method === "PATCH").length, 0);
-    const set = await f.run("board", "--merge-limit", "3");
-    assert.equal(set.code, 0, set.stderr);
-    const cleared = await f.run("board", "--merge-limit", "0");
-    assert.equal(cleared.code, 0, cleared.stderr);
-    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ autoReviewMergeLimit: 3 }, { autoReviewMergeLimit: 0 }]);
+    const shown = await f.run("board");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /review:(on|off)/);
   } finally { await f.close(); }
 });
-
 test("pickup shows the rolling limit and requires consent to reset it", async () => {
   const f = await fixture();
   try {

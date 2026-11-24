@@ -709,7 +709,7 @@ export class Integration {
     }
     return done;
   }
-  approve(card: Card, reviewedFingerprint: string, origin: "human" | "auto" = "human", verifyMerged?: (worktree: string) => void): Card {
+  approve(card: Card, reviewedFingerprint: string): Card {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);
     // Pull requests are off in this build, so a board set to them has no safe way to deliver: never merge locally in their place.
@@ -721,8 +721,7 @@ export class Integration {
       throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, so merging into local main would leave it ahead of GitHub. Switch Integration to GitHub pull requests in the board's settings, or choose Local merge there to merge locally anyway`);
     const { repo, worktree, run } = this.location(card);
     const job = this.board.getAutoReviewJob(run.id);
-    if (job?.state === "running" && origin !== "auto") throw new Error("Agent review is in progress; wait for its result");
-    if (origin === "auto" && job?.state !== "running") throw new Error("Agent review is no longer active");
+    if (job?.state === "running") throw new Error("Agent review is in progress; wait for its result");
     if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
     if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
     if (git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
@@ -772,12 +771,8 @@ export class Integration {
         throw error;
       }
       const merged = git(scratch, "rev-parse", "HEAD");
-      if (origin === "auto" && !verifyMerged) throw new Error("Auto-review requires verification of the merged result");
-      verifyMerged?.(scratch);
-      if (!clean(scratch) || git(scratch, "rev-parse", "HEAD") !== merged) throw new Error("Verification changed the merged worktree");
       git(repo, "diff", "--check", base, merged);
       if (git(repo, "rev-parse", "main") !== base || gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true) !== localStatus) throw new Error("Main or its local changes changed during approval; retry before merging");
-      if (origin === "auto" && this.board.getAutoReviewJob(run.id)?.state !== "running") throw new Error("Agent review was interrupted before merge");
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
       git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.

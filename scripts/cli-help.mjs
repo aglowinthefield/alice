@@ -128,10 +128,10 @@ export const COMMANDS = [
     options: [JSON_OUT],
   },
   {
-    name: "board", group: "Boards", args: "[ID|PATH]", summary: "a board's integration and merge limit",
-    full: "[ID|PATH] [--integration local|github-pr] [--merge-limit 0-99] [--json]",
-    details: "--integration github-pr makes a card Done when its GitHub pull request merges onto origin/main (needs gh and a GitHub remote); --integration local merges on Approve.\n--merge-limit sets the most unattended review merges per rolling 24 hours (0 means no limit). At the limit, cards wait in Review for a person.",
-    options: [["--integration MODE", "local or github-pr"], ["--merge-limit N", "0 (no limit) to 99 merges per 24 hours"], JSON_OUT],
+    name: "board", group: "Boards", args: "[ID|PATH]", summary: "a board's integration and auto-review state",
+    full: "[ID|PATH] [--integration local|github-pr] [--json]",
+    details: "--integration github-pr makes a card Done when its GitHub pull request merges onto origin/main (needs gh and a GitHub remote); --integration local merges on Approve.",
+    options: [["--integration MODE", "local or github-pr"], JSON_OUT],
   },
   {
     name: "pr", group: "Boards", args: "CARD_ID [URL|off]", summary: "link a card to a pull request",

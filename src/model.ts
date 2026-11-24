@@ -41,13 +41,10 @@ export type Board = {
   sharedCaches?: string[];
   autoPullRequestEnabled?: boolean;
   autoReviewEnabled: boolean;
-  verificationCommand: string;
   autoReviewEnabledAt: string | null;
-  autoReviewMergeLimit?: number;
   autoReviewConcurrency?: number;
   autoReviewMaxFiles?: number;
   autoReviewMaxPatchChars?: number;
-  autoReviewMerges?: number;
   autoPickupEnabled: boolean;
   pickupConcurrency: number;
   pickupDailyLimit: number;

@@ -5,6 +5,6 @@ import tailwindcss from "@tailwindcss/vite";
 import { readFeatures } from "./src/features.js";
 // BAKERY_API_TARGET points the dev UI at another Bakery server, e.g. a remote one over Tailscale.
 const apiTarget = process.env.BAKERY_API_TARGET ?? "http://127.0.0.1:4317";
-// node_modules may be a symlink (scripts/verify.sh links the main checkout's), so allow its real path too.
+// node_modules may be a symlink to another checkout's, so allow its real path too.
 // The optional features are baked into the UI here (src/features.ts). A bad switch value fails the build.
 export default defineConfig({ plugins: [react(), tailwindcss()], define: { __BAKERY_FEATURES__: JSON.stringify(readFeatures(process.env)) }, server: { host: "127.0.0.1", port: Number(process.env.BAKERY_VITE_PORT ?? 5173), strictPort: true, fs: { allow: [searchForWorkspaceRoot(process.cwd()), realpathSync("node_modules")] }, proxy: { "/api": { target: apiTarget, changeOrigin: true, configure: proxy => proxy.on("proxyReq", (request, incoming) => { if (request.getHeader("origin") === `http://${incoming.headers.host}`) request.setHeader("origin", new URL(apiTarget).origin); }) } } } });

@@ -72,13 +72,13 @@ test("a Review card the agent reviewer still has notifies only once it is handed
   const f = fixture();
   try {
     f.push.subscribe(subscription("https://push.example/a"));
-    f.board.setAutoReview(f.repoBoard.id, true, "true");
+    f.board.setAutoReview(f.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const card = f.finish("Reviewed by an agent", "review");
     assert.ok(f.board.getCard(card.id)!.reviewWait, "the agent reviewer has it");
     await f.push.tick();
     assert.equal(f.sent.length, 0);
-    f.board.setAutoReview(f.repoBoard.id, false, "true");
+    f.board.setAutoReview(f.repoBoard.id, false);
     assert.equal(f.board.getCard(card.id)!.reviewWait, null);
     await f.push.tick();
     assert.deepEqual(f.sent.map(item => item.notice.tag), [`turn-${card.id}`]);

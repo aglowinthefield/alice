@@ -541,6 +541,30 @@ test("the reviewer prompt has it run checks itself and hand person-only evidence
   assert.doesNotMatch(text, /verification command/);
 });
 
+test("the reviewer sees the implementer's report and the card's attachments, so attached screenshots count as evidence", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"Check manually"}');
+  try {
+    const argsFile = join(item.dir, "args.txt");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const card = item.board.createCard({ repo: item.repo, title: "Restyle the palette", body: "Attach dark and light screenshots" });
+    item.board.setStatus(card.id, "ready");
+    const run = item.board.claim(card.id), worktree = join(item.data, "worktrees", card.id);
+    git(item.repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    item.board.attach(run.id, process.pid, worktree);
+    writeFileSync(join(worktree, "README.md"), "restyled\n");
+    item.board.recordReport(run.id, "Restyled the palette. Screenshots attached for both themes.");
+    item.board.addAttachment({ id: "shot", cardId: card.id, name: "palette-dark.png", type: "image/png", size: 10 });
+    item.board.finish(run.id, "review");
+    await item.auto.tick();
+    const prompt = readFileSync(argsFile, "utf8");
+    assert.match(prompt, /implementer's report for this run[^\n]*\nRestyled the palette\. Screenshots attached for both themes\./);
+    assert.match(prompt, new RegExp(`- ${item.data}/attachments/${card.id}/[^ ]*palette-dark\\.png \\(palette-dark\\.png, image/png\\)`));
+    assert.match(prompt, /a screenshot that shows what the card asks for is evidence/);
+  } finally { item.close(); }
+});
+
 test("the reviewer prompt names the changed files and tells it to run git diff against the base, not carry the patch", () => {
   const text = promptDiff(["a.ts", "b.ts"], "abc123");
   assert.match(text, /git diff abc123/);

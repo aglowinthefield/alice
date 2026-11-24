@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The agent reviewer now gets the implementer's report and the paths of the card's attachments. It opens attached screenshots and judges them, instead of handing a card to you for screenshots it couldn't see.
 - Unattended review never merges into local main. On a local board an agent-approved card waits for your Approve; pull-request boards still open the PR. The verification command, the merge limit, `bakery-cli board --merge-limit` and `scripts/verify.sh` are gone.
 - The agent reviewer runs the repository's checks itself instead of sending a card back for missing proof. Checks only a person can do, such as device runs, screenshots or staging, go to you.
 - Browser notifications now use Web Push: turn on **Notify this browser when a card needs you** in Settings and you get one when a card becomes your turn or fails, even with no Bakery tab open. Clicking it opens the card. It replaces the old Review notification, which only fired while a board page was open. Needs HTTPS or localhost.

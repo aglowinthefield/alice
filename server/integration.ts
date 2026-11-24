@@ -227,7 +227,7 @@ export class Integration {
   readonly warnings: string[] = [];
   /** Called with "merge" or "pr" when Bakery merges a card into local main or opens or updates its pull request. Used for usage telemetry. */
   onDelivered: (kind: "merge" | "pr") => void = () => {};
-  constructor(private board: Board, private dataDir: string, private fetchTimeoutMs = 30_000) {}
+  constructor(private board: Board, readonly dataDir: string, private fetchTimeoutMs = 30_000) {}
 
   /** The current or last push of `cardId` to GitHub, or null when Bakery has not pushed it since starting. */
   pushProgress(cardId: string): PushProgress | null { return this.progress.get(cardId) ?? null; }

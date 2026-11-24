@@ -144,7 +144,9 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">Cards</legend>
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Cards
+                  </legend>
                   <label className="mt-3 flex cursor-pointer items-center gap-2">
                     <input
                       type="checkbox"
@@ -161,7 +163,7 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">
+                  <legend className="float-left mb-3 w-full font-medium">
                     Card details layout
                   </legend>
                   <div className="mt-3 flex gap-5">
@@ -197,7 +199,9 @@ export function SettingsPage({
             {section === "appearance" && (
               <>
                 <fieldset className="text-sm" disabled={!settings || busy}>
-                  <legend className="pt-5 font-medium">Theme</legend>
+                  <legend className="float-left mb-3 w-full pt-5 font-medium">
+                    Theme
+                  </legend>
                   {(() => {
                     const { family, mode } = themeParts(
                       settings?.theme ?? "default",
@@ -262,7 +266,9 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">Density</legend>
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Density
+                  </legend>
                   <div className="mt-3 flex gap-5">
                     {(["compact", "default", "cozy"] as const).map(
                       (density) => (

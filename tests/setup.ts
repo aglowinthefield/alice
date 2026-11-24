@@ -23,11 +23,8 @@ chromium.launch = async (...args) => {
   const browser = await (useWebkit ? webkit.launch() : launchChromium(...args));
   const newContext = browser.newContext.bind(browser);
   // Browser.newPage creates its context through this, so pages opened either way get the limit.
-  // The app registers a Web Push service worker (public/sw.js) on every load. Since it landed, about 30 WebKit tests on
-  // macOS time out after a reload or a second page, once the worker controls the page. No test needs a real worker
-  // (tests/push-ui.test.ts stubs navigator.serviceWorker), so contexts block registration unless a test asks for it.
-  browser.newContext = async (options = {}) => {
-    const context = await newContext({ serviceWorkers: "block", ...options });
+  browser.newContext = async (...options) => {
+    const context = await newContext(...options);
     context.setDefaultTimeout(10_000);
     context.setDefaultNavigationTimeout(30_000);
     return context;

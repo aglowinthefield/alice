@@ -4,7 +4,7 @@ import { addAgent, type Usage } from "./agent.js";
 import type { CacheUsage } from "./turbo-summary.js";
 import { sharedCacheEnv } from "./shared-cache-env.js";
 import { validateSharedCaches, type SharedCache } from "./shared-caches.js";
-import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
+import { defaultChatModel, parseAgentModels, parseBoardAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, validateBoardAgentModels, type AgentModel, type AgentModels, type AgentPhase, type BoardAgentModels } from "./agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import { atRunCapacity, autoStartRefusal, budgetReached, dailyStartsReached, loopGuards, nextStartAt } from "./repo-limits.js";
 import { classifyProviderFailure, isProviderFailureKind, type ProviderFailureKind } from "./provider-failure.js";
@@ -16,7 +16,7 @@ import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/rep
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean };
@@ -29,7 +29,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullReque
   autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, pushMainAfterMerge: row.pushMainAfterMerge !== 0,
   autoPullRequestEnabled: row.autoPullRequestEnabled !== 0, autoPullRequestEnabledAt: row.autoPullRequestEnabledAt,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
-  autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels), sharedCaches: validateSharedCaches(JSON.parse(row.sharedCaches)),
+  autoPickupStarts: starts.length, agentModels: parseBoardAgentModels(row.agentModels), sharedCaches: validateSharedCaches(JSON.parse(row.sharedCaches)),
   autoPickupNextAt: nextStartAt(limitSettings(row), starts),
   pickupCostBudget: row.pickupCostBudget, cost24h, integration: pullRequests ? row.integration : "local", integrationConfigured: row.integration, integrationError: pullRequests ? row.integrationError : "", integrationWarning: pullRequests ? row.integrationWarning : "", integrationSyncedAt: row.integrationSyncedAt,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
@@ -719,13 +719,16 @@ export class Board {
   }
   setAgentModels(id: string, agentModels: unknown): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
-    this.db.prepare("UPDATE boards SET agentModels=? WHERE id=?").run(JSON.stringify(validateAgentModels(agentModels)), id);
+    this.db.prepare("UPDATE boards SET agentModels=? WHERE id=?").run(JSON.stringify(validateBoardAgentModels(agentModels)), id);
     return this.getBoard(id)!;
   }
-  /** Repository choice per field, then the global default; empty fields leave Pi's own default. */
-  agentModelFor(repo: string, phase: AgentPhase): AgentModel {
+  /**
+   * Repository choice per field, then the global default; empty fields leave Pi's own default. A card run's `attempt`
+   * past the first uses the board's retry model when its ladder is on.
+   */
+  agentModelFor(repo: string, phase: AgentPhase, attempt = 1): AgentModel {
     const row = this.db.prepare("SELECT agentModels FROM boards WHERE repo=?").get(repo) as { agentModels: string } | undefined;
-    return resolveAgentModel(phase, row && parseAgentModels(row.agentModels), this.getSettings().agentModels);
+    return resolveAgentModel(phase, row && parseBoardAgentModels(row.agentModels), this.getSettings().agentModels, attempt);
   }
   setAutoCollapseEmptySwimlanes(id: string, enabled: boolean): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");

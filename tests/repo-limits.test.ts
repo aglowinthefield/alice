@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoStartRefusal, budgetReached, loopGuards, nextStartAt, reviewDiffRefusal, spendLimits, type LimitSettings } from "../server/repo-limits.js";
+import { atMachineCapacity, autoStartRefusal, machineAgentLimit, budgetReached, loopGuards, nextStartAt, reviewDiffRefusal, spendLimits, type LimitSettings } from "../server/repo-limits.js";
 
 const stored: LimitSettings = { limitsEnabled: true, pickupConcurrency: 2, autoReviewConcurrency: 1, pickupDailyLimit: 2, pickupCostBudget: 5, autoReviewMaxFiles: 10, autoReviewMaxPatchChars: 1000 };
 const off: LimitSettings = { ...stored, limitsEnabled: false };
@@ -29,4 +29,14 @@ test("loop guards are fixed numbers, not board settings", () => {
   assert.equal(loopGuards.reviewerSendBacks, 2);
   assert.equal(loopGuards.ciFixRuns, 3);
   assert.deepEqual([...loopGuards.autoRetryDelaysMinutes], [1, 5, 15]);
+});
+
+test("the machine limit defaults to a quarter of the cores, at least 2, and is checked before any board limit", () => {
+  assert.equal(machineAgentLimit(0, 16), 4);
+  assert.equal(machineAgentLimit(0, 4), 2);
+  assert.equal(machineAgentLimit(3, 16), 3);
+  assert.equal(atMachineCapacity(3, 3), true);
+  assert.equal(atMachineCapacity(3, 2), false);
+  assert.equal(autoStartRefusal(off, { running: 0, starts: 0, cost24h: 0, machine: { setting: 2, active: 2 } })?.kind, "machine");
+  assert.equal(autoStartRefusal(off, { running: 0, starts: 0, cost24h: 0, machine: { setting: 2, active: 1 } }), null);
 });

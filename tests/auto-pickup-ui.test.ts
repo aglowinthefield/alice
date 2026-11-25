@@ -91,3 +91,33 @@ test("with limits off the start limit, budget and diff caps are hidden and never
     assert.deepEqual(patches, [{ limitsEnabled: true }]);
   } finally { await browser.close(); await server.close(); }
 });
+
+test("Settings sets the agents-at-once limit for all boards and shows the automatic value and how many run", async () => {
+  const server = await createServer({ server: { port: 0, strictPort: false } });
+  await server.listen();
+  const address = server.httpServer!.address();
+  assert.ok(address && typeof address !== "string");
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    let settings = { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default", maxActiveAgents: 0, activeAgentsLimit: 4, activeAgents: 3 };
+    const patches: unknown[] = [];
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/settings" && route.request().method() === "PATCH") {
+        const patch = route.request().postDataJSON() as { maxActiveAgents: number }; patches.push(patch);
+        settings = { ...settings, ...patch, activeAgentsLimit: patch.maxActiveAgents || 4 };
+        await route.fulfill({ json: settings }); return;
+      }
+      await route.fulfill({ json: path === "/api/settings" ? settings : [] });
+    });
+    await page.goto(`http://127.0.0.1:${address.port}/settings/general`);
+    const select = page.getByRole("combobox", { name: "Agents at once, all boards" });
+    await select.waitFor();
+    assert.equal(await select.locator("option:checked").textContent(), "Automatic (4)");
+    await page.getByText("3 running now.", { exact: false }).waitFor();
+    await select.selectOption("2");
+    await page.waitForFunction(() => (document.querySelector('select[aria-label="Agents at once, all boards"]') as HTMLSelectElement | null)?.value === "2");
+    assert.deepEqual(patches, [{ maxActiveAgents: 2 }]);
+  } finally { await browser.close(); await server.close(); }
+});

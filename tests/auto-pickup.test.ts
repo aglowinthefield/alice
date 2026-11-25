@@ -180,6 +180,30 @@ test("a pickup tick looks up candidates once, and Ready cards are built without 
   } finally { await item.close(); }
 });
 
+test("the machine-wide agent limit holds pickup and automatic starts on every board, but a person's run still starts", async () => {
+  const item = fixture();
+  try {
+    item.board.updateSettings({ maxActiveAgents: 1 });
+    assert.throws(() => item.board.updateSettings({ maxActiveAgents: 33 }), /0 \(automatic\) or from 1 to 32/);
+    assert.throws(() => item.board.updateSettings({ maxActiveAgents: -1 }), /0 \(automatic\)/);
+    item.board.setAutoPickup(item.repoBoard.id, true, 3);
+    const first = item.card("First"), second = item.card("Second"), mine = item.card("Mine");
+    item.pickup.tick();
+    item.pickup.tick();
+    assert.equal(item.board.getCard(first.id)?.status, "running");
+    assert.equal(item.board.listRuns(second.id).length, 0, "the board has room but the machine does not");
+    assert.deepEqual(item.board.machineCapacity(), { setting: 1, limit: 1, active: 1 });
+    assert.throws(() => item.worker.start(item.board.getCard(second.id)!, "manual", "to fix failing CI"), /limit of 1 agents at once across all boards/,
+      "automatic fixes started as manual runs wait too");
+    item.worker.start(item.board.getCard(mine.id)!, "manual", "", undefined, true);
+    assert.equal(item.board.getCard(mine.id)?.status, "running", "a run the operator starts is never refused");
+    item.release();
+    await waitFor(() => item.board.getCard(first.id)?.status === "review" && item.board.getCard(mine.id)?.status === "review");
+    item.pickup.tick();
+    assert.equal(item.board.getCard(second.id)?.status, "running", "a freed slot goes to the next card");
+  } finally { await item.close(); }
+});
+
 test("a rolling six-start limit prevents unbounded model spend and persists after reopening", async () => {
   const item = fixture();
   try {
@@ -333,6 +357,8 @@ test("sentinel jobs live outside auto-pickup: never picked, never limited, never
   try {
     const job = (key: string) => item.board.setStatus(item.board.createCard({ title: key, body: "Fix it", repo: item.repo, idempotencyKey: key }).id, "ready");
     const fix = job("sentinel:1:head:main"), request = job("request:c1");
+    // About the board's slots: room on the machine for all three, whatever the runner's core count.
+    item.board.updateSettings({ maxActiveAgents: 8 });
     item.board.setAutoPickup(item.repoBoard.id, true, 1);
     item.pickup.tick();
     assert.equal(item.board.listRuns(fix.id).length + item.board.listRuns(request.id).length, 0, "the sentinel starts its own jobs");

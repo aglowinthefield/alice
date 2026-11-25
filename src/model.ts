@@ -105,6 +105,11 @@ export type BakerySettings = {
   agentModels?: AgentModels;
   discordWebhookUrl?: string;
   telemetryEnabled?: boolean;
+  /** Agents at once across every board; 0 means automatic. */
+  maxActiveAgents?: number;
+  /** The limit in force (automatic resolved) and the agents running now. */
+  activeAgentsLimit?: number;
+  activeAgents?: number;
   /** False when the server has no BAKERY_TELEMETRY_ENDPOINT; the toggle is then hidden. */
   telemetryAvailable?: boolean;
 };

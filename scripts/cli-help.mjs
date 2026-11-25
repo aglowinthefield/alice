@@ -150,6 +150,13 @@ export const COMMANDS = [
     full: "[--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
   },
   {
+    name: "agents", group: "Boards", args: "[N|auto]", summary: "agents at once across all boards: show or set",
+    full: "[N|auto] [--json]",
+    details: "Card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. auto is a quarter of the CPU cores, at least 2. Automatic work (pickup, send-backs, CI and hook fixes, sentinels, reviews) waits for a slot; a run you start yourself always starts.",
+    options: [JSON_OUT],
+    examples: [["bakery-cli agents 4", ""], ["bakery-cli agents auto", ""]],
+  },
+  {
     name: "limits", group: "Boards", args: "[on|off]", summary: "spend limits: show, or turn them on or off",
     full: "[on|off] [--board ID|PATH] [--json]",
     details: "Spend limits are the daily start limit, the daily cost budget and the agent reviewer's diff caps. They are off by default, and apply only when on; the stored values are kept either way. Concurrency and loop guards (send-back, CI-fix and retry caps) always apply. Set the values with pickup --limit and --budget.",

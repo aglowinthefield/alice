@@ -47,7 +47,16 @@ work=""
 cleanup() { [[ -n $work ]] && git -C "$repo" worktree remove --force "$work" >/dev/null 2>&1; rm -rf "$lock"; }
 trap cleanup EXIT
 
-git -C "$repo" fetch -q origin main
+# launchd runs this while the SSH agent may be locked (1Password then refuses the key), so fetch a GitHub ssh
+# remote over https with gh's token. The user@ in the URL also keeps an `insteadOf https://github.com/` rewrite
+# from sending it back to ssh.
+remote=$(git -C "$repo" remote get-url origin)
+if [[ $remote =~ ^git@github\.com:(.+)$ ]] && gh_user=$(gh config get -h github.com user 2>/dev/null) && [[ -n $gh_user ]]; then
+  git -C "$repo" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+    fetch -q "https://$gh_user@github.com/${BASH_REMATCH[1]}" +refs/heads/main:refs/remotes/origin/main
+else
+  git -C "$repo" fetch -q origin main
+fi
 # The app bundles only the Tauri shell and the connection page; the board UI comes from the server.
 commit=$(git -C "$repo" log -1 --format=%H origin/main -- src-tauri desktop)
 stamp=$state/desktop-commit

@@ -260,6 +260,8 @@ export type Card = {
   failureSummary?: string | null;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
+  /** On a Running card: why its run may be going in circles, such as repeating one tool call; null while it looks fine. */
+  stuck?: string | null;
   /** Automatic retries (of 3) spent after temporary provider failures since the card's last successful run. */
   autoRetries?: number;
   /** When auto-pickup retries this Ready card after a temporary provider failure; null when none is waiting. */

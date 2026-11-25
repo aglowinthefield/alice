@@ -10,6 +10,18 @@ import { classifyProviderFailure, describeProviderFailure, type ProviderFailureK
 import { describeToolCall } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 import { commitIdentityArgs } from "./git-identity.js";
+import { STUCK_MESSAGE, StuckDetector } from "./stuck.js";
+
+/**
+ * The worktree's uncommitted changes in brief: per-file line counts against HEAD plus the untracked file names. It
+ * changes when a turn edits files, whichever tool did it. Null when Git cannot answer, so a Git hiccup is not a change.
+ */
+function worktreeFingerprint(worktree: string): string | null {
+  try {
+    return execFileSync("git", ["-C", worktree, "diff", "--numstat", "--no-renames", "HEAD", "--"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 })
+      + "\0" + execFileSync("git", ["-C", worktree, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024 });
+  } catch { return null; }
+}
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -310,6 +322,23 @@ export class Worker {
     let settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
     let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
     const tools = new Map<string, { name: string; finished: boolean; failed: boolean; since: number; detail: string }>();
+    // Stuck detection: what the worktree looked like at the last turn end, and whether an edit or write landed since.
+    const stuck = new StuckDetector();
+    let lastFingerprint = worktreeFingerprint(worktree), editedThisTurn = false, flaggedStuck = false, wrapUpSent = false;
+    const steer = (message: string) => {
+      mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
+      writeFileSync(`${wrapUpFile}.tmp`, message);
+      renameSync(`${wrapUpFile}.tmp`, wrapUpFile);
+    };
+    const flagStuck = (reason: string | null) => {
+      if (!reason) return;
+      flaggedStuck = true;
+      this.board.markStuck(run.id, reason);
+      // The wrap-up message matters more; once it is sent, a step-back message would only distract from the report.
+      let steered = false;
+      if (!wrapUpSent) try { steer(STUCK_MESSAGE); steered = true; } catch (error) { console.error(`Could not steer run ${run.id} out of a loop:`, error); }
+      this.board.append(run.id, `\nThis run may be stuck: it ${reason}.${steered ? " Bakery asked Pi to step back and try a different approach." : ""}\n`);
+    };
     let touchedAt = Date.now();
     child.stdout?.on("data", (chunk: Buffer) => {
       // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
@@ -353,10 +382,25 @@ export class Worker {
             const name = typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName) ? event.toolName : "tool";
             tools.set(event.toolCallId, { name, finished: false, failed: false, since: Date.now(), detail: describeToolCall(event.args, worktree) });
             this.live.set(run.id, { tool: name, turn: turn || 1, since: new Date().toISOString() });
+            flagStuck(stuck.toolCall(name, event.args));
           }
           if (event.type === "tool_execution_end" && typeof event.toolCallId === "string") {
             const tool = tools.get(event.toolCallId);
             if (tool) { tool.finished = true; tool.failed = event.isError === true; }
+            // An edit that leaves the diff's line counts alone is invisible to the fingerprint, so count it here.
+            if (tool && !tool.failed && (tool.name === "edit" || tool.name === "write")) editedThisTurn = true;
+          }
+          if (event.type === "turn_end") {
+            const fingerprint = worktreeFingerprint(worktree);
+            const changed = editedThisTurn || (fingerprint !== null && fingerprint !== lastFingerprint);
+            if (fingerprint !== null) lastFingerprint = fingerprint;
+            editedThisTurn = false;
+            if (changed && flaggedStuck) {
+              flaggedStuck = false;
+              this.board.markStuck(run.id, null);
+              this.board.append(run.id, "\nThe run changed files again, so Bakery no longer marks it as maybe stuck.\n");
+            }
+            flagStuck(stuck.turnEnd(changed));
           }
           if (event.type === "turn_end") this.board.completeTurn(run.id);
           if (event.type === "turn_end" && tools.size) {
@@ -395,9 +439,8 @@ export class Worker {
     // Steer the run to write its report before the timeout kills it; a SIGTERM loses the report and the next attempt starts blind.
     const wrapUpTimer = setTimeout(() => {
       try {
-        mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
-        writeFileSync(`${wrapUpFile}.tmp`, WRAP_UP_MESSAGE);
-        renameSync(`${wrapUpFile}.tmp`, wrapUpFile);
+        wrapUpSent = true;
+        steer(WRAP_UP_MESSAGE);
         this.board.append(run.id, `\nBakery asked Pi to stop starting new work and write its report: the ${timeoutLabel} is ${Math.round(wrapUpLeadMs / 60_000)} min away.\n`);
       } catch (error) { console.error(`Could not ask run ${run.id} to wrap up:`, error); }
     }, Math.max(0, runTimeoutMs - wrapUpLeadMs));

@@ -107,6 +107,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   attachmentCount: number;
   /** A Failed card's reason in a few words (see `summarizeFailure`); null on other cards. */
   failureSummary: string | null;
+  /** Why the running run may be stuck (see server/stuck.ts); null when the card is not running or looks fine. */
+  stuck: string | null;
   /** Done cards on a local board with a GitHub remote: is the merge on origin/main (last fetch)? */
   originMain?: "pushed" | "local" } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
@@ -136,6 +138,8 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   recoveryOf: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
+  /** Why Bakery thinks this run may be going in circles (see server/stuck.ts); null while it looks fine. */
+  stuck: string | null;
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
@@ -168,7 +172,8 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   EXISTS (SELECT 1 FROM approvals merged WHERE merged.cardId=cards.id AND merged.merged=1) AS locallyMerged,
   COALESCE((SELECT latest.report LIKE '%bakery-plan%' FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), 0) AS planOnly,
   CASE WHEN cards.status='failed' THEN (SELECT latest.error FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedError,
-  CASE WHEN cards.status='failed' THEN (SELECT latest.failureKind FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedKind
+  CASE WHEN cards.status='failed' THEN (SELECT latest.failureKind FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedKind,
+  CASE WHEN cards.status='running' THEN (SELECT latest.stuck FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS stuck
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id
   LEFT JOIN (SELECT cardId, ${usageColumns.map(column => `SUM(${column}) AS ${column}`).join(", ")}, MAX(cost IS NULL) AS unrecorded
     FROM (SELECT cardId, ${usageColumns.join(", ")} FROM runs UNION ALL SELECT cardId, ${usageColumns.join(", ")} FROM auto_review_jobs) GROUP BY cardId) spend ON spend.cardId=cards.id`;
@@ -380,6 +385,7 @@ export class Board {
     // The failed run a fresh-session recovery run replaced. Later runs on the card resume the recovery run's session.
     if (!runColumns.has("recoveryOf")) this.db.exec("ALTER TABLE runs ADD COLUMN recoveryOf TEXT");
     if (!runColumns.has("retryScheduled")) this.db.exec("ALTER TABLE runs ADD COLUMN retryScheduled INTEGER NOT NULL DEFAULT 0");
+    if (!runColumns.has("stuck")) this.db.exec("ALTER TABLE runs ADD COLUMN stuck TEXT");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
@@ -1606,6 +1612,8 @@ export class Board {
       return this.getCard(cardId)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  /** Flags a running run as maybe stuck with the reason, or clears the flag with null. */
+  markStuck(id: string, reason: string | null) { this.db.prepare("UPDATE runs SET stuck=? WHERE id=? AND status='running'").run(reason, id); }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {
     // Keep a bounded tail. Store only human-readable text; never raw tool arguments or credentials.

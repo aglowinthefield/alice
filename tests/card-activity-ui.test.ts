@@ -18,6 +18,7 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     checking: { status: "review", reviewWait: "agent_review", reviewAction: null },
     busy: { status: "running", lastActivityAt: recent },
     quiet: { status: "running", lastActivityAt: stale },
+    looping: { status: "running", lastActivityAt: recent, stuck: "repeated the same bash call 5 times in its last 20 tool calls" },
   };
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -39,6 +40,10 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     assert.equal(await tile("busy").getAttribute("data-activity"), "working");
     assert.equal(await tile("quiet").getAttribute("data-activity"), "quiet");
     assert.match(await tile("quiet").innerText(), /Quiet 12m/);
+    assert.doesNotMatch(await tile("busy").innerText(), /May be stuck/);
+    const stuck = tile("looping").getByTestId("activity-badge");
+    assert.equal(await stuck.innerText(), "May be stuck");
+    assert.match(await stuck.getAttribute("title") ?? "", /^The run repeated the same bash call 5 times in its last 20 tool calls\. Bakery asked the agent to step back/);
     assert.equal(await tile("github").getAttribute("data-activity"), "waiting");
     assert.match(await tile("github").innerText(), /Waiting on GitHub/);
     assert.equal(await tile("mine").getAttribute("data-activity"), null);
@@ -55,7 +60,7 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     assert.doesNotMatch(await tile("github").innerText(), /Your turn/i);
     const nav = page.getByRole("list", { name: "Card counts" });
     assert.equal(await nav.locator('[data-group="review"]').getAttribute("aria-label"), "Review: 3", "only the cards you can act on count as Review");
-    assert.equal(await nav.locator('[data-group="in-progress"]').getAttribute("aria-label"), "In progress: 5");
+    assert.equal(await nav.locator('[data-group="in-progress"]').getAttribute("aria-label"), "In progress: 6");
 
     // The run finishes and an agent reviews it: it sits below the cards that need you. (tests/push.test.ts covers
     // that its notification waits until the agent hands it over.)

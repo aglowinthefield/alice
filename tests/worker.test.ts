@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker } from "../server/worker.js";
+import { STUCK_MESSAGE } from "../server/stuck.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
@@ -995,4 +996,89 @@ test("the wrap-up extension steers only a busy session, once per message, so it 
     if (previous === undefined) delete process.env.BAKERY_WRAP_UP_FILE; else process.env.BAKERY_WRAP_UP_FILE = previous;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// A fake Pi that loads the real wrap-up extension and works in turns. `loop` runs the same command every turn until it
+// is steered and the test has written `release`, then reports and settles. `long` reads a new file each turn and edits one every sixth turn, then settles.
+function stuckFixture(behaviour: "loop" | "long", turns = 80) {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), script = join(dir, "pi-fake.mjs"), steers = join(dir, "steers.jsonl"), release = join(dir, "release");
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  writeFileSync(script, `import { appendFileSync, existsSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const args = process.argv.slice(2), handlers = {};
+const emit = event => process.stdout.write(JSON.stringify(event) + "\\n");
+let steered = false, turn = 0;
+const pi = {
+  on: (name, handler) => { handlers[name] = handler; },
+  sendUserMessage: (text, options) => { steered = true; appendFileSync(${JSON.stringify(steers)}, JSON.stringify({ text, options }) + "\\n"); },
+};
+(await import(pathToFileURL(args[args.indexOf("-e") + 1]).href)).default(pi);
+emit({ type: "agent_start" }); handlers.agent_start?.();
+const tool = (id, toolName, toolArgs) => {
+  emit({ type: "tool_execution_start", toolCallId: id, toolName, args: toolArgs });
+  emit({ type: "tool_execution_end", toolCallId: id, isError: false });
+};
+const settle = text => {
+  emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } });
+  emit({ type: "agent_settled", aborted: false }); handlers.agent_settled?.();
+  // Exit only once stdout has drained; exiting at once can drop the last events when the pipe is full.
+  clearInterval(timer); process.stdout.end(() => process.exit(0));
+};
+const timer = setInterval(() => {
+  turn++;
+  emit({ type: "turn_start" });
+  if (${JSON.stringify(behaviour)} === "loop") tool("t" + turn, "bash", { command: "npm test -- --grep flaky", timeout: 600 });
+  else {
+    tool("r" + turn, "read", { path: "src/module-" + turn + ".ts" });
+    if (turn % 6 === 0) { appendFileSync("notes.md", "step " + turn + "\\n"); tool("e" + turn, "edit", { path: "notes.md" }); tool("b" + turn, "bash", { command: "npm test" }); }
+  }
+  emit({ type: "turn_end" });
+  if (steered && existsSync(${JSON.stringify(release)})) settle("I was rerunning a flaky test; the failure is in the fixture, not the code.");
+  if (turn >= ${turns}) settle("Done.");
+}, 20);
+`);
+  writeFileSync(fakePi, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+  chmodSync(fakePi, 0o755);
+  const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+  const card = board.createCard({ title: "Maybe stuck", body: "", repo });
+  board.setStatus(card.id, "ready");
+  const delivered = () => existsSync(steers) ? readFileSync(steers, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+  return { dir, board, worker, card, delivered, release: () => writeFileSync(release, ""), cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("a run repeating one command is shown as maybe stuck and steered once to step back", async () => {
+  const f = stuckFixture("loop");
+  try {
+    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => !!f.board.getCard(f.card.id)?.stuck, 10_000);
+    assert.equal(f.board.getCard(f.card.id)?.stuck, "repeated the same bash call 5 times in its last 5 tool calls");
+    assert.equal(f.board.getCard(f.card.id)?.status, "running");
+    f.release();
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running", 10_000);
+    const finished = f.board.getRun(run.id)!;
+    assert.equal(finished.status, "review", finished.error ?? "");
+    assert.match(finished.stuck ?? "", /repeated the same bash call/);
+    assert.equal(f.board.getCard(f.card.id)?.stuck, null, "only a running card shows the flag");
+    assert.deepEqual(f.delivered(), [{ text: STUCK_MESSAGE, options: { deliverAs: "steer" } }], "steered once");
+    assert.equal(finished.output.match(/This run may be stuck: it repeated the same bash call 5 times/g)?.length, 1);
+    assert.match(finished.output, /asked Pi to step back/);
+  } finally { f.cleanup(); }
+});
+
+test("a normal long run that keeps changing files is not flagged", async () => {
+  const f = stuckFixture("long");
+  try {
+    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
+    const finished = f.board.getRun(run.id)!;
+    assert.equal(finished.status, "review", finished.error ?? "");
+    assert.ok(finished.turns >= 80, `ran ${finished.turns} turns`);
+    assert.equal(finished.stuck, null);
+    assert.deepEqual(f.delivered(), []);
+    assert.doesNotMatch(finished.output, /may be stuck/);
+  } finally { f.cleanup(); }
 });

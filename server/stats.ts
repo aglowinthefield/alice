@@ -2,7 +2,9 @@
 export type StatsRun = { repo: string; cardId: string; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };
 export type StatsReview = { repo: string; state: string; agent: string; startedAt: string; finishedAt: string | null; cost: number | null };
 export type StatsCard = { repo: string; status: string; createdAt: string; updatedAt: string; attempts: number; reviewRounds: number; ciReworks: number };
-export type StatsInput = { runs: StatsRun[]; reviews: StatsReview[]; cards: StatsCard[] };
+/** One close without merging; reason is '' when the operator skipped it. */
+export type StatsClose = { repo: string; at: string; reason: string };
+export type StatsInput = { runs: StatsRun[]; reviews: StatsReview[]; cards: StatsCard[]; closes: StatsClose[] };
 export type StatsOptions = { days: number | null; repo: string | null; now?: number };
 
 export type DayPoint = { date: string; succeeded: number; failed: number; interrupted: number; cost: number; created: number; done: number; reviewCost: number };
@@ -17,6 +19,8 @@ export type Stats = {
   byAgent: GroupRow[];
   byRepo: GroupRow[];
   cardStatus: { status: string; count: number }[];
+  /** Closes without merging in range, by reason ('' = not given), most common first, a skipped reason last among ties. A card closed twice counts twice. */
+  closeReasons: { reason: string; count: number }[];
 };
 
 // SQLite's datetime('now') has no zone; read it as UTC like the ISO strings.
@@ -83,6 +87,8 @@ export function buildStats(input: StatsInput, options: StatsOptions): Stats {
   const cost = sum(runs.map(run => run.cost)) + sum(reviews.map(review => review.cost));
   const statusCounts = new Map<string, number>();
   for (const card of cards) statusCounts.set(card.status, (statusCounts.get(card.status) ?? 0) + 1);
+  const closeCounts = new Map<string, number>();
+  for (const close of input.closes) if (inRepo(close) && inRange(close.at)) closeCounts.set(close.reason, (closeCounts.get(close.reason) ?? 0) + 1);
   return {
     days: options.days,
     summary: {
@@ -104,5 +110,6 @@ export function buildStats(input: StatsInput, options: StatsOptions): Stats {
     byAgent: group(runs, run => run.agent || "Unknown"),
     byRepo: group(runs, run => run.repo),
     cardStatus: [...statusCounts].map(([status, count]) => ({ status, count })),
+    closeReasons: [...closeCounts].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || Number(!a.reason) - Number(!b.reason) || a.reason.localeCompare(b.reason)),
   };
 }

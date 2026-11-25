@@ -1,4 +1,6 @@
-import type { AutoReviewJob, Card, CardEvent, CardStatus, Run } from "./board.js";
+import type { AutoReviewJob, Card, CardEvent, CardStatus, CloseReason, Run } from "./board.js";
+
+const closeReasonLabels: Record<CloseReason, string> = { duplicate: "Duplicate", "wrong-approach": "Wrong approach", "not-needed": "Not needed", superseded: "Superseded", other: "Other" };
 
 /** One line in a card's history, oldest first. `from`/`to` are set when the line is a status change. */
 export type CardHistoryEntry = { at: string; from: CardStatus | null; to: CardStatus | null; text: string; detail?: string };
@@ -10,7 +12,10 @@ export type CardHistoryEntry = { at: string; from: CardStatus | null; to: CardSt
  */
 export function cardHistory(card: Card, events: CardEvent[], runs: Run[], reviews: AutoReviewJob[]): CardHistoryEntry[] {
   const entries: CardHistoryEntry[] = [{ at: card.createdAt, from: null, to: null, text: "Card created" }];
-  for (const event of events) entries.push({ at: event.at, from: event.fromStatus, to: event.toStatus, text: event.reason || "Status changed" });
+  for (const event of events) {
+    const why = event.closeReason ? [`Reason: ${closeReasonLabels[event.closeReason]}`, event.closeNote].filter(Boolean).join("\n") : undefined;
+    entries.push({ at: event.at, from: event.fromStatus, to: event.toStatus, text: event.reason || "Status changed", ...(why ? { detail: why } : {}) });
+  }
   const recordedSince = events[0]?.at;
   for (const run of runs) {
     if (recordedSince && run.startedAt >= recordedSince) continue;

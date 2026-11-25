@@ -9,7 +9,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
+import { Board, closeReasons, isCloseReason, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
@@ -390,7 +390,7 @@ const server = createServer(async (req, res) => {
       if (repo && !visible.has(repo)) { send(res, 404, { error: "Board not found" }); return; }
       const input = board.statsInput();
       // Removed boards stay out, like the Today view.
-      send(res, 200, buildStats({ runs: input.runs.filter(item => visible.has(item.repo)), reviews: input.reviews.filter(item => visible.has(item.repo)), cards: input.cards.filter(item => visible.has(item.repo)) }, { days, repo })); return;
+      send(res, 200, buildStats({ runs: input.runs.filter(item => visible.has(item.repo)), reviews: input.reviews.filter(item => visible.has(item.repo)), cards: input.cards.filter(item => visible.has(item.repo)), closes: input.closes.filter(item => visible.has(item.repo)) }, { days, repo })); return;
     }
     if (path === "/api/boards" && req.method === "POST") {
       const root = repoRoot((await body(req)).repo);
@@ -844,7 +844,14 @@ const server = createServer(async (req, res) => {
           if ((await body(req)).acknowledged !== true) throw new Error("Confirm that you inspected the interrupted worktree");
           send(res, 200, board.resolveInterrupted(id)); return;
         }
-        if (req.method === "POST" && action === "close") { send(res, 200, board.closeReview(id)); return; }
+        if (req.method === "POST" && action === "close") {
+          // Both optional: skipping the reason still closes the card.
+          const { reason, note } = await body(req);
+          if (reason != null && !isCloseReason(reason)) throw new Error(`reason must be one of ${closeReasons.join(", ")}`);
+          if (note != null && (typeof note !== "string" || note.length > 500)) throw new Error("note must be text of at most 500 characters");
+          if (typeof note === "string" && note.trim() && reason == null) throw new Error("A note needs a reason; use reason other for free text");
+          send(res, 200, board.closeReview(id, { reason: isCloseReason(reason) ? reason : undefined, note: typeof note === "string" ? note : undefined })); return;
+        }
         if (req.method === "POST" && action === "status") {
           const { status, withDependencies } = await body(req);
           if (status !== "triage" && status !== "ready" && status !== "done") throw new Error("Status must be triage, ready, or done");

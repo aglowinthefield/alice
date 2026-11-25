@@ -267,6 +267,14 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
+    // Close without merging takes an optional reason from a fixed list, and a note only alongside one.
+    const dropped = (await request(`/boards/${first.id}/cards`, "POST", { title: "Dropped", body: "" })).data;
+    assert.match((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { reason: "boring" })).data.error, /reason must be one of duplicate, wrong-approach/);
+    assert.match((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { note: "why" })).data.error, /A note needs a reason/);
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { note: "x".repeat(501), reason: "other" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { reason: "superseded", note: "Replaced by the new importer" })).data.status, "done");
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/history`)).data.at(-1).detail, "Reason: Superseded\nReplaced by the new importer");
+    assert.deepEqual((await request(`/stats?days=30`)).data.closeReasons, [{ reason: "superseded", count: 1 }]);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");

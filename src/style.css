@@ -329,6 +329,8 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
 ::selection { background: var(--selection); color: var(--foreground); }
 ::-webkit-scrollbar { height: 8px; width: 8px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 12px; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* The command palette's field is the whole dialog's subject; the dialog's border already shows where typing goes. */
+[data-palette-input]:focus-visible { outline: none; }
 /* Diff and description code syntax follows the active palette; diff line colors still mark additions and removals. */
 :is([data-change], .markdown :where(pre)) :is(.hljs-keyword, .hljs-doctag, .hljs-template-tag, .hljs-type) { color: var(--syntax-keyword); }
 :is([data-change], .markdown :where(pre)) :is(.hljs-title, .hljs-title.class_, .hljs-title.function_) { color: var(--syntax-entity); }

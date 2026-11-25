@@ -142,6 +142,8 @@ One radius, `--radius: 0.3rem`, with Tailwind's `rounded-sm` to `rounded-xl` der
 
 Built on Radix primitives and shadcn's new-york style with Lucide icons. Dialogs fade in over 160 ms and pop with a spring-like curve over 180 ms; view transitions are off.
 
+The Cmd+K (Ctrl+K) command palette is a dialog with the same motion, placed high on the screen like Spotlight. Its rows are 32px, show the command's own shortcut at the right, and cards appear only once something is typed. A command that needs a card acts on the focused or open card, or asks which card.
+
 ## Do's and Don'ts
 
 - Do keep live progress motion: the orbit on a card whose agent is working, the slow breathe on one waiting, the pulse on cards that move along during a drag. These are Bakery's spinner equivalents and stop under reduced motion.

@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
-import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker, continuationMessage } from "../server/worker.js";
+import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker, continuationMessage, sessionIntact } from "../server/worker.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
@@ -532,6 +532,41 @@ test("card runs and conflict repairs pass their resolved Pi model and thinking l
     await waitFor(() => board.getRun(conflict.id)?.status === "review");
     assert.deepEqual(args().slice(0, 11), ["--mode", "json", "--session-id", conflict.sessionId, "--model", "openai-codex/gpt-5.5", "--thinking", "xhigh", "-e", wrapUpExtension, "--"]);
     assert.match(args().slice(11).join("\n"), /merge-conflict repair attempt/);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a board's model ladder runs attempt 1 on the card-run model and later attempts on the retry model", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), argsFile = join(dir, "args.txt");
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+    const card = board.createCard({ title: "Ladder", body: "", repo });
+    board.setStatus(card.id, "ready");
+    board.setAgentModels(board.listBoards()[0].id, { work: { model: "anthropic/claude-sonnet-4-5", thinking: "high" }, conflict: { model: "openai-codex/gpt-5.5", thinking: "" }, retry: { model: "anthropic/claude-opus-4-1", thinking: "" } });
+    const models = () => readFileSync(argsFile, "utf8").split("\n").slice(4, 8);
+    const first = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(first.id)?.status === "review");
+    assert.equal(first.attempt, 1);
+    assert.deepEqual(models(), ["--model", "anthropic/claude-sonnet-4-5", "--thinking", "high"]);
+    for (const attempt of [2, 3]) {
+      const retry = worker.start(board.getCard(card.id)!);
+      await waitFor(() => board.getRun(retry.id)?.status === "review");
+      assert.equal(retry.attempt, attempt);
+      // A blank retry thinking level keeps the card-run level.
+      assert.deepEqual(models(), ["--model", "anthropic/claude-opus-4-1", "--thinking", "high"]);
+    }
+    // Conflict repairs keep their own model; the ladder covers card runs only.
+    board.recordMergeFailure(card.id, ["README.md"], "conflict");
+    const conflict = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(conflict.id)?.status === "review");
+    assert.deepEqual(models(), ["--model", "openai-codex/gpt-5.5", "-e", wrapUpExtension]);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -1123,5 +1158,38 @@ test("a run that failed some other way (a manual stop) is retried as before: sam
     const [, retry] = f.called();
     assert.match(retry.prompt, /^Task from Bakery card .*Add the flag/s);
     assert.doesNotMatch(retry.prompt, /ran out of time/);
+  } finally { f.cleanup(); }
+});
+
+test("a timed-out session whose only user message was cut short starts fresh, since Pi would load no conversation", async () => {
+  const f = timeoutFixture(["hang", "ok"]);
+  try {
+    const first = await f.timeOut();
+    const header = JSON.stringify({ type: "session", version: 3, id: first.sessionId, cwd: f.dir });
+    const metadata = JSON.stringify({ type: "model_change", provider: "anthropic", modelId: "claude" });
+    const task = JSON.stringify({ type: "message", message: { role: "user", content: "Task from Bakery card: Add the flag" } });
+    writeFileSync(first.sessionFile!, `${header}\n${metadata}\n${task.slice(0, 30)}`);
+    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    assert.equal(next.sessionId, `bakery-${f.card.id}-2`);
+    await waitFor(() => f.settled());
+    const [, fresh] = f.called();
+    assert.match(fresh.prompt, /Add the flag/);
+    assert.doesNotMatch(fresh.prompt, /^You ran out of time/);
+    // Metadata alone after the header is no conversation either.
+    writeFileSync(first.sessionFile!, `${header}\n${metadata}\n`);
+    assert.equal(sessionIntact(first), false);
+  } finally { f.cleanup(); }
+});
+
+test("a timed-out session with its task intact and a final entry cut short by SIGTERM is still continued", async () => {
+  const f = timeoutFixture(["hang", "ok"]);
+  try {
+    const first = await f.timeOut();
+    writeFileSync(first.sessionFile!, readFileSync(first.sessionFile!, "utf8") + JSON.stringify({ type: "message", message: { role: "assistant", content: "Half a thought" } }).slice(0, 25));
+    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    assert.equal(next.sessionId, first.sessionId);
+    await waitFor(() => f.settled());
+    const [, resumed] = f.called();
+    assert.equal(resumed.prompt, continuationMessage(first));
   } finally { f.cleanup(); }
 });

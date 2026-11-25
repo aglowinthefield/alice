@@ -1,7 +1,11 @@
 import type { SemanticTitleRules } from "./pr-title.js";
 import type { ThemeName } from "./themes.js";
 import type { UsageFields } from "./usage.js";
-import type { AgentModels, ThinkingLevel } from "../server/agent-models.js";
+import type {
+  AgentModels,
+  BoardAgentModels,
+  ThinkingLevel,
+} from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
 export type Status =
@@ -57,7 +61,7 @@ export type Board = {
   pickupCostBudget?: number | null;
   cost24h?: number;
   autoPickupBudgetReached?: boolean;
-  agentModels?: AgentModels;
+  agentModels?: BoardAgentModels;
   /** Per status; `review` counts only Review cards that need you, `reviewWaiting` the rest. */
   cardCounts?: Partial<Record<CountKey, number>>;
   /** Cards created outside this UI that the operator has not opened the board to see yet. */

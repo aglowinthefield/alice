@@ -291,7 +291,7 @@ export class Worker {
     // The wrap-up extension watches this file; Bakery writes it once, shortly before the run timeout.
     const wrapUpFile = join(this.dataDir, "wrap-up", run.id);
     try {
-      const models = piModelArgs(this.board.agentModelFor(card.repo, phase));
+      const models = piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt));
       child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);

@@ -390,13 +390,15 @@ npm run bakery -- pr CARD_ID [URL|off]
 
 Bakery starts Pi for three kinds of runs. Each can use its own model and thinking level:
 
-- **Card runs**: normal runs and retries.
+- **Card runs**: normal runs and, unless the repository sets Card retries, retries.
 - **Conflict fixes**: runs that repair a merge conflict.
 - **Agent review**: the reviewer used by [unattended review](#unattended-review).
 
 Set global defaults in **Settings → Pi models**. To override them for one repository, use **Pi models** in its Edit repository dialog. A blank field inherits: the repository value comes first, then the global value, then the default in your Pi settings. Model and thinking level inherit separately, so a repository can change only the model and keep the global thinking level.
 
 A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-codex/gpt-5.5`. Bakery passes it as `--model`, and the thinking level as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). It only passes flags you set. The model field suggests the models `pi --list-models` reports. Bakery caches that list for 10 minutes. A change applies to runs that start after you save it. Retries keep their Pi session but use the current model.
+
+A repository can also set **Card retries**, a model ladder for card runs: a card's first attempt uses the Card runs model, and every later attempt (after a failure, a send-back, or a CI, hook or comment fix) uses the Card retries model. A blank Card retries thinking level keeps the Card runs level. Leave Card retries blank to run every attempt on Card runs. It is per repository only and does not change conflict fixes, agent review or PR drafts. The attempt history shows which model each attempt used.
 
 ## Server, data, and restarts
 

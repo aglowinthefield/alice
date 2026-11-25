@@ -106,8 +106,9 @@ export function reducePiEvent(previous: PiStreamState, input: unknown, { now, wo
       if (index >= 0) state.tools[index] = { ...state.tools[index], finished: true, failed: event.isError === true };
     }
     if (event.type === "turn_end") {
-      effects.push({ type: "completeTurn" });
+      // Before completeTurn, so once a turn is counted its worktree check is done.
       effects.push({ type: "turnEnded", edited: state.tools.some(tool => tool.finished && !tool.failed && (tool.name === "edit" || tool.name === "write")) });
+      effects.push({ type: "completeTurn" });
     }
     if (event.type === "turn_end" && state.tools.length) {
       const counts = new Map<string, number>();

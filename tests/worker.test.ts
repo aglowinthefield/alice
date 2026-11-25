@@ -1045,11 +1045,16 @@ function stuckFixture(behaviour: "loop" | "long" | "append-untracked" | "rewrite
   writeFileSync(join(repo, "README.md"), "fixture\n");
   execFileSync("git", ["-C", repo, "add", "README.md"]);
   execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  // Each turn starts only once Bakery has counted the one before, and with it checked the worktree, so a slow machine
+  // cannot fold several turns' file changes into one check.
   writeFileSync(script, `import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+const db = new DatabaseSync(${JSON.stringify(join(dir, "board.sqlite"))}, { readOnly: true });
+const counted = () => db.prepare("SELECT COALESCE(MAX(turns), 0) AS turns FROM runs").get().turns;
 const args = process.argv.slice(2), handlers = {};
 const emit = event => process.stdout.write(JSON.stringify(event) + "\\n");
-let steered = false, turn = 0;
+let steered = false, done = false, turn = 0;
 const pi = {
   on: (name, handler) => { handlers[name] = handler; },
   sendUserMessage: (text, options) => { steered = true; appendFileSync(${JSON.stringify(steers)}, JSON.stringify({ text, options }) + "\\n"); },
@@ -1064,9 +1069,11 @@ const settle = text => {
   emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } });
   emit({ type: "agent_settled", aborted: false }); handlers.agent_settled?.();
   // Exit only once stdout has drained; exiting at once can drop the last events when the pipe is full.
-  clearInterval(timer); process.stdout.end(() => process.exit(0));
+  done = true; process.stdout.end(() => process.exit(0));
 };
-const timer = setInterval(() => {
+const step = () => {
+  if (done) return;
+  if (counted() < turn) { setTimeout(step, 5); return; }
   turn++;
   emit({ type: "turn_start" });
   const mode = ${JSON.stringify(behaviour)};
@@ -1079,10 +1086,12 @@ const timer = setInterval(() => {
   }
   emit({ type: "turn_end" });
   if (steered && existsSync(${JSON.stringify(release)})) settle("I was rerunning a flaky test; the failure is in the fixture, not the code.");
-  if (turn >= ${turns}) settle("Done.");
-}, 20);
+  else if (turn >= ${turns}) settle("Done.");
+  setTimeout(step, 0);
+};
+step();
 `);
-  writeFileSync(fakePi, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+  writeFileSync(fakePi, `#!/bin/sh\nexec "${process.execPath}" --no-warnings "${script}" "$@"\n`);
   chmodSync(fakePi, 0o755);
   const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
   const card = board.createCard({ title: "Maybe stuck", body: "", repo });

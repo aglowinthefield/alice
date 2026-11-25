@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { request as httpRequest } from "node:http";
@@ -26,6 +26,21 @@ function prefs(data: Record<string, unknown>) {
   return rest;
 }
 
+/**
+ * Waits until the spawned server answers. It fails at once if the server exits. A slow start (a loaded CI runner
+ * compiling TypeScript) only waits longer; the 60-second cap is there to give a clear error before the test timeout.
+ */
+async function waitForServer(url: string, child: ChildProcess, output: () => string) {
+  const giveUp = Date.now() + 60_000;
+  while (true) {
+    try { await fetch(`${url}/api/boards`); return; }
+    catch {
+      if (child.exitCode !== null || Date.now() > giveUp) throw new Error(`Server did not start: ${output()}`);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+}
+
 test("repository boards expand home paths, inherit roots, and isolate cards", async () => {
   const home = mkdtempSync(join(tmpdir(), "bakery-api-"));
   const alpha = join(home, "code", "alpha"), beta = join(home, "code", "beta"), gamma = join(home, "code", "gamma");
@@ -47,14 +62,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await waitForServer(url, child, () => output);
     // /api/status reports package.json's version and the short Git commit the server started on.
     const status = (await request("/status")).data;
     assert.equal(status.version, JSON.parse(readFileSync("package.json", "utf8")).version);
@@ -308,14 +316,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await waitForServer(url, child, () => output);
     writeFileSync(join(home, "fail"), "");
     const failed = await request("/models");
     assert.equal(failed.status, 200);
@@ -373,14 +374,7 @@ test("POST start while the server drains answers 202 queued and does not start a
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await waitForServer(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Queued", body: "" })).data;
     assert.equal((await request(`/boards/${board.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
@@ -434,14 +428,7 @@ ${event({ type: "agent_settled", aborted: false })}
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await waitForServer(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Live", body: "" })).data;
     const lists = async () => [
@@ -500,14 +487,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await waitForServer(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Rework", body: "" })).data;
     const base = `/boards/${board.id}/cards/${card.id}`;
@@ -560,14 +540,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await waitForServer(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const toReview = async (title: string) => {
       const card = (await request(`/boards/${board.id}/cards`, "POST", { title, body: "" })).data;

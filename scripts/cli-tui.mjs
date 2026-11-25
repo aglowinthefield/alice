@@ -81,13 +81,22 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
   }
 
   const ask = (text, run) => { state.confirm = { text, run }; };
+  // The card text check behind the web board's Ready dialog. A server without it answers 404, so nothing is flagged.
+  async function readyFlags(base) {
+    try { return (await api("GET", `${base}/ready-check`)).flags ?? []; }
+    catch (error) { if (/^Bakery 404: Not found$/.test(error.message)) return []; throw error; }
+  }
   async function act(action, card) {
     const base = `${path}/cards/${card.id}`;
     const quoted = `“${card.title.length > 50 ? `${card.title.slice(0, 49)}…` : card.title}”`;
     const done = message => async () => { await refresh(); say(message); };
     if (action === "ready") {
       const move = async () => { await api("POST", `${base}/status`, { status: "ready" }); await done(`Moved ${quoted} to Ready`)(); };
-      if (board.autoPickupEnabled) ask(`Pickup is on, so Ready can start a paid Pi run soon. Move ${quoted} to Ready?`, move);
+      // Same check as the web board's dialog: y is Ready anyway; n leaves it in Triage, and o opens it to edit.
+      const flags = await readyFlags(base);
+      const pickup = board.autoPickupEnabled ? " Pickup is on, so it can start a paid Pi run soon." : "";
+      if (flags.length) ask(`${quoted} may need another pass: ${flags.map(flag => flag.message).join("; ")}.${pickup} Move it to Ready anyway?`, move);
+      else if (pickup) ask(`Pickup is on, so Ready can start a paid Pi run soon. Move ${quoted} to Ready?`, move);
       else await move();
     } else if (action === "triage") {
       await api("POST", `${base}/status`, { status: "triage" }); await done(`Moved ${quoted} back to Triage`)();
@@ -217,10 +226,22 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
   return { state, refresh, key, render };
 }
 
-function openUrl(url) {
-  const child = spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { detached: true, stdio: "ignore" });
+/**
+ * Opens `url` in the browser: `$BROWSER` when set, else the platform's opener. Returns false when there is nothing to
+ * open it with (no display over SSH), so the caller can rely on the printed URL instead.
+ */
+export function openUrl(url) {
+  const browser = process.env.BROWSER?.trim();
+  const headless = process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+  if (!browser && headless) return false;
+  const [command, args] = browser ? [browser, [url]]
+    : process.platform === "darwin" ? ["open", [url]]
+    : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]]
+    : ["xdg-open", [url]];
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
   child.on("error", () => {});
   child.unref();
+  return true;
 }
 
 /** Runs the TUI on this terminal until q or Ctrl-C, refreshing the board every 2 seconds. */

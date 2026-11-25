@@ -3,12 +3,12 @@ import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
-const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
+const board = { id: "board-one", repo: "/tmp/bakery-project", limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 const cards = [
   { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 50, attempts: 3, reviewRounds: 2 },
@@ -28,6 +28,7 @@ async function fixture(boards: object[] = [board]) {
     let data: unknown;
     if (path === "/api/boards" && req.method === "POST") { res.writeHead(201); data = { id: "board-new", repo: (input as { repo: string }).repo }; }
     else if (path === "/api/status") data = { version: "9.8.7", commit: "abc1234" };
+    else if (path === "/api/settings") data = { maxActiveAgents: req.method === "PATCH" ? (input as { maxActiveAgents: number }).maxActiveAgents : 0, activeAgentsLimit: req.method === "PATCH" && (input as { maxActiveAgents: number }).maxActiveAgents ? (input as { maxActiveAgents: number }).maxActiveAgents : 4, activeAgents: 3 };
     else if (path === "/api/boards") data = boards;
     else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = cards;
     else if (/^\/api\/boards\/board-one\/cards\/[\w-]+$/.test(path) && req.method === "PATCH") {
@@ -44,7 +45,12 @@ async function fixture(boards: object[] = [board]) {
     }
     else if (path === `/api/boards/${board.id}/cards/purge-attachments` && req.method === "POST") data = (input as { cardIds: string[] }).cardIds.map(cardId => ({ cardId, files: 2, bytes: 10 }));
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
-    else if (path === `/api/boards/${board.id}/cards/card-one/status` && req.method === "POST") data = { id: "card-one", status: (input as { status: string }).status };
+    else if (/^\/api\/boards\/board-one\/cards\/card-(one|flagged)\/status$/.test(path) && req.method === "POST") data = { id: path.split("/")[5], status: (input as { status: string }).status };
+    // card-one stands in for an older server without the check, which answers 404.
+    else if (path === `/api/boards/${board.id}/cards/card-flagged/ready-check`) data = { flags: [
+      { rule: "person-only", message: "Needs a physical device, which the agent does not have", quote: "Verify on a physical iPhone." },
+      { rule: "no-acceptance", message: "No acceptance criteria" },
+    ] };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|two)\/start$/.test(path) && req.method === "POST") data = { id: `run-${path.split("/")[5]}`, attempt: 2, status: "running" };
     else if (path === `/api/boards/${board.id}/cards/card-three/start` && req.method === "POST") { res.writeHead(400); res.end(JSON.stringify({ error: "Move this card to Ready before starting a run" })); return; }
     else if (path === `/api/boards/${board.id}/cards/card-one/runs`) data = [
@@ -156,6 +162,26 @@ test("card creation and status changes go through the API; Ready needs consent w
   } finally { await f.close(); }
 });
 
+test("ready lists a Triage card's flags and moves it only with --yes", async () => {
+  const f = await fixture([{ ...board, autoPickupEnabled: false }]);
+  try {
+    const flagged = await f.run("ready", "card-flagged");
+    assert.notEqual(flagged.code, 0);
+    assert.match(flagged.stderr, /may need another pass/);
+    assert.match(flagged.stderr, /Needs a physical device.*"Verify on a physical iPhone\."/);
+    assert.match(flagged.stderr, /No acceptance criteria/);
+    assert.match(flagged.stderr, /bakery-cli edit card-flagged .*--yes to move it to Ready anyway/s);
+    assert.equal(f.requests.filter(r => r.method === "POST").length, 0, "a flagged card stays in Triage");
+    const anyway = await f.run("ready", "card-flagged", "--yes");
+    assert.equal(anyway.code, 0, anyway.stderr);
+    assert.match(anyway.stderr, /moving to Ready anyway:\n  - Needs a physical device/);
+    assert.equal(anyway.stdout, "card-flagged\tready\t\n");
+    const unchecked = await f.run("ready", "card-one");
+    assert.equal(unchecked.code, 0, "a server without the check still moves the card");
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.path), [`/api/boards/${board.id}/cards/card-flagged/status`, `/api/boards/${board.id}/cards/card-one/status`]);
+  } finally { await f.close(); }
+});
+
 test("add captures a Triage card on the board for the current directory", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "bakery-cli-add-")));
   const alpha = join(root, "alpha"), beta = join(root, "beta"), elsewhere = join(root, "elsewhere");
@@ -193,6 +219,62 @@ test("pickup enable needs consent; disable and concurrency changes use settings 
       { autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 99 },
       { autoPickupEnabled: false, pickupConcurrency: 2, pickupDailyLimit: 6 },
     ]);
+  } finally { await f.close(); }
+});
+
+test("open prints and opens the board or a card by its short ID, through $BROWSER", async () => {
+  const f = await fixture();
+  const dir = mkdtempSync(join(tmpdir(), "bakery-open-")), log = join(dir, "opened.txt"), browser = join(dir, "browser");
+  writeFileSync(browser, `#!/bin/sh\nprintf '%s\\n' "$1" >> '${log}'\n`); chmodSync(browser, 0o755);
+  const saved = process.env.BROWSER;
+  process.env.BROWSER = browser;
+  try {
+    const boardOnly = await f.run("open");
+    assert.equal(boardOnly.code, 0, boardOnly.stderr);
+    assert.match(boardOnly.stdout, /\/board\/board-one\n$/);
+    const card = await f.run("open", "card-on");
+    assert.equal(card.code, 0, card.stderr);
+    assert.match(card.stdout, /\/board\/board-one\/card\/card-one\n$/);
+    assert.match((await f.run("open", "card-")).stderr, /More than one card starts with card-/);
+    assert.match((await f.run("open", "nope")).stderr, /Card not found on this board: nope/);
+    const printed = await f.run("open", "card-one", "--print");
+    assert.match(printed.stdout, /\/board\/board-one\/card\/card-one\n$/);
+    assert.notEqual((await f.run("cards", "--print")).code, 0, "--print only goes with open");
+    // The browser runs detached; wait for both opens to land.
+    for (let i = 0; i < 50 && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n").map(url => new URL(url).pathname), ["/board/board-one", "/board/board-one/card/card-one"]);
+  } finally {
+    if (saved === undefined) delete process.env.BROWSER; else process.env.BROWSER = saved;
+    rmSync(dir, { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test("agents shows and sets the agents-at-once limit across all boards", async () => {
+  const f = await fixture();
+  try {
+    const shown = await f.run("agents");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /^Agents at once, all boards: 4 \(automatic\); 3 running now\./);
+    assert.match((await f.run("agents", "2")).stdout, /^Agents at once, all boards: 2; 3 running now\./);
+    assert.equal((await f.run("agents", "auto")).code, 0);
+    assert.notEqual((await f.run("agents", "lots")).code, 0);
+    assert.notEqual((await f.run("agents", "--board", "board-one")).code, 0);
+    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ maxActiveAgents: 2 }, { maxActiveAgents: 0 }]);
+  } finally { await f.close(); }
+});
+
+test("limits shows the spend limits and turns them on or off for one board", async () => {
+  const f = await fixture();
+  try {
+    const shown = await f.run("limits");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /^Limits on: 6 starts per 24h; no budget; .*loop guards always apply\.\nAll boards: 3 of 4 agents running \(bakery-cli agents\)\.\n$/);
+    const off = await f.run("limits", "off");
+    assert.equal(off.code, 0, off.stderr);
+    assert.match(off.stdout, /^Limits off \(stored, not applied\)/);
+    assert.notEqual((await f.run("limits", "maybe")).code, 0);
+    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ limitsEnabled: false }]);
   } finally { await f.close(); }
 });
 
@@ -432,15 +514,22 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
 
 test("doctor exits promptly with its own status when the telemetry route stalls", async () => {
   const stalled: ServerResponse[] = [];
+  // How long the CLI held the stalled request open: about 1s when it gives up on its own, 10s on the default timeout.
+  // Timed from the request's arrival, so a slow process start on a busy machine doesn't count.
+  let held: Promise<number> | undefined;
   const stub = createServer((req, res) => {
-    if (req.url === "/api/telemetry/doctor") { stalled.push(res); return; }
+    if (req.url === "/api/telemetry/doctor") {
+      stalled.push(res);
+      const arrived = performance.now();
+      held = new Promise(resolve => req.socket.once("close", () => resolve(performance.now() - arrived)));
+      return;
+    }
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]));
   });
   await new Promise<void>(resolve => stub.listen(0, "127.0.0.1", resolve));
   try {
     const port = (stub.address() as { port: number }).port;
-    const started = Date.now();
     const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
     let stdout = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
@@ -448,7 +537,8 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
     assert.equal(code, 1);
     assert.match(stdout, /^FAIL\tboard /m);
     assert.equal(stalled.length, 1, "the failure was reported");
-    assert.ok(Date.now() - started < 5000, `exit took ${Date.now() - started}ms, not the 10s request timeout`);
+    const ms = await held!;
+    assert.ok(ms < 8000, `the CLI held the stalled request ${Math.round(ms)}ms, not its own 1s limit`);
   } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 
@@ -572,7 +662,7 @@ test("an unknown command suggests the nearest one", async () => {
   const f = await fixture();
   try {
     const result = await f.run("crate");
-    assert.equal(result.code, 1);
+    assert.equal(result.code, 2);
     assert.match(result.stderr, /Unknown command: crate\. Did you mean create\?/);
   } finally { await f.close(); }
 });

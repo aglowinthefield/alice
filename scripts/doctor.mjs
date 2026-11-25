@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { serviceCheck } from "./service.mjs";
 import { formatVersion } from "./version.mjs";
 
 // Bare names like `pi` are npm `.cmd` shims on Windows, which only a shell can run.
@@ -142,10 +143,10 @@ export async function doctor({ env = process.env, origin, local, fetchBoards, fe
     boards = await fetchBoards();
     serverCheck = { status: "pass", name: "server", detail: `${origin.origin} (${local ? "local" : "remote"}, ${boards.length} board${boards.length === 1 ? "" : "s"})` };
   } catch (error) {
-    serverCheck = { status: "fail", name: "server", detail: `${error instanceof Error ? error.message : error}; ${local ? "start it with npm start or npm run dev" : "check that the server is up and BAKERY_URL is right"}` };
+    serverCheck = { status: "fail", name: "server", detail: `${error instanceof Error ? error.message : error}; ${local ? "start it with bakery-cli service install, npm start or npm run dev" : "check that the server is up and BAKERY_URL is right"}` };
   }
   // Tools, the data directory and repository paths belong to the machine the server runs on.
-  const machine = local ? [nodeCheck(), ...gitChecks(), ...piChecks(env), wtCheck(env), ghCheck(env, boards), ...dataDirChecks(env)] : [];
+  const machine = local ? [nodeCheck(), ...gitChecks(), ...piChecks(env), wtCheck(env), ghCheck(env, boards), ...dataDirChecks(env), serviceCheck(env)].filter(Boolean) : [];
   // The versions come first. A remote server can run a different version than this CLI, so print both.
   const versions = [];
   if (cliVersion) versions.push({ status: "pass", name: "bakery-cli", detail: formatVersion(cliVersion) });

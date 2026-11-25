@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from 
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
+import { commitIdentityArgs } from "./git-identity.js";
 import { featureOffMessage } from "../src/features.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
@@ -23,6 +24,36 @@ function gitCommand(repo: string, args: string[], index?: string, raw = false, m
   }
 }
 function git(repo: string, ...args: string[]): string { return gitCommand(repo, args); }
+/**
+ * `gitCommand` without blocking the event loop, for work that runs on a timer. Under load one git call can take
+ * seconds, and a synchronous one stalls every request the server is handling meanwhile.
+ */
+function gitCommandAsync(repo: string, args: string[], raw = false): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (!error) return resolve(raw ? stdout : stdout.trim());
+      const detail = (stderr || stdout || "Git command failed").trim();
+      reject(Object.assign(new Error(`${args[0]} failed: ${detail.slice(0, 4000)}`), { status: typeof error.code === "number" ? error.code : undefined }));
+    });
+  });
+}
+const readGit = (repo: string, ...args: string[]) => gitCommandAsync(repo, args);
+async function isAncestorAsync(repo: string, ancestor: string, descendant: string): Promise<boolean> {
+  try { await readGit(repo, "merge-base", "--is-ancestor", ancestor, descendant); return true; }
+  catch (error) { if ((error as { status?: number }).status === 1) return false; throw error; }
+}
+/** What `location` reads from Git to confirm a card worktree is the card's, on its branch, with no conflicts. */
+type WorktreeFacts = { repoTop: string; worktreeTop: string; repoCommon: string; worktreeCommon: string; branch: string; unmerged: string };
+const worktreeArgs = {
+  top: ["rev-parse", "--show-toplevel"], common: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+  branch: ["symbolic-ref", "--short", "HEAD"], unmerged: ["ls-files", "-u"],
+} as const;
+function worktreeProblem(facts: WorktreeFacts, repo: string, worktree: string, cardId: string): string | null {
+  if (realpathSync(facts.repoTop) !== realpathSync(repo) || realpathSync(facts.worktreeTop) !== realpathSync(worktree) ||
+    realpathSync(facts.repoCommon) !== realpathSync(facts.worktreeCommon) || facts.branch !== `bakery/${cardId}`) return "Card worktree is not on its expected branch in this repository";
+  if (facts.unmerged) return "Resolve conflicts in the card worktree before review";
+  return null;
+}
 /** What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies. */
 /** `work` names the reviewed run and its tree. Unlike `fingerprint`, it ignores where local main is. */
 export type ReviewSummary = { fingerprint: string; work: string; paths: string[]; patchChars: number | null; unsupported: boolean };
@@ -102,7 +133,7 @@ function mergeRemoteBranch(worktree: string, branch: string, scratch = false): {
   const blocker = scratch ? "" : mergeBlocker(worktree, branch);
   if (blocker) throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks, but Bakery could not merge them: ${blocker}. Nothing was changed or pushed. Fix that in ${worktree}, then approve again`);
   try {
-    git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
+    git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
   } catch (error) {
     let files = "";
     try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean).join(", "); } catch { /* Not mid-merge. */ }
@@ -227,7 +258,7 @@ export class Integration {
   readonly warnings: string[] = [];
   /** Called with "merge" or "pr" when Bakery merges a card into local main or opens or updates its pull request. Used for usage telemetry. */
   onDelivered: (kind: "merge" | "pr") => void = () => {};
-  constructor(private board: Board, private dataDir: string, private fetchTimeoutMs = 30_000) {}
+  constructor(private board: Board, readonly dataDir: string, private fetchTimeoutMs = 30_000) {}
 
   /** The current or last push of `cardId` to GitHub, or null when Bakery has not pushed it since starting. */
   pushProgress(cardId: string): PushProgress | null { return this.progress.get(cardId) ?? null; }
@@ -253,20 +284,36 @@ export class Integration {
     }
   }
 
-  private location(card: Card, allowFailed = false) {
+  /** The card's latest reviewed (or, with `allowFailed`, failed) run and its worktree, before any Git check. */
+  private reviewedRun(card: Card, allowFailed: boolean) {
     const run = this.board.listRuns(card.id)[0];
     if (!run || !run.worktree || !(card.status === "review" && run.status === "review" ||
       allowFailed && card.status === "failed" && run.status === "failed")) throw new Error("Only a reviewed run can be inspected or approved");
     const repo = card.repo, worktree = join(this.dataDir, "worktrees", card.id);
     if (!existsSync(worktree) || realpathSync(worktree) !== realpathSync(run.worktree)) throw new Error("Card worktree is missing or has moved");
-    if (realpathSync(git(repo, "rev-parse", "--show-toplevel")) !== realpathSync(repo) ||
-      realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree) ||
-      realpathSync(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
-      realpathSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")) ||
-      git(worktree, "symbolic-ref", "--short", "HEAD") !== `bakery/${card.id}`) throw new Error("Card worktree is not on its expected branch in this repository");
-    if (git(worktree, "ls-files", "-u")) throw new Error("Resolve conflicts in the card worktree before review");
     return { repo, worktree, run };
   }
+  private location(card: Card, allowFailed = false) {
+    const found = this.reviewedRun(card, allowFailed), { repo, worktree } = found;
+    const problem = worktreeProblem({
+      repoTop: git(repo, ...worktreeArgs.top), worktreeTop: git(worktree, ...worktreeArgs.top),
+      repoCommon: git(repo, ...worktreeArgs.common), worktreeCommon: git(worktree, ...worktreeArgs.common),
+      branch: git(worktree, ...worktreeArgs.branch), unmerged: git(worktree, ...worktreeArgs.unmerged),
+    }, repo, worktree, card.id);
+    if (problem) throw new Error(problem);
+    return found;
+  }
+  /** `location` without blocking the event loop. */
+  private async locationAsync(card: Card, allowFailed = false) {
+    const found = this.reviewedRun(card, allowFailed), { repo, worktree } = found;
+    const [repoTop, worktreeTop, repoCommon, worktreeCommon, branch, unmerged] = await Promise.all([
+      readGit(repo, ...worktreeArgs.top), readGit(worktree, ...worktreeArgs.top), readGit(repo, ...worktreeArgs.common),
+      readGit(worktree, ...worktreeArgs.common), readGit(worktree, ...worktreeArgs.branch), readGit(worktree, ...worktreeArgs.unmerged)]);
+    const problem = worktreeProblem({ repoTop, worktreeTop, repoCommon, worktreeCommon, branch, unmerged }, repo, worktree, card.id);
+    if (problem) throw new Error(problem);
+    return found;
+  }
+
 
   private snapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
     const { repo, worktree, run } = this.location(card);
@@ -367,20 +414,32 @@ export class Integration {
   // A merge parent proves the branch was deliberately integrated. An old, unchanged
   // branch tip being an ancestor of main does not. Do not count an "ours" merge
   // whose result tree is identical to its first parent.
-  reconcileExternallyMerged(): void {
+  private reconciling: Promise<void> | null = null;
+  /**
+   * Marks cards whose work someone merged into local main outside Bakery. Runs on the auto-review timer with async
+   * Git, so it never stalls the server; a call while one is still running waits for that one instead of starting another.
+   */
+  reconcileExternallyMerged(): Promise<void> {
+    this.reconciling ??= this.reconcile().finally(() => { this.reconciling = null; });
+    return this.reconciling;
+  }
+  private async reconcile(): Promise<void> {
     for (const { card } of this.board.listExternalMergeCandidates()) {
       try {
-        const { repo, worktree, run } = this.location(card, true);
-        if (gitCommand(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true) ||
-          git(worktree, "ls-files", "-u")) continue;
-        const candidate = git(worktree, "rev-parse", "HEAD");
-        if (!isAncestor(repo, candidate, "main")) continue;
-        const main = git(repo, "rev-parse", "main");
-        const merges = git(repo, "rev-list", "--first-parent", "--parents", "--merges", `${candidate}..${main}`);
-        const merged = merges.split("\n").filter(Boolean).map(line => line.split(" ")).find(([merge, firstParent, ...others]) =>
-          others.includes(candidate) && git(repo, "rev-parse", `${merge}^{tree}`) !== git(repo, "rev-parse", `${firstParent}^{tree}`));
-        if (!merged || git(repo, "rev-parse", "main") !== main || git(worktree, "rev-parse", "HEAD") !== candidate ||
-          gitCommand(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true)) continue;
+        const { repo, worktree, run } = await this.locationAsync(card, true);
+        const status = () => gitCommandAsync(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], true);
+        if (await status() || await readGit(worktree, "ls-files", "-u")) continue;
+        const candidate = await readGit(worktree, "rev-parse", "HEAD");
+        if (!await isAncestorAsync(repo, candidate, "main")) continue;
+        const main = await readGit(repo, "rev-parse", "main");
+        const merges = (await readGit(repo, "rev-list", "--first-parent", "--parents", "--merges", `${candidate}..${main}`)).split("\n").filter(Boolean).map(line => line.split(" "));
+        let merged: string[] | undefined;
+        for (const [merge, firstParent, ...others] of merges) {
+          if (others.includes(candidate) && await readGit(repo, "rev-parse", `${merge}^{tree}`) !== await readGit(repo, "rev-parse", `${firstParent}^{tree}`)) { merged = [merge, firstParent, ...others]; break; }
+        }
+        if (!merged || await readGit(repo, "rev-parse", "main") !== main || await readGit(worktree, "rev-parse", "HEAD") !== candidate || await status()) continue;
+        // Git ran while the card could change; record only if it is still a candidate.
+        if (!this.board.listExternalMergeCandidates().some(item => item.card.id === card.id)) continue;
         this.board.recordExternalIntegration(card.id, run.id, candidate, merged[0]);
         this.reconciliationErrors.delete(card.id);
         console.log(`Reconciled externally merged card ${card.id} at ${merged[0]}`);
@@ -391,6 +450,7 @@ export class Integration {
       }
     }
   }
+
 
   withdraw(card: Card): Card {
     const approval = this.board.getApproval(card.id);
@@ -492,10 +552,10 @@ export class Integration {
     if (await gitAsync(worktree, ["diff", "--cached", "--name-only"], signal)) {
       await gitAsync(worktree, ["diff", "--cached", "--check"], signal);
       step("Committing the card's work (the repository's pre-commit hooks run)");
-      try { await gitAsync(worktree, ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal); }
+      try { await gitAsync(worktree, [...commitIdentityArgs(worktree), "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal); }
       catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // Identity and message are set above, so a failed commit here is the repository's commit hooks refusing it.
+        // Identity and message are always set, so a failed commit here is the repository's commit hooks refusing it.
         if (signal.aborted || !message.startsWith("commit failed: ")) throw error;
         throw new CommitHookError(message, message.slice("commit failed: ".length));
       }
@@ -656,7 +716,7 @@ export class Integration {
     if (git(worktree, "write-tree") !== reviewedTree) throw new Error("Worktree changed since review; refresh the diff before approving");
     if (git(worktree, "diff", "--cached", "--name-only")) {
       git(worktree, "diff", "--cached", "--check");
-      git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
+      git(worktree, ...commitIdentityArgs(worktree), "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
     }
     if (!clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
     const candidate = git(worktree, "rev-parse", "HEAD");
@@ -756,7 +816,7 @@ export class Integration {
     try {
       git(repo, "worktree", "add", "--detach", scratch, base);
       try {
-        git(scratch, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-ff", "--no-edit", ...mergeMessage(card), approved.candidate);
+        git(scratch, ...commitIdentityArgs(scratch), "merge", "--no-ff", "--no-edit", ...mergeMessage(card), approved.candidate);
       } catch (error) {
         // No integration was published. Read the scratch index before removing it so the UI can name the conflicts.
         let files: string[] = [];

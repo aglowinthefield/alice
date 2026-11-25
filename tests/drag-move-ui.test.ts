@@ -61,7 +61,25 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
     await tile("idea").dragTo(lane("review"));
     assert.deepEqual(requests, []);
 
+    // "idea" has no description, so the Ready check asks first. Closing the dialog moves nothing.
+    const check = page.getByRole("dialog", { name: "This card may need another pass" });
     await tile("idea").dragTo(lane("ready"));
+    await check.getByText("The card has no description, so nothing says what done looks like").waitFor();
+    await page.keyboard.press("Escape");
+    await check.waitFor({ state: "hidden" });
+    assert.deepEqual(requests, [], "closing the check leaves the card in Triage");
+    // Edit opens the card's edit form instead of moving it.
+    await tile("idea").dragTo(lane("ready"));
+    await check.getByRole("button", { name: "Edit" }).click();
+    const edit = page.getByRole("dialog", { name: "Edit card" });
+    await edit.waitFor();
+    assert.equal(await edit.getByRole("textbox").first().inputValue(), "idea card");
+    await page.keyboard.press("Escape");
+    await edit.waitFor({ state: "hidden" });
+    assert.deepEqual(requests, []);
+    // Ready anyway is the one extra click.
+    await tile("idea").dragTo(lane("ready"));
+    await check.getByRole("button", { name: "Ready anyway" }).click();
     await lane("ready").getByRole("button", { name: /idea card/ }).waitFor();
     await tile("queued").dragTo(lane("running"));
     await lane("running").getByRole("button", { name: /queued card/ }).waitFor();

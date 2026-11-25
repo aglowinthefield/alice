@@ -52,7 +52,7 @@ Open http://127.0.0.1:5173.
 
 `npm run dev` runs the server under a supervisor that owns ports 4317 and 5173 (the server listens on 14317 and Vite on 15173) and reloads the server when code changes. While the server or Vite is down, page loads on either port get a static status page with elapsed and typical restart time, which reloads when the server is back.
 
-To run a single production server instead, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317.
+To run a single production server instead, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317. To keep it running in the background, see [Running as a service](#running-as-a-service).
 
 Then:
 
@@ -103,7 +103,7 @@ stateDiagram-v2
 ```
 
 - **A finished run only reaches Review.** Only your approval, or a pull request opened by unattended review merging on GitHub, moves a card to Done.
-- **Stop** and the 60-minute run timeout both end a run as Failed.
+- **Stop** and the 60-minute run timeout both end a run as Failed. Ten minutes before the timeout, Bakery steers a run that is still going to stop starting new work, commit nothing, and write its report with evidence attached. A run that settles before the timeout keeps that report and reaches Review. Bakery loads `scripts/pi-wrap-up.mjs` into each run with `pi -e` to deliver the message, since Pi's JSON mode reads no input.
 - **Close without merging** moves a Review card to Done after a confirmation, or from the CLI with `bakery-cli close CARD_ID`. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
 - **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
 - **Retries reuse the card's worktree and Pi session**, so Pi continues where it left off.
@@ -113,6 +113,7 @@ stateDiagram-v2
 - **History** (Details tab, collapsed) lists every status change with its reason, plus agent-review verdicts and notes such as a failed restart after the reviewer sent a card back. Changes made before this existed show attempts and reviews only.
 - **Restore to Done** brings an archived card back. **Archive** only changes the lane. Runs, worktrees, branches, and history stay.
 - Only Done cards can be archived. To archive several at once, use **Select** in the Done lane.
+- **Moving a Triage card to Ready** (its button, a drag, or a bulk move) checks the card's text first, since these are the cards reviewers send back most. A card that asks for something only a person can do (a physical device, screenshots or recordings by hand, staging or production, someone's sign-off) or never says what done looks like (no Acceptance section, checklist, or "should"/"must" sentence) shows its flags with **Edit** and **Ready anyway**. Nothing is blocked: **Ready anyway** moves it, **Edit** opens the card's edit form, and closing the dialog leaves it in Triage. Sentinel cards and cards that already ran are not checked. The rules are plain text matching in `src/card-lint.ts`.
 - **Drag a card** to move it to a lane its buttons could also reach: Triage ↔ Ready, an unrun card to Done, Ready or Failed to Running (this starts Pi and asks first if run confirmations are on), Done ↔ Archive. While you drag, valid lanes are outlined and the others fade. Review, Interrupted, and Reopen still go through the card's buttons, since they need a diff review or a worktree check.
 
 ## Dependencies
@@ -169,6 +170,7 @@ flowchart TD
 In the repository's settings, **Push main to origin after merging** (local-merge boards, off by default) runs `git push origin main` after the fast-forward, for agent-reviewer merges too. If the push fails, the card stays Done and its History says why.
 
 - Manual approval doesn't run tests or CI, and doesn't push.
+- Bakery commits and merges as you: your Git `user.name` and `user.email`, signed if your config signs commits (`commit.gpgsign`). Only a repository with no name or email configured gets `Bakery <bakery@localhost>` in its place.
 - Your own uncommitted edits on `main` stay in place. Git refuses a merge that would overwrite them.
 - **Fix conflict with Pi** starts a new attempt in the card's worktree. Pi may merge `main` into the card branch and commit there, but must not touch `main`.
 - After a conflict fix, you review the result again before it merges.
@@ -293,9 +295,12 @@ The board header shows **Last 24h**: the cost of attempts and agent reviews that
 The server starts Ready cards for you, highest priority first, then oldest first. Priority is a whole number from -100 to 100 (default 0); `low`, `normal`, `high` and `urgent` are shorthands for -10, 0, 50 and 100. Set it when you create or edit a card, or from its details. Lanes list higher-priority cards first, and a card with a non-zero priority shows the number in its footer, warmer the higher it is.
 
 - **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
-- **Daily limit:** 1 to 99 automatic starts in any rolling 24 hours (default 6), or 0 for no limit (`--limit off` in the CLI). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
-- **Daily cost budget:** optional, off by default. When the board's last-24h cost reaches it, pickup waits and the board says why. Pickup resumes as older spend leaves the window, or when you raise or clear the budget. Running work isn't stopped, and manual starts still work. Cost comes from Pi's own pricing, so it's an estimate and can overshoot by whatever runs were already in progress.
-- **Pauses:** pickup pauses on a failed automatic run, an interrupted card, or a startup error, and the board shows why. After a failure, pickup resumes on its own once every failed automatic card is merged and nothing is interrupted. Other pauses need you to turn it back on.
+- **Agents at once, all boards:** card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. Automatic (the default) is a quarter of the CPU cores, at least 2. Set it in **Settings > General** or with `bakery-cli agents N|auto`. Automatic work (pickup, reviewer send-backs, CI, hook and conflict fixes, sentinel jobs, agent reviews) waits for a slot. A run you start yourself counts toward the limit but always starts.
+- **Limits:** the daily limit, the daily cost budget and the agent reviewer's diff caps are spend limits. They apply only when the board's **Limits** switch is on, which is off by default, so a development board runs unthrottled. Turn it on in the board's settings or with `bakery-cli limits on`; the stored values are kept while it's off. Concurrency and the loop guards (reviewer and hook send-backs, CI-fix runs, conflict repairs, automatic retries, the 60-minute run timeout) always apply. All of them are decided in `server/repo-limits.ts`.
+- **Daily limit** (when limits are on): 1 to 99 automatic starts in any rolling 24 hours (default 6), or 0 for no limit (`--limit off` in the CLI). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
+- **Daily cost budget** (when limits are on): optional, off by default. When the board's last-24h cost reaches it, pickup waits and the board says why. Pickup resumes as older spend leaves the window, or when you raise or clear the budget. Running work isn't stopped, and manual starts still work. Cost comes from Pi's own pricing, so it's an estimate and can overshoot by whatever runs were already in progress.
+- **Failed runs:** a card whose automatic run fails waits in Failed, and pickup carries on with the other Ready cards. Pickup never restarts a failed card, except for the automatic retry of a provider error.
+- **Pauses:** pickup pauses on an interrupted card, a startup error, or an authentication or billing refusal from the provider (which would fail every card), and the board shows why. Turn it back on once you have dealt with it.
 - Turning pickup off stops new starts. Runs already in progress keep going.
 
 ### Unattended review
@@ -351,6 +356,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body`, `--priority` and `--source` as `create`.
 - Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
+- `ready` runs the same check as the board's Move to Ready (see [Card lifecycle](#card-lifecycle)). A flagged card is listed with its flags and stays in Triage; repeat with `--yes` to move it anyway, and the flags still print to stderr. In `tui`, `r` on a flagged card lists the flags and asks `y/N`. The API is `GET /api/boards/BOARD/cards/CARD/ready-check`, which returns `{ flags }` and moves nothing.
 - `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `create --source NAME` (also on `add`) records where the card came from; the CLI sends `cli` when you leave it out. An agent should give its own name, such as `hermes`. The API takes the same value as `source`: a lower-case name of up to 40 letters, digits, dots, dashes or underscores. An API caller that sends none gets the source its `idempotencyKey` prefix implies (`hermes:`, `plan:`, `follow-up:`, `sentinel:`, `request:`), otherwise `api`. Bakery itself records `ui`, `plan`, `follow-up`, `sentinel` and `pr-comment`, and callers can't claim `manual`, `plan`, `sentinel` or `pr-comment`. Cards made before sources existed say `manual` unless their key prefix named their path. The card's Details tab shows the source.
 - `cards` on a terminal prints the board's lanes with the web board's badges (failure reason, Your turn, quiet, retries, PR). Archive and all but the 5 newest Done cards need `--all`; `--watch` redraws every 2 seconds. Piped, it prints one tab-separated line per card: ID, status, priority, attempt count, review rounds, and title.
@@ -362,6 +368,9 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `sentinels` lists the board's sentinels with their state, next run and latest run; `sentinel-pause`, `sentinel-resume` and `sentinel-run` take a sentinel ID (see Sentinels).
 - `stats` prints the board's card count in each lane and its pickup state.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
+- `open [CARD_ID]` opens the board, or one card, in your browser (`$BROWSER`, else the system opener) and prints the URL. A card ID may be the 8-character prefix. `--print` only prints it, and so does a shell with no display.
+- `agents [N|auto]` shows or sets how many agents run at once across all boards.
+- `limits [on|off]` shows the board's spend limits, or turns them on or off.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
 - `board [--integration local|github-pr]` shows the board and switches its integration mode. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
@@ -382,13 +391,15 @@ npm run bakery -- pr CARD_ID [URL|off]
 
 Bakery starts Pi for three kinds of runs. Each can use its own model and thinking level:
 
-- **Card runs**: normal runs and retries.
+- **Card runs**: normal runs and, unless the repository sets Card retries, retries.
 - **Conflict fixes**: runs that repair a merge conflict.
 - **Agent review**: the reviewer used by [unattended review](#unattended-review).
 
 Set global defaults in **Settings → Pi models**. To override them for one repository, use **Pi models** in its Edit repository dialog. A blank field inherits: the repository value comes first, then the global value, then the default in your Pi settings. Model and thinking level inherit separately, so a repository can change only the model and keep the global thinking level.
 
 A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-codex/gpt-5.5`. Bakery passes it as `--model`, and the thinking level as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). It only passes flags you set. The model field suggests the models `pi --list-models` reports. Bakery caches that list for 10 minutes. A change applies to runs that start after you save it. Retries keep their Pi session but use the current model.
+
+A repository can also set **Card retries**, a model ladder for card runs: a card's first attempt uses the Card runs model, and every later attempt (after a failure, a send-back, or a CI, hook or comment fix) uses the Card retries model. A blank Card retries thinking level keeps the Card runs level. Leave Card retries blank to run every attempt on Card runs. It is per repository only and does not change conflict fixes, agent review or PR drafts. The attempt history shows which model each attempt used.
 
 ## Server, data, and restarts
 
@@ -426,8 +437,10 @@ The browser takes UI changes from a merge as hot updates, so the board and an op
 By default the server binds to 127.0.0.1 and only accepts local `Host` and `Origin` headers. To run it on an always-on box, put it on a private network such as Tailscale (Bakery has no login of its own):
 
 ```sh
-BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE_UI=1 npm start
+bakery-cli service install --host <tailnet IP>
 ```
+
+Then add `BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net` to `~/.config/bakery/bakery.env` and run `bakery-cli service restart`.
 
 `BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=mochi BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Like the desktop and iOS apps, an address without a scheme tries HTTPS, then HTTP, and one without a port uses 4317. Repository paths and merges are on the server's disk.
 
@@ -443,9 +456,21 @@ Then open `https://<machine>.<tailnet>.ts.net`. Add that name to `BAKERY_ALLOWED
 
 **Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u bakery`.
 
+### Running as a service
+
+`bakery-cli service install` runs this checkout in the background: a systemd user service on Linux, or a launchd agent on macOS. It starts at login, restarts after a crash, and checks for updates every 2 minutes. It builds the UI first if `dist/` is missing.
+
+- Settings go in `~/.config/bakery/bakery.env`, which install creates once with `BAKERY_SERVE_UI=1` and `BAKERY_HOST` (`--host`, default `127.0.0.1`) and never overwrites. Put feature switches here too, so the server and the update check both read them.
+- `bakery-cli service restart` applies a changed env file. It waits for active runs to finish, as an update does.
+- `status` and `logs` show the server's state and its last 200 log lines. `stop` and `uninstall` end active runs at once, so they need `--yes`. Uninstall keeps the env file and the data directory.
+- On Linux the service starts at login. To start it at boot and keep it running after logout, run `loginctl enable-linger`; install says so when it is off.
+- The unit records where node, npm, `pi`, `wt`, `gh` and git are. After moving any of them, run install again. `bakery-cli doctor` fails while the recorded npm is missing.
+- Install rewrites `~/.config/systemd/user/bakery.service`. Keep your own changes in drop-ins under `bakery.service.d/`.
+- Windows has no `service` command yet. Start `npm start` from Task Scheduler at logon instead.
+
 ### Keeping a hosted server up to date
 
-`npm start` has no file watcher. `deploy/bakery-update.service` and `deploy/bakery-update.timer` run `scripts/update.sh` every 2 minutes, which only fetches `origin/main`. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
+`npm start` has no file watcher. The service's update check runs `scripts/update.sh` every 2 minutes, which only fetches `origin/main`.
 
 When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI into `dist-next`). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Until then it keeps serving the UI that matches its own API; the restarted server moves `dist-next` over `dist`. When every pending change is UI-only (under `src/`, `public/` or `index.html`, outside the modules the server imports, plus tests and docs), the server installs them by itself within 30 seconds of the fetch (the button reads **Update interface** if you get there first): it swaps the new build over `dist` at once without draining or restarting, keeps the old build's chunks so open pages still work, and open pages offer **Reload**. Updates that need a restart install only when you ask. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
 

@@ -252,8 +252,10 @@ export type Card = {
   reviewQueue?: { position: number; of: number } | null;
   /** On a Review card that is your turn: what the next step is, once the server knows; see `reviewActionLabels`. */
   reviewAction?: ReviewAction | null;
-  /** A start was asked for during a restart drain and runs after the restart. */
+  /** A start is queued: asked for during a restart drain, or refused by the run limit (`startQueuedForSlot`). */
   startQueued?: boolean;
+  /** The queued start waits for a run on the card's board to finish, not for a restart. */
+  startQueuedForSlot?: boolean;
   /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
   attachmentCount?: number;
   /** A Failed card's reason in a few words; the latest attempt's error has the full text. */

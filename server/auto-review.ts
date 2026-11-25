@@ -1,6 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { command } from "./platform.js";
-import { Board, type Attachment, type Card, type RepoBoard, type Run } from "./board.js";
+import { Board, RunLimitError, type Attachment, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
 import { Integration } from "./integration.js";
@@ -13,6 +13,8 @@ export type RequestedChange = { path: string; line?: number; comment: string };
 export type ReviewerVerdict = { verdict: "approve" | "needs_human" | "request_changes"; reason: string; changes?: RequestedChange[] };
 /** A card goes back to its implementer at most this many times; after that a person decides. */
 export const maxReviewerSendBacks = 2;
+/** Finishes the history line "Attempt N started …" of the run a reviewer send-back starts. */
+export const sendBackReason = "to apply the agent reviewer's requested changes";
 
 /**
  * Tells the reviewer which files changed and how to read the diff itself. The patch is not in the prompt: the reviewer
@@ -195,6 +197,14 @@ export class AutoReview {
         try { this.sendBack(latest); console.log(`Auto-review sent card ${card.id} back to its implementer`); }
         catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          // At the run limit the attempt waits for a slot. The run keeps the reviewer's changes, so the worker hands
+          // them to the attempt AutoPickup starts once a run finishes.
+          if (error instanceof RunLimitError) {
+            this.board.queueStart(card.id, { why: sendBackReason });
+            this.board.noteCard(card.id, `The agent reviewer sent this back while the board is at its run limit (${message}); the new attempt starts when a run finishes.`);
+            console.log(`Auto-review queued card ${card.id} to go back to its implementer when a run slot frees`);
+            return;
+          }
           // Without this note the card sits in Review with a "Sent back" verdict and no new attempt.
           this.board.noteCard(card.id, `The agent reviewer sent this back, but Bakery could not start the new attempt: ${message}. Run it again to apply the requested changes, or review it yourself.`);
           console.error(`Auto-review could not restart card ${card.id}: ${message}`);

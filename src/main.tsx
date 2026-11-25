@@ -2491,6 +2491,7 @@ export function App() {
         )}
         {!selected && currentBoard && view === "board" && (
           <ConflictHotspots
+            key={currentBoard.id}
             hotspots={currentBoard.conflictHotspots ?? []}
             busy={busy}
             onDismiss={(file) => {

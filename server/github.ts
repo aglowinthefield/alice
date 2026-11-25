@@ -47,7 +47,7 @@ function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promi
         const detail = code === "ENOENT" ? `${bin} is not installed or not on PATH`
           : (stderr || stdout).trim() || (killed && signal === "SIGTERM" ? `${bin} ${args[0] === "-C" ? args[2] : args[0]} timed out after ${Math.round(timeout / 1000)}s`
             : signal ? `${bin} was stopped by ${signal}` : `${bin} exited with code ${typeof code === "number" ? code : "unknown"} and printed nothing`);
-        reject(Object.assign(new Error(detail.slice(0, 4000)), { exitCode: typeof code === "number" ? code : (error as { code?: unknown }).code }));
+        reject(Object.assign(new Error(detail.slice(0, 4000)), { exitCode: typeof code === "number" ? code : (error as { code?: unknown }).code, stdout }));
       } else resolve({ stdout, stderr });
     });
   });
@@ -607,14 +607,17 @@ export class GitHubSync {
     }
     // Which files conflict, without touching the worktree. Only used to brief the agent and the PR.
     let files: string[] = [], details = "";
-    try { await git(worktree, "merge-tree", "--write-tree", "--name-only", "--no-messages", head, mainTip); }
+    try { await git(worktree, "merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", head, mainTip); }
     catch (error) {
       if ((error as { exitCode?: unknown }).exitCode !== 1) return undefined;
-      details = (error as Error).message;
-      for (const line of details.split("\n").slice(1)) { if (!line) break; files.push(line); }
+      // Raw stdout, NUL-delimited: the merged tree's id, then each conflicted path with its real spelling.
+      const [, ...paths] = ((error as { stdout?: string }).stdout ?? "").split("\0");
+      for (const path of paths) { if (!path) break; files.push(path); }
+      details = files.length ? `Conflicting files:\n${files.join("\n")}` : (error as Error).message.replaceAll("\0", "\n");
     }
     if (card.conflictRepairs >= maxConflictRepairs) {
       this.board.markConflictHandled(card.id, `${key}!`);
+      this.board.recordConflictEvents(card.id, files);
       const reason = `${maxConflictRepairs} automatic repairs have already been tried`;
       await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Bakery stopped repairing it automatically because ${reason}. A person needs to resolve it.`);
       return said(`The pull request conflicts with main${files.length ? ` in ${files.join(", ")}` : ""}; ${reason}, so a person needs to resolve it.`);

@@ -1,8 +1,10 @@
-import { GitMerge, X } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, GitMerge, X } from "lucide-react";
 import { Button } from "./components/ui/button";
+import { unionMergeLine } from "./gitattributes.js";
 import { conflictHotspotDays, type ConflictHotspot } from "./model.js";
 
-/** Notices shown at once; dismissing one brings up the next. */
+/** Notices shown before the rest fold behind "Show more". */
 const shown = 3;
 
 /**
@@ -18,11 +20,12 @@ export function ConflictHotspots({
   busy: boolean;
   onDismiss: (file: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!hotspots.length) return null;
-  const hidden = hotspots.length - shown;
+  const hidden = expanded ? 0 : hotspots.length - shown;
   return (
     <div className="mx-6 mt-5 grid gap-2 lg:mx-10">
-      {hotspots.slice(0, shown).map((hotspot) => (
+      {hotspots.slice(0, hidden > 0 ? shown : undefined).map((hotspot) => (
         <div
           key={hotspot.file}
           role="status"
@@ -40,11 +43,14 @@ export function ConflictHotspots({
               {hotspot.cards} cards in the last {conflictHotspotDays} days. Fix
               it once instead of repairing each card:
             </p>
-            <ul className="mt-1 list-disc pl-5 text-muted-foreground">
+            <ul className="mt-1 list-disc pl-5 text-foreground">
               <li>
-                If cards only append to it, add{" "}
-                <code className="font-mono">{hotspot.file} merge=union</code> to{" "}
-                <code className="font-mono">.gitattributes</code>.
+                If cards only append to it, set{" "}
+                <code className="font-mono">merge=union</code> for it with this
+                line in <code className="font-mono">.gitattributes</code>:
+                <code className="block whitespace-pre-wrap break-all font-mono">
+                  {unionMergeLine(hotspot.file)}
+                </code>
               </li>
               <li>
                 Generate it from its sources instead of editing it in each card.
@@ -68,10 +74,15 @@ export function ConflictHotspots({
         </div>
       ))}
       {hidden > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {hidden} more {hidden === 1 ? "file keeps" : "files keep"}{" "}
-          conflicting.
-        </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="justify-self-start"
+          onClick={() => setExpanded(true)}
+        >
+          <ChevronDown size={14} />
+          Show {hidden} more {hidden === 1 ? "file" : "files"}
+        </Button>
       )}
     </div>
   );

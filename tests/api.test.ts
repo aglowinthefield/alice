@@ -47,7 +47,8 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
+    // Startup only; a crash ends the wait early through exitCode. A loaded macOS runner can take over 5 s to load tsx.
+    const deadline = Date.now() + 30_000;
     while (true) {
       try { await fetch(`${url}/api/boards`); break; }
       catch {
@@ -308,7 +309,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 30_000;
     while (true) {
       try { await fetch(`${url}/api/boards`); break; }
       catch {
@@ -373,7 +374,7 @@ test("POST start while the server drains answers 202 queued and does not start a
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 30_000;
     while (true) {
       try { await fetch(`${url}/api/boards`); break; }
       catch {
@@ -434,7 +435,7 @@ ${event({ type: "agent_settled", aborted: false })}
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 30_000;
     while (true) {
       try { await fetch(`${url}/api/boards`); break; }
       catch {
@@ -500,7 +501,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 30_000;
     while (true) {
       try { await fetch(`${url}/api/boards`); break; }
       catch {
@@ -560,7 +561,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 30_000;
     while (true) {
       try { await fetch(`${url}/api/boards`); break; }
       catch {

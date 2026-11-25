@@ -1491,6 +1491,10 @@ export class Board {
   recordMergeFailure(cardId: string, files: string[], details: string): void {
     this.db.prepare("INSERT INTO merge_failures(cardId, files, details) VALUES (?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET files=excluded.files, details=excluded.details")
       .run(cardId, JSON.stringify(files), details);
+    this.recordConflictEvents(cardId, files);
+  }
+  /** Logs a conflict for the hotspot count only, leaving the card's current merge-failure state alone. Pass Git's real path names (read with `-z`), not its quoted spelling. */
+  recordConflictEvents(cardId: string, files: string[]): void {
     const at = now(), log = this.db.prepare("INSERT INTO conflict_events(repo, cardId, file, createdAt) SELECT repo, id, ?, ? FROM cards WHERE id=?");
     for (const file of new Set(files)) log.run(file, at, cardId);
     const cutoff = new Date(Date.now() - conflictEventRetentionDays * 86_400_000).toISOString();

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A machine-wide limit on agents at once covers card runs and agent reviews on every board. It defaults to a quarter of the CPU cores, and you set it in **Settings > General** or with `bakery-cli agents N|auto`. Automatic work waits for a slot; a run you start yourself always starts. Boards within their own concurrency could together run 11 agents and their test suites, which stalled the machine and the server.
 - When a card merges, cards in Review that depend on it are brought up to date with main, keeping their uncommitted work, and agent review runs again on the result. One that would conflict is left unchanged and shows the merge conflict instead of surprising you at Approve.
 - The server stays responsive on a busy machine. The 2-second pickup tick found its candidates with one board rebuild per Ready card (880 ms on a 29-card queue, now 17 ms), and the auto-review tick checked externally merged cards with blocking Git. Card lookups no longer total every run on the board, and Ready cards skip loading boards.
 - Spend limits (the daily start limit, the daily cost budget and the agent reviewer's diff caps) sit behind one **Limits** switch per board, off by default, in the board settings or `bakery-cli limits on|off`. Stored values are kept while it's off. Concurrency and loop guards (send-back, CI-fix and retry caps, the run timeout) always apply. Every limit is decided in `server/repo-limits.ts`. Existing boards start with limits off.

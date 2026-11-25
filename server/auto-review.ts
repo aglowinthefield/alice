@@ -155,6 +155,9 @@ export class AutoReview {
     for (const candidate of this.board.listAutoReviewCandidates()) {
       const running = [...this.activeReviews.values()].filter(item => item.repo === candidate.card.repo).length;
       if (atReviewCapacity(candidate.board, running)) continue;
+      // A review runs the repository's checks like a card run, so it takes a machine-wide agent slot. The rest wait for
+      // a later tick. `process` claims the job before its first await, so the count below includes it next time round.
+      if (this.board.atMachineCapacity()) break;
       this.activeReviews.set(candidate.run.id, { cardId: candidate.card.id, repo: candidate.card.repo });
       started.push(this.process(candidate.card, candidate.run, candidate.board).finally(() => this.activeReviews.delete(candidate.run.id)));
     }

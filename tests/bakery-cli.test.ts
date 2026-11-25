@@ -28,6 +28,7 @@ async function fixture(boards: object[] = [board]) {
     let data: unknown;
     if (path === "/api/boards" && req.method === "POST") { res.writeHead(201); data = { id: "board-new", repo: (input as { repo: string }).repo }; }
     else if (path === "/api/status") data = { version: "9.8.7", commit: "abc1234" };
+    else if (path === "/api/settings") data = { maxActiveAgents: req.method === "PATCH" ? (input as { maxActiveAgents: number }).maxActiveAgents : 0, activeAgentsLimit: req.method === "PATCH" && (input as { maxActiveAgents: number }).maxActiveAgents ? (input as { maxActiveAgents: number }).maxActiveAgents : 4, activeAgents: 3 };
     else if (path === "/api/boards") data = boards;
     else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = cards;
     else if (/^\/api\/boards\/board-one\/cards\/[\w-]+$/.test(path) && req.method === "PATCH") {
@@ -247,12 +248,26 @@ test("open prints and opens the board or a card by its short ID, through $BROWSE
   }
 });
 
+test("agents shows and sets the agents-at-once limit across all boards", async () => {
+  const f = await fixture();
+  try {
+    const shown = await f.run("agents");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /^Agents at once, all boards: 4 \(automatic\); 3 running now\./);
+    assert.match((await f.run("agents", "2")).stdout, /^Agents at once, all boards: 2; 3 running now\./);
+    assert.equal((await f.run("agents", "auto")).code, 0);
+    assert.notEqual((await f.run("agents", "lots")).code, 0);
+    assert.notEqual((await f.run("agents", "--board", "board-one")).code, 0);
+    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ maxActiveAgents: 2 }, { maxActiveAgents: 0 }]);
+  } finally { await f.close(); }
+});
+
 test("limits shows the spend limits and turns them on or off for one board", async () => {
   const f = await fixture();
   try {
     const shown = await f.run("limits");
     assert.equal(shown.code, 0, shown.stderr);
-    assert.match(shown.stdout, /^Limits on: 6 starts per 24h; no budget; .*loop guards always apply\.\n$/);
+    assert.match(shown.stdout, /^Limits on: 6 starts per 24h; no budget; .*loop guards always apply\.\nAll boards: 3 of 4 agents running \(bakery-cli agents\)\.\n$/);
     const off = await f.run("limits", "off");
     assert.equal(off.code, 0, off.stderr);
     assert.match(off.stdout, /^Limits off \(stored, not applied\)/);

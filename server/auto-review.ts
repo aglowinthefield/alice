@@ -216,7 +216,7 @@ export class AutoReview {
       // Nothing merges into local main without a person: on a local board, and on a pull-request board where Bakery
       // cannot push, the agent's approval is advice and the card waits in Review for Approve.
       if (!pullRequests || !this.openPullRequest) {
-        this.board.finishAutoReview(run.id, "needs_human", `Agent approved: ${verdict.reason}`, fingerprint);
+        this.board.finishAutoReview(run.id, "approved", verdict.reason, fingerprint);
         return;
       }
       const current = this.board.getBoard(repoBoard.id);

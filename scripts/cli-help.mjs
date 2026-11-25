@@ -182,6 +182,13 @@ export const COMMANDS = [
     full: "SENTINEL_ID [--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
   },
   {
+    name: "service", group: "Setup", args: "ACTION", summary: "run Bakery in the background: install, restart, logs",
+    full: "install|uninstall|start|stop|restart|status|logs [--host HOST] [--yes]",
+    details: "install runs this checkout as a systemd user service (Linux) or launchd agent (macOS) that starts at login, restarts on failure and checks for updates every 2 minutes. Settings go in ~/.config/bakery/bakery.env, which install creates once and never overwrites. restart waits for active runs to finish first. stop and uninstall end active runs at once, so they need --yes. Run install again after moving node, npm or pi.",
+    options: [["--host HOST", "the bind address written to a new bakery.env (default: 127.0.0.1)"], ["--yes", "confirm stop or uninstall"]],
+    examples: [["bakery-cli service install", ""], ["bakery-cli service install --host 100.64.0.10", "listen on a tailnet address"], ["bakery-cli service restart", "after editing bakery.env"]],
+  },
+  {
     name: "doctor", group: "Setup", summary: "check tools, data, server and boards",
     full: "[--json]",
     details: "Checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL per check; it exits 1 if any check fails. Against a remote BAKERY_URL it checks only the server and boards.",

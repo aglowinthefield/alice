@@ -91,7 +91,7 @@ Open http://127.0.0.1:5173, then:
 
 Uncommitted files in your checkout don't appear in card worktrees.
 
-From a terminal, `npm run bakery -- add fix the flaky login test` captures a card in the repository you're in, and `npm run bakery -- doctor` checks your setup. For production, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317.
+From a terminal, `npm run bakery -- add fix the flaky login test` captures a card in the repository you're in, and `npm run bakery -- doctor` checks your setup. For production, `npm run bakery -- service install` runs it in the background, restarts it after a crash and keeps it up to date; open http://127.0.0.1:4317.
 
 Everything else (the card lifecycle, dependencies, the visualizer, GitHub pull request mode, automation, the full CLI, hosting on another machine) is in the [reference](docs/reference.md).
 

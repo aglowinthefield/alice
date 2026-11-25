@@ -152,6 +152,8 @@ const now = () => new Date().toISOString();
 const autoRetryDelaysMinutes = loopGuards.autoRetryDelaysMinutes;
 /** A status change (fromStatus/toStatus set) or a note (both null), with why it happened. */
 export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
+// One card's attempts and agent reviews. Per card, so a single-card lookup does not total every run on the board.
+const cardSpend = `(SELECT ${usageColumns.join(", ")} FROM runs spent WHERE spent.cardId=cards.id UNION ALL SELECT ${usageColumns.join(", ")} FROM auto_review_jobs spent WHERE spent.cardId=cards.id)`;
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
   (SELECT COUNT(*) FROM attachments a WHERE a.cardId=cards.id) AS attachmentCount,
@@ -159,16 +161,14 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
   COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent,
   (SELECT latest.lastActivityAt FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) AS lastActivityAt,
-  ${usageColumns.map(column => `MAX(spend.${column}) AS ${column}`).join(", ")}, COALESCE(MAX(spend.unrecorded), 0) AS usageIncomplete,
+  ${usageColumns.map(column => `(SELECT SUM(${column}) FROM ${cardSpend}) AS ${column}`).join(", ")}, COALESCE((SELECT MAX(cost IS NULL) FROM ${cardSpend}), 0) AS usageIncomplete,
   (SELECT json_group_array(edge.dependsOn) FROM (SELECT d.dependsOn FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id ORDER BY parent.createdAt, parent.rowid) edge) AS dependsOn,
   EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked,
   EXISTS (SELECT 1 FROM approvals merged WHERE merged.cardId=cards.id AND merged.merged=1) AS locallyMerged,
   COALESCE((SELECT latest.report LIKE '%bakery-plan%' FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), 0) AS planOnly,
   CASE WHEN cards.status='failed' THEN (SELECT latest.error FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedError,
   CASE WHEN cards.status='failed' THEN (SELECT latest.failureKind FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedKind
-  FROM cards LEFT JOIN runs ON runs.cardId=cards.id
-  LEFT JOIN (SELECT cardId, ${usageColumns.map(column => `SUM(${column}) AS ${column}`).join(", ")}, MAX(cost IS NULL) AS unrecorded
-    FROM (SELECT cardId, ${usageColumns.join(", ")} FROM runs UNION ALL SELECT cardId, ${usageColumns.join(", ")} FROM auto_review_jobs) GROUP BY cardId) spend ON spend.cardId=cards.id`;
+  FROM cards LEFT JOIN runs ON runs.cardId=cards.id`;
 
 /**
  * Older runs kept only the transcript. Their final message is the text after the last turn summary, since Bakery
@@ -216,6 +216,7 @@ export class Board {
       -- Files the operator attached to a card, or to one of its discussion messages (messageId). The bytes live on disk; see server/attachments.ts.
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), messageId TEXT REFERENCES discussion_messages(id), name TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attachments_card ON attachments(cardId, createdAt);
+      CREATE INDEX IF NOT EXISTS cards_repo_status ON cards(repo, status);
       CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, topic TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', thinking TEXT NOT NULL DEFAULT '', unread INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS chats_board ON chats(boardId, updatedAt);
       CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','agent','error')), body TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '[]', createdAt TEXT NOT NULL);
@@ -401,6 +402,8 @@ export class Board {
         ALTER TABLE auto_review_jobs_new RENAME TO auto_review_jobs;
         COMMIT;`);
     }
+    // After any rebuild above, which drops the table's indexes. Card lookups total each card's review spend.
+    this.db.exec("CREATE INDEX IF NOT EXISTS auto_review_jobs_card ON auto_review_jobs(cardId)");
     const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
     if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
     if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
@@ -842,13 +845,16 @@ export class Board {
     const result: { card: Card; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
       if (repoBoard.integrationError || this.autoStartRefusal(repoBoard)) continue;
+      // One query per board, not one card lookup per Ready card: pickup asks every 2 seconds.
       // A card waiting out its retry backoff is skipped until its time comes.
-      const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='ready' AND (autoRetryAt IS NULL OR autoRetryAt<=?) AND ${notSentinelJob} ORDER BY priority DESC, createdAt, rowid`).all(repoBoard.repo, now()) as { id: string }[];
+      const rows = this.db.prepare(`${cardQuery} WHERE cards.repo=? AND cards.status='ready' AND (cards.autoRetryAt IS NULL OR cards.autoRetryAt<=?) AND ${notSentinelJob}
+        GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt, cards.rowid`).all(repoBoard.repo, now()) as CardRow[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
-      result.push(...ids.map(({ id }) => ({ card: this.getCard(id)!, board: repoBoard })).filter(item => !waitsOnDependencies(item.card)));
+      result.push(...this.toCards(rows).filter(card => !waitsOnDependencies(card)).map(card => ({ card, board: repoBoard })));
     }
     return result;
   }
+
   /**
    * Why pickup must stop on this board. A failed run on its own is not a reason: its card waits in Failed like any
    * other and the next Ready card starts. Only an authentication or billing refusal stops pickup, because every
@@ -956,11 +962,14 @@ export class Board {
     this.db.prepare("UPDATE runs SET changedFiles=? WHERE id=? AND (changedFiles IS NULL OR changedFiles!=?)").run(count, runId, count);
   }
   private toCards(rows: CardRow[]): Card[] {
-    const boards = new Map(this.listBoards().map(item => [item.repo, item]));
+    // Boards cost a few queries each and only Review cards need them, so build them on first use.
+    let boardsByRepo: Map<string, RepoBoard> | undefined;
+    const boards = { get: (repo: string) => (boardsByRepo ??= new Map(this.listBoards().map(item => [item.repo, item]))).get(repo) };
     const reviewQueues = new Map<string, { cardId: string }[]>();
     const reviewQueue = (card: { id: string; repo: string; status: string }, wait: ReviewWait | null) => {
+      if (wait !== "agent_review") return null;
       const repoBoard = boards.get(card.repo);
-      if (wait !== "agent_review" || !repoBoard) return null;
+      if (!repoBoard) return null;
       if (!reviewQueues.has(card.repo)) reviewQueues.set(card.repo, this.reviewsAwaiting(repoBoard));
       const queue = reviewQueues.get(card.repo)!, index = queue.findIndex(item => item.cardId === card.id);
       return index < 0 ? null : { position: index + 1, of: queue.length };
@@ -971,7 +980,7 @@ export class Board {
       const failureSummary = row.status === "failed" ? summarizeFailure({ error: failedError, failureKind: failedKind, prState: row.prState }) : null;
       const card = { ...fields, failureSummary, createdCardIds: row.createdCardIds === null ? null : JSON.parse(row.createdCardIds) as string[], dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0, planOnly: row.planOnly !== 0 };
       const run = card.status === "review" ? this.listRuns(card.id)[0] : undefined;
-      const reviewWait = this.reviewWait(card, boards.get(card.repo), run);
+      const reviewWait = card.status === "review" ? this.reviewWait(card, boards.get(card.repo), run) : null;
       return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), reviewAction: this.reviewAction(card, reviewWait, run), startQueued: queued.has(card.id) };
     });
   }

@@ -160,6 +160,26 @@ test("with limits off, a used-up start limit and budget do not stop pickup, and 
   } finally { await item.close(); }
 });
 
+test("a pickup tick looks up candidates once, and Ready cards are built without loading boards", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    const ready = item.card("Ready one");
+    const listBoards = item.board.listBoards.bind(item.board);
+    item.board.listBoards = () => { throw new Error("a Ready card must not load every board"); };
+    assert.equal(item.board.getCard(ready.id)?.status, "ready");
+    item.board.listBoards = listBoards;
+    let lookups = 0;
+    const candidates = item.board.listAutoPickupCandidates.bind(item.board);
+    item.board.listAutoPickupCandidates = () => { lookups++; return candidates(); };
+    item.pickup.tick();
+    assert.equal(lookups, 1);
+    assert.equal(item.board.getCard(ready.id)?.status, "running");
+    item.release();
+    await waitFor(() => item.board.getCard(ready.id)?.status === "review");
+  } finally { await item.close(); }
+});
+
 test("a rolling six-start limit prevents unbounded model spend and persists after reopening", async () => {
   const item = fixture();
   try {

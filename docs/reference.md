@@ -295,6 +295,7 @@ The board header shows **Last 24h**: the cost of attempts and agent reviews that
 The server starts Ready cards for you, highest priority first, then oldest first. Priority is a whole number from -100 to 100 (default 0); `low`, `normal`, `high` and `urgent` are shorthands for -10, 0, 50 and 100. Set it when you create or edit a card, or from its details. Lanes list higher-priority cards first, and a card with a non-zero priority shows the number in its footer, warmer the higher it is.
 
 - **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
+- **Agents at once, all boards:** card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. Automatic (the default) is a quarter of the CPU cores, at least 2. Set it in **Settings > General** or with `bakery-cli agents N|auto`. Automatic work (pickup, reviewer send-backs, CI, hook and conflict fixes, sentinel jobs, agent reviews) waits for a slot. A run you start yourself counts toward the limit but always starts.
 - **Limits:** the daily limit, the daily cost budget and the agent reviewer's diff caps are spend limits. They apply only when the board's **Limits** switch is on, which is off by default, so a development board runs unthrottled. Turn it on in the board's settings or with `bakery-cli limits on`; the stored values are kept while it's off. Concurrency and the loop guards (reviewer and hook send-backs, CI-fix runs, conflict repairs, automatic retries, the 60-minute run timeout) always apply. All of them are decided in `server/repo-limits.ts`.
 - **Daily limit** (when limits are on): 1 to 99 automatic starts in any rolling 24 hours (default 6), or 0 for no limit (`--limit off` in the CLI). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
 - **Daily cost budget** (when limits are on): optional, off by default. When the board's last-24h cost reaches it, pickup waits and the board says why. Pickup resumes as older spend leaves the window, or when you raise or clear the budget. Running work isn't stopped, and manual starts still work. Cost comes from Pi's own pricing, so it's an estimate and can overshoot by whatever runs were already in progress.
@@ -367,6 +368,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `stats` prints the board's card count in each lane and its pickup state.
 - `start` takes several cards and starts each one separately. `runs` shows each attempt's error, so you can find failed attempts and retry them. It also shows each attempt's and review's tokens and cost, and the card total. `runs --json` prints `{ cardId, total, runs, reviews }`.
 - `open [CARD_ID]` opens the board, or one card, in your browser (`$BROWSER`, else the system opener) and prints the URL. A card ID may be the 8-character prefix. `--print` only prints it, and so does a shell with no display.
+- `agents [N|auto]` shows or sets how many agents run at once across all boards.
 - `limits [on|off]` shows the board's spend limits, or turns them on or off.
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
@@ -388,13 +390,15 @@ npm run bakery -- pr CARD_ID [URL|off]
 
 Bakery starts Pi for three kinds of runs. Each can use its own model and thinking level:
 
-- **Card runs**: normal runs and retries.
+- **Card runs**: normal runs and, unless the repository sets Card retries, retries.
 - **Conflict fixes**: runs that repair a merge conflict.
 - **Agent review**: the reviewer used by [unattended review](#unattended-review).
 
 Set global defaults in **Settings → Pi models**. To override them for one repository, use **Pi models** in its Edit repository dialog. A blank field inherits: the repository value comes first, then the global value, then the default in your Pi settings. Model and thinking level inherit separately, so a repository can change only the model and keep the global thinking level.
 
 A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-codex/gpt-5.5`. Bakery passes it as `--model`, and the thinking level as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). It only passes flags you set. The model field suggests the models `pi --list-models` reports. Bakery caches that list for 10 minutes. A change applies to runs that start after you save it. Retries keep their Pi session but use the current model.
+
+A repository can also set **Card retries**, a model ladder for card runs: a card's first attempt uses the Card runs model, and every later attempt (after a failure, a send-back, or a CI, hook or comment fix) uses the Card retries model. A blank Card retries thinking level keeps the Card runs level. Leave Card retries blank to run every attempt on Card runs. It is per repository only and does not change conflict fixes, agent review or PR drafts. The attempt history shows which model each attempt used.
 
 ## Server, data, and restarts
 

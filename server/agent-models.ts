@@ -6,6 +6,12 @@ export type ThinkingLevel = typeof thinkingLevels[number];
 /** "" inherits the next level: repository → global → Pi's own default. */
 export type AgentModel = { model: string; thinking: ThinkingLevel | "" };
 export type AgentModels = Record<AgentPhase, AgentModel>;
+/**
+ * A board's choices plus an optional model ladder: attempt 1 of a card run uses `work`, and later attempts (after a
+ * failure, send-back or CI fix) use `retry`. Absent means off, so every attempt uses `work`. Blank `retry` fields
+ * inherit from `work`.
+ */
+export type BoardAgentModels = AgentModels & { retry?: AgentModel };
 
 export const emptyAgentModels = (): AgentModels => ({ work: { model: "", thinking: "" }, conflict: { model: "", thinking: "" }, review: { model: "", thinking: "" }, draft: { model: "", thinking: "" } });
 /** Board chats default to a cheap model so casual questions cost little; each chat can pick another. */
@@ -36,13 +42,30 @@ export function validateAgentModels(input: unknown): AgentModels {
   return result;
 }
 
+/** Validates a board's choices, which may also hold the retry rung of the model ladder. An all-blank rung turns it off. */
+export function validateBoardAgentModels(input: unknown): BoardAgentModels {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("agentModels must be an object");
+  const { retry, ...phases } = input as Record<string, unknown>;
+  const result: BoardAgentModels = validateAgentModels(phases);
+  if (retry === undefined) return result;
+  const rung = validateAgentModel(retry, "agentModels.retry");
+  return rung.model || rung.thinking ? { ...result, retry: rung } : result;
+}
+
 /** Reads a stored column. A corrupt value falls back to inheriting rather than blocking every run. */
 export function parseAgentModels(stored: string): AgentModels {
   try { return validateAgentModels(JSON.parse(stored)); } catch { return emptyAgentModels(); }
 }
 
-export function resolveAgentModel(phase: AgentPhase, repo: AgentModels | undefined, global: AgentModels): AgentModel {
-  return { model: repo?.[phase].model || global[phase].model, thinking: repo?.[phase].thinking || global[phase].thinking };
+export function parseBoardAgentModels(stored: string): BoardAgentModels {
+  try { return validateBoardAgentModels(JSON.parse(stored)); } catch { return emptyAgentModels(); }
+}
+
+/** `attempt` is the run's attempt number; only card runs past the first climb the board's ladder. */
+export function resolveAgentModel(phase: AgentPhase, repo: BoardAgentModels | undefined, global: AgentModels, attempt = 1): AgentModel {
+  const choice: AgentModel = { model: repo?.[phase].model || global[phase].model, thinking: repo?.[phase].thinking || global[phase].thinking };
+  const rung = phase === "work" && attempt > 1 ? repo?.retry : undefined;
+  return rung ? { model: rung.model || choice.model, thinking: rung.thinking || choice.thinking } : choice;
 }
 
 /** Pi flags for a resolved choice; placed before "--" so the prompt stays positional. */

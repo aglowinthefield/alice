@@ -3,9 +3,11 @@ import { checkBeforeReady } from "./ready-check.js";
 import {
   Check,
   Copy,
+  Eye,
   Maximize2,
   Minimize2,
   Pencil,
+  ShieldCheck,
   Square,
 } from "lucide-react";
 import { api } from "./api.js";
@@ -31,6 +33,8 @@ import {
   PRIORITY_MAX,
   PRIORITY_MIN,
   parsePriorityInput,
+  needsYourReview,
+  reviewActionLabels,
   type AutoReviewJob,
   type BakerySettings,
   type Card,
@@ -427,6 +431,26 @@ export function CardDetails({
             <span className="rounded bg-primary/10 capitalize px-2 py-1 text-primary">
               {card?.status}
             </span>{" "}
+            {card &&
+              (card.reviewAction === "agent_approved" ||
+                card.reviewAction === "needs_you") &&
+              needsYourReview(card) && (
+                <span
+                  data-testid="review-action-chip"
+                  className={
+                    card.reviewAction === "agent_approved"
+                      ? "flex items-center gap-1 rounded border border-status-review px-2 py-0.5 font-medium text-foreground"
+                      : "flex items-center gap-1 rounded border border-status-review bg-status-review px-2 py-0.5 font-semibold text-background"
+                  }
+                >
+                  {card.reviewAction === "agent_approved" ? (
+                    <ShieldCheck size={12} aria-hidden />
+                  ) : (
+                    <Eye size={12} aria-hidden />
+                  )}
+                  {reviewActionLabels[card.reviewAction]}
+                </span>
+              )}
             <span title={card?.repo}>
               {card?.repo.split("/").filter(Boolean).pop()}
             </span>
@@ -880,7 +904,12 @@ export function CardDetails({
             )}
             {tab === "attempts" &&
               (runs.length > 0 ? (
-                <AttemptList key={card?.id} runs={runs} card={card} />
+                <AttemptList
+                  key={card?.id}
+                  runs={runs}
+                  card={card}
+                  reviews={autoJobs}
+                />
               ) : (
                 <p className="mt-4 text-sm text-muted-foreground">
                   No attempts yet.
@@ -2014,11 +2043,13 @@ function ReviewHistory({
                     ? "merged locally"
                     : job.state === "pull_request"
                       ? "approved; pull request opened"
-                      : job.requeued
-                        ? "interrupted by a restart, queued again"
-                        : requestedChanges(job).length
-                          ? "sent back to the implementer"
-                          : "needs human review"}
+                      : job.state === "approved"
+                        ? "approved; waiting for your Approve"
+                        : job.requeued
+                          ? "interrupted by a restart, queued again"
+                          : requestedChanges(job).length
+                            ? "sent back to the implementer"
+                            : "needs you"}
               </strong>{" "}
               <AgentBadge
                 phase="Review"

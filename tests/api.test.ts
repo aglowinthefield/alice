@@ -18,6 +18,14 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
+/** Settings without the machine's live agent count and core-dependent limit, which the agents test checks. */
+function prefs(data: Record<string, unknown>) {
+  const { activeAgents, activeAgentsLimit, ...rest } = data;
+  assert.equal(typeof activeAgents, "number");
+  assert.equal(typeof activeAgentsLimit, "number");
+  return rest;
+}
+
 test("repository boards expand home paths, inherit roots, and isolate cards", async () => {
   const home = mkdtempSync(join(tmpdir(), "bakery-api-"));
   const alpha = join(home, "code", "alpha"), beta = join(home, "code", "beta"), gamma = join(home, "code", "gamma");
@@ -96,7 +104,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha/subfolder")}`)).status, 400);
     assert.equal((await request(`/path-suggestions?path=${"a".repeat(1025)}`)).status, 400);
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
+    assert.deepEqual(prefs((await request("/settings")).data), { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { notifyOnReview: "true" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { discordWebhookUrl: "https://example.com/hook" })).status, 400);
@@ -108,12 +116,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/settings", "PATCH", { density: "spacious" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { density: "compact" })).data.density, "compact");
     assert.equal((await request("/settings", "PATCH", { density: "default" })).data.density, "default");
-    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { notifyOnReview: true })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "compline" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "light" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { confirmRunStart: true })).data), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { notifyOnReview: true })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { theme: "compline" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { theme: "light" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings")).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
@@ -339,6 +347,11 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
     assert.deepEqual(updated.data.agentModels, { ...emptyAgentModels(), conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
     assert.deepEqual((await request("/boards")).data.find((item: { id: string }) => item.id === board.id).agentModels, updated.data.agentModels);
     assert.deepEqual((await request("/settings")).data.agentModels, global);
+    assert.equal((await request("/settings", "PATCH", { agentModels: { retry: { model: "anthropic/claude-opus-4-1" } } })).status, 400);
+    const ladder = await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { retry: { model: "anthropic/claude-opus-4-1", thinking: "" } } });
+    assert.equal(ladder.status, 200);
+    assert.deepEqual(ladder.data.agentModels, { ...emptyAgentModels(), retry: { model: "anthropic/claude-opus-4-1", thinking: "" } });
+    assert.equal("retry" in (await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { retry: { model: "", thinking: "" } } })).data.agentModels, false);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");

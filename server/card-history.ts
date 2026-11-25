@@ -32,12 +32,13 @@ export function cardHistory(card: Card, events: CardEvent[], runs: Run[], review
     if (review.state === "running") { entries.push({ at: review.startedAt, from: null, to: null, text: `Agent review${of} started`, detail: review.details || undefined }); continue; }
     const at = review.finishedAt ?? review.startedAt;
     if (review.state === "merged") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery merged it`, detail: review.details || undefined }); continue; }
+    if (review.state === "approved") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"}; merging is up to you`, detail: review.details || undefined }); continue; }
     if (review.state === "pull_request") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery opened its pull request`, detail: review.details || undefined }); continue; }
     const sentBack = review.details.startsWith("Sent back to the implementer: ");
     entries.push({
       at, from: null, to: null,
-      text: sentBack ? `Agent reviewer requested changes${of}` : review.details.startsWith("Agent approved: ") ? `Agent reviewer approved attempt ${attempt ?? "?"}; merging is up to you` : `Agent review${of} left this for you`,
-      detail: review.details.replace(/^(Sent back to the implementer|Agent approved): /, "") || undefined,
+      text: sentBack ? `Agent reviewer requested changes${of}` : `Agent review${of} left this for you`,
+      detail: review.details.replace(/^Sent back to the implementer: /, "") || undefined,
     });
   }
   // Stable sort: same-instant entries keep insertion order (created, recorded events, rebuilt runs, reviews).

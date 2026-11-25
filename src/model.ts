@@ -3,6 +3,7 @@ import type { ThemeName } from "./themes.js";
 import type { UsageFields } from "./usage.js";
 import type { AgentModels, ThinkingLevel } from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
+import type { RunKind } from "./run-kinds.js";
 
 export type Status =
   | "triage"
@@ -228,6 +229,8 @@ export type Card = {
   /** The latest run ended with a `bakery-plan` block: this card produced a plan, not code. */
   planOnly?: boolean;
   usageIncomplete?: number;
+  /** Spend on every run after the first attempt; null when there were none. */
+  reworkCost?: number | null;
   /** Cards on the same board that must be Done or archived before this one starts. */
   dependsOn?: string[];
   /** True while any card in dependsOn is not Done or archived. */
@@ -406,6 +409,8 @@ export type Run = {
   failureKind?: string | null;
   /** Id of the failed run whose rejected session this run replaced, or null. */
   recoveryOf?: string | null;
+  /** Why the run happened; see src/run-kinds.ts. */
+  kind?: RunKind;
 } & UsageFields;
 
 /** A file attached to a card, or to one of its discussion messages (`messageId`). */

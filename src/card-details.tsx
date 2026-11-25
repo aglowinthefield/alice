@@ -878,7 +878,12 @@ export function CardDetails({
             )}
             {tab === "attempts" &&
               (runs.length > 0 ? (
-                <AttemptList key={card?.id} runs={runs} card={card} />
+                <AttemptList
+                  key={card?.id}
+                  runs={runs}
+                  card={card}
+                  reviews={autoJobs}
+                />
               ) : (
                 <p className="mt-4 text-sm text-muted-foreground">
                   No attempts yet.

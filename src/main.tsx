@@ -39,6 +39,7 @@ import {
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  Coins,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -62,6 +63,7 @@ import {
   type ThinkingLevel,
 } from "../server/agent-models.js";
 import { AgentBadge, reworkSummary } from "./attempts.js";
+import { reworkHeavy } from "./run-kinds.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
@@ -2878,6 +2880,21 @@ export function App() {
                                     : item.turns}
                                 </span>
                                 <span className="flex items-center gap-2">
+                                  {reworkHeavy(item) && (
+                                    <span
+                                      data-testid="rework-cost"
+                                      title={`Rework cost ${formatCost(item.reworkCost)} of ${formatCost(item.cost)}: runs after the first attempt`}
+                                      className="flex items-center gap-1 text-status-interrupted"
+                                    >
+                                      <Coins size={10} aria-hidden />
+                                      {Math.round(
+                                        ((item.reworkCost ?? 0) /
+                                          (item.cost ?? 1)) *
+                                          100,
+                                      )}
+                                      % rework
+                                    </span>
+                                  )}
                                   {(item.priority ?? 0) !== 0 && (
                                     <PriorityNumber priority={item.priority} />
                                   )}

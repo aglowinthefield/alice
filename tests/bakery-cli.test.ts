@@ -497,15 +497,22 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
 
 test("doctor exits promptly with its own status when the telemetry route stalls", async () => {
   const stalled: ServerResponse[] = [];
+  // How long the CLI held the stalled request open: about 1s when it gives up on its own, 10s on the default timeout.
+  // Timed from the request's arrival, so a slow process start on a busy machine doesn't count.
+  let held: Promise<number> | undefined;
   const stub = createServer((req, res) => {
-    if (req.url === "/api/telemetry/doctor") { stalled.push(res); return; }
+    if (req.url === "/api/telemetry/doctor") {
+      stalled.push(res);
+      const arrived = performance.now();
+      held = new Promise(resolve => req.socket.once("close", () => resolve(performance.now() - arrived)));
+      return;
+    }
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]));
   });
   await new Promise<void>(resolve => stub.listen(0, "127.0.0.1", resolve));
   try {
     const port = (stub.address() as { port: number }).port;
-    const started = Date.now();
     const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
     let stdout = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
@@ -513,7 +520,8 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
     assert.equal(code, 1);
     assert.match(stdout, /^FAIL\tboard /m);
     assert.equal(stalled.length, 1, "the failure was reported");
-    assert.ok(Date.now() - started < 5000, `exit took ${Date.now() - started}ms, not the 10s request timeout`);
+    const ms = await held!;
+    assert.ok(ms < 8000, `the CLI held the stalled request ${Math.round(ms)}ms, not its own 1s limit`);
   } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 

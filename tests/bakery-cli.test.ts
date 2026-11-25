@@ -8,7 +8,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
-const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
+const board = { id: "board-one", repo: "/tmp/bakery-project", limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 const cards = [
   { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 50, attempts: 3, reviewRounds: 2 },
@@ -28,6 +28,7 @@ async function fixture(boards: object[] = [board]) {
     let data: unknown;
     if (path === "/api/boards" && req.method === "POST") { res.writeHead(201); data = { id: "board-new", repo: (input as { repo: string }).repo }; }
     else if (path === "/api/status") data = { version: "9.8.7", commit: "abc1234" };
+    else if (path === "/api/settings") data = { maxActiveAgents: req.method === "PATCH" ? (input as { maxActiveAgents: number }).maxActiveAgents : 0, activeAgentsLimit: req.method === "PATCH" && (input as { maxActiveAgents: number }).maxActiveAgents ? (input as { maxActiveAgents: number }).maxActiveAgents : 4, activeAgents: 3 };
     else if (path === "/api/boards") data = boards;
     else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = cards;
     else if (/^\/api\/boards\/board-one\/cards\/[\w-]+$/.test(path) && req.method === "PATCH") {
@@ -245,6 +246,34 @@ test("open prints and opens the board or a card by its short ID, through $BROWSE
     rmSync(dir, { recursive: true, force: true });
     await f.close();
   }
+});
+
+test("agents shows and sets the agents-at-once limit across all boards", async () => {
+  const f = await fixture();
+  try {
+    const shown = await f.run("agents");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /^Agents at once, all boards: 4 \(automatic\); 3 running now\./);
+    assert.match((await f.run("agents", "2")).stdout, /^Agents at once, all boards: 2; 3 running now\./);
+    assert.equal((await f.run("agents", "auto")).code, 0);
+    assert.notEqual((await f.run("agents", "lots")).code, 0);
+    assert.notEqual((await f.run("agents", "--board", "board-one")).code, 0);
+    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ maxActiveAgents: 2 }, { maxActiveAgents: 0 }]);
+  } finally { await f.close(); }
+});
+
+test("limits shows the spend limits and turns them on or off for one board", async () => {
+  const f = await fixture();
+  try {
+    const shown = await f.run("limits");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /^Limits on: 6 starts per 24h; no budget; .*loop guards always apply\.\nAll boards: 3 of 4 agents running \(bakery-cli agents\)\.\n$/);
+    const off = await f.run("limits", "off");
+    assert.equal(off.code, 0, off.stderr);
+    assert.match(off.stdout, /^Limits off \(stored, not applied\)/);
+    assert.notEqual((await f.run("limits", "maybe")).code, 0);
+    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ limitsEnabled: false }]);
+  } finally { await f.close(); }
 });
 
 test("board shows the auto-review state, and the removed --merge-limit is refused", async () => {
@@ -483,15 +512,22 @@ test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", as
 
 test("doctor exits promptly with its own status when the telemetry route stalls", async () => {
   const stalled: ServerResponse[] = [];
+  // How long the CLI held the stalled request open: about 1s when it gives up on its own, 10s on the default timeout.
+  // Timed from the request's arrival, so a slow process start on a busy machine doesn't count.
+  let held: Promise<number> | undefined;
   const stub = createServer((req, res) => {
-    if (req.url === "/api/telemetry/doctor") { stalled.push(res); return; }
+    if (req.url === "/api/telemetry/doctor") {
+      stalled.push(res);
+      const arrived = performance.now();
+      held = new Promise(resolve => req.socket.once("close", () => resolve(performance.now() - arrived)));
+      return;
+    }
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]));
   });
   await new Promise<void>(resolve => stub.listen(0, "127.0.0.1", resolve));
   try {
     const port = (stub.address() as { port: number }).port;
-    const started = Date.now();
     const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
     let stdout = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
@@ -499,7 +535,8 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
     assert.equal(code, 1);
     assert.match(stdout, /^FAIL\tboard /m);
     assert.equal(stalled.length, 1, "the failure was reported");
-    assert.ok(Date.now() - started < 5000, `exit took ${Date.now() - started}ms, not the 10s request timeout`);
+    const ms = await held!;
+    assert.ok(ms < 8000, `the CLI held the stalled request ${Math.round(ms)}ms, not its own 1s limit`);
   } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 
@@ -623,7 +660,7 @@ test("an unknown command suggests the nearest one", async () => {
   const f = await fixture();
   try {
     const result = await f.run("crate");
-    assert.equal(result.code, 1);
+    assert.equal(result.code, 2);
     assert.match(result.stderr, /Unknown command: crate\. Did you mean create\?/);
   } finally { await f.close(); }
 });

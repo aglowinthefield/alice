@@ -1,6 +1,7 @@
 import type { Board, Card, Run } from "./board.js";
 import { CommitHookError, PushHookError, type Integration } from "./integration.js";
 import type { PullRequestDraft } from "./pr-draft.js";
+import { loopGuards } from "./repo-limits.js";
 
 /**
  * How the repository's hooks went on the card's work when its run reached Review. "passed" names the commit whose
@@ -15,7 +16,7 @@ type Stored = { draft?: PullRequestDraft; hooks?: HookCheck };
 type Job = { runId: string; abort: AbortController; progress: ReadinessProgress; draft?: Promise<PullRequestDraft>; hooks?: Promise<void>; hookState?: HookCheck };
 
 /** Hook failures in a row sent back to the agent from Review before Bakery leaves the next one for a person. */
-const maxHookSendBacks = 2;
+const maxHookSendBacks = loopGuards.hookSendBacks;
 /** Drafts written at once, so a restart with many cards in Review does not start dozens of Pi processes. */
 const draftConcurrency = 2;
 

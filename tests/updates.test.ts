@@ -86,6 +86,22 @@ test("combines origin/main updates with local merges, newest first", () => {
   } finally { close(); }
 });
 
+// A card that went through rework lands several commits under the same subject, one per attempt.
+test("lists a card's rework commits once, under the newest", () => {
+  const { repo, close } = fixture();
+  try {
+    git(repo, "merge", "-q", "--ff-only", "origin/main");
+    const updates = new Updates(repo, async () => {}, () => {});
+    git(repo, "checkout", "-q", "-b", "card");
+    for (let attempt = 0; attempt < 3; attempt++) git(repo, "commit", "-q", "--allow-empty", "-m", "Bakery card: Reworked card");
+    const newest = git(repo, "rev-parse", "--short", "HEAD");
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--no-ff", "-m", "Merge card: Reworked card", "card");
+    updates.refresh();
+    assert.deepEqual(updates.state.commits, [{ sha: newest, subject: "Bakery card: Reworked card" }]);
+  } finally { close(); }
+});
+
 // The install builds into dist-next so a draining server keeps serving the UI that matches its API.
 test("a restarted server swaps the staged UI build into dist", () => {
   const root = mkdtempSync(join(tmpdir(), "bakery-ui-"));

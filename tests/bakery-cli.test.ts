@@ -637,7 +637,7 @@ test("an unknown command suggests the nearest one", async () => {
   const f = await fixture();
   try {
     const result = await f.run("crate");
-    assert.equal(result.code, 1);
+    assert.equal(result.code, 2);
     assert.match(result.stderr, /Unknown command: crate\. Did you mean create\?/);
   } finally { await f.close(); }
 });

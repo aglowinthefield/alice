@@ -186,9 +186,10 @@ async function watch(render) {
   }
 }
 
+// A usage mistake, so it exits 2 like other CLIs (house-style references/cli.md).
 function unknown(name) {
   const near = suggest(name);
-  return `Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run bakery-cli help to see them all.`;
+  return Object.assign(new Error(`Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run bakery-cli help to see them all.`), { exitCode: 2 });
 }
 
 async function main() {
@@ -199,13 +200,13 @@ async function main() {
   if (opts.help || command === "help") {
     const name = command === "help" ? args[0] : command;
     const text = commandHelp(name);
-    if (!text) throw new Error(unknown(name));
+    if (!text) throw unknown(name);
     console.log(text);
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
   const expected = { service: 1, doctor: 0, open: 0, limits: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
-  if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
+  if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw unknown(command);
   if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
   if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "limits" ? args.length > 1 || (args.length === 1 && !["on", "off"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
@@ -467,4 +468,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(`${paint("31", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = 1; });
+main().catch(error => { console.error(`${paint("31", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = error?.exitCode ?? 1; });

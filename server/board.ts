@@ -12,6 +12,7 @@ import { summarizeFailure } from "./failure-summary.js";
 import type { ThemeName } from "../src/themes.js";
 import { featureOffMessage, readFeatures, type Features } from "../src/features.js";
 import { parsePlan } from "../src/plan.js";
+import { classifyRuns, type RunKind } from "../src/run-kinds.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 import type { StatsInput } from "./stats.js";
 
@@ -96,7 +97,9 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
   sentinelId: string | null; sentinelRunId: string | null; findingKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
-  createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
+  createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number;
+  /** Spend on every run after the first attempt; null when there were none or none recorded usage. */
+  reworkCost: number | null; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
   /** Last time the latest run's agent reported anything; null before the first run. */
   lastActivityAt: string | null;
   /** Automatic retries spent after temporary provider failures since the card's last successful run; see `autoRetryDelaysMinutes`. */
@@ -162,6 +165,7 @@ export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: C
 const cardSpend = `(SELECT ${usageColumns.join(", ")} FROM runs spent WHERE spent.cardId=cards.id UNION ALL SELECT ${usageColumns.join(", ")} FROM auto_review_jobs spent WHERE spent.cardId=cards.id)`;
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
+  (SELECT SUM(rework.cost) FROM runs rework WHERE rework.cardId=cards.id AND rework.attempt>1) AS reworkCost,
   (SELECT COUNT(*) FROM attachments a WHERE a.cardId=cards.id) AS attachmentCount,
   (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds,
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
@@ -1611,6 +1615,13 @@ export class Board {
   }
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
+  /** The card's runs, newest first, each with why it ran (first attempt, send-back, CI fix, retry or rerun). */
+  listRunsWithKinds(cardId: string): (Run & { kind: RunKind })[] {
+    const runs = this.listRuns(cardId);
+    const requested = new Set(this.listReviewComments(cardId).filter(comment => comment.state === "requested").map(comment => comment.runId));
+    const kinds = classifyRuns(runs, this.listCardEvents(cardId), requested);
+    return runs.map(run => ({ ...run, kind: kinds.get(run.id) ?? "first" }));
+  }
   attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=?, lastActivityAt=? WHERE id=? AND status='running'").run(pid, worktree, now(), id); }
   /** The run's agent reported something. Lets the board tell a working run from a quiet one. */
   touch(id: string) { this.db.prepare("UPDATE runs SET lastActivityAt=? WHERE id=? AND status='running'").run(now(), id); }

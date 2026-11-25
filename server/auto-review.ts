@@ -149,8 +149,9 @@ export class AutoReview {
   async tick(): Promise<void> {
     if (this.draining) return;
     // This is the server's unconditional periodic tick, not an auto-review opt-in.
-    this.integration.reconcileExternallyMerged();
-    const started: Promise<void>[] = [];
+    // Async Git: reviews start meanwhile, and the tick resolves once both are done.
+    const reconciling = this.integration.reconcileExternallyMerged();
+    const started: Promise<void>[] = [reconciling];
     for (const candidate of this.board.listAutoReviewCandidates()) {
       const running = [...this.activeReviews.values()].filter(item => item.repo === candidate.card.repo).length;
       if (atReviewCapacity(candidate.board, running)) continue;

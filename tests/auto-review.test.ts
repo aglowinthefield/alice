@@ -139,6 +139,24 @@ test("the global tick reconciles a failed card merged outside Bakery without ena
   } finally { item.close(); }
 });
 
+test("reconciling externally merged cards runs Git without blocking the server, and overlapping calls share one pass", async () => {
+  const item = fixture();
+  try {
+    const { card, worktree } = item.reviewedCard();
+    git(worktree, "add", "README.md");
+    git(worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "external card fix");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "--no-ff", "--no-edit", git(worktree, "rev-parse", "HEAD"));
+    const integration = new Integration(item.board, item.data);
+    let served = false;
+    setImmediate(() => { served = true; });
+    const first = integration.reconcileExternallyMerged(), second = integration.reconcileExternallyMerged();
+    assert.equal(first, second, "a call while a pass runs joins it");
+    await first;
+    assert.equal(served, true, "other work ran while Git did");
+    assert.equal(item.board.wasIntegrated(card.id), true);
+  } finally { item.close(); }
+});
+
 test("the global tick ignores ancestry without integration, discarded merges, pending approval, and dirty branches", async () => {
   const item = fixture();
   try {

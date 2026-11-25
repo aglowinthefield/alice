@@ -1,8 +1,13 @@
 import type { SemanticTitleRules } from "./pr-title.js";
 import type { ThemeName } from "./themes.js";
 import type { UsageFields } from "./usage.js";
-import type { AgentModels, ThinkingLevel } from "../server/agent-models.js";
+import type {
+  AgentModels,
+  BoardAgentModels,
+  ThinkingLevel,
+} from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
+import type { RunKind } from "./run-kinds.js";
 
 export type Status =
   | "triage"
@@ -59,7 +64,7 @@ export type Board = {
   pickupCostBudget?: number | null;
   cost24h?: number;
   autoPickupBudgetReached?: boolean;
-  agentModels?: AgentModels;
+  agentModels?: BoardAgentModels;
   /** Per status; `review` counts only Review cards that need you, `reviewWaiting` the rest. */
   cardCounts?: Partial<Record<CountKey, number>>;
   /** Cards created outside this UI that the operator has not opened the board to see yet. */
@@ -72,7 +77,7 @@ export type Board = {
 export type AutoReviewJob = {
   cardId: string;
   runId: string;
-  state: "running" | "needs_human" | "merged" | "pull_request";
+  state: "running" | "needs_human" | "approved" | "merged" | "pull_request";
   details: string;
   fingerprint: string;
   startedAt: string;
@@ -95,6 +100,11 @@ export type BakerySettings = {
   agentModels?: AgentModels;
   discordWebhookUrl?: string;
   telemetryEnabled?: boolean;
+  /** Agents at once across every board; 0 means automatic. */
+  maxActiveAgents?: number;
+  /** The limit in force (automatic resolved) and the agents running now. */
+  activeAgentsLimit?: number;
+  activeAgents?: number;
   /** False when the server has no BAKERY_TELEMETRY_ENDPOINT; the toggle is then hidden. */
   telemetryAvailable?: boolean;
 };
@@ -230,6 +240,8 @@ export type Card = {
   /** The latest run ended with a `bakery-plan` block: this card produced a plan, not code. */
   planOnly?: boolean;
   usageIncomplete?: number;
+  /** Spend on every run after the first attempt; null when there were none. */
+  reworkCost?: number | null;
   /** Cards on the same board that must be Done or archived before this one starts. */
   dependsOn?: string[];
   /** True while any card in dependsOn is not Done or archived. */
@@ -281,11 +293,24 @@ export type CountKey = Status | "reviewWaiting";
 export const countKey = (card: Card): CountKey =>
   card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
-export type ReviewAction = "pr_ready" | "accept_findings";
+/**
+ * `agent_approved`: the agent reviewer approved the latest attempt and only your Approve is left.
+ * `needs_you`: the agent reviewer handed the attempt to you with a finding or a failed check.
+ */
+export type ReviewAction =
+  | "pr_ready"
+  | "accept_findings"
+  | "agent_approved"
+  | "needs_you";
 export const reviewActionLabels: Record<ReviewAction, string> = {
   pr_ready: "PR ready",
   accept_findings: "Accept findings",
+  agent_approved: "Agent approved",
+  needs_you: "Needs you",
 };
+/** An agent reviewer approved the card; it waits only for your Approve, not for you to fix something. */
+export const agentApproved = (card: Card) =>
+  needsYourReview(card) && card.reviewAction === "agent_approved";
 /** The next step on a Review card you can act on, or "" while it is waiting or the step is not known yet. */
 export const reviewActionText = (card: Card): string =>
   needsYourReview(card) && card.reviewAction
@@ -410,6 +435,8 @@ export type Run = {
   failureKind?: string | null;
   /** Id of the failed run whose rejected session this run replaced, or null. */
   recoveryOf?: string | null;
+  /** Why the run happened; see src/run-kinds.ts. */
+  kind?: RunKind;
 } & UsageFields;
 
 /** A file attached to a card, or to one of its discussion messages (`messageId`). */

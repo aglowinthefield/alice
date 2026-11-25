@@ -150,6 +150,13 @@ export const COMMANDS = [
     full: "[--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
   },
   {
+    name: "agents", group: "Boards", args: "[N|auto]", summary: "agents at once across all boards: show or set",
+    full: "[N|auto] [--json]",
+    details: "Card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. auto is a quarter of the CPU cores, at least 2. Automatic work (pickup, send-backs, CI and hook fixes, sentinels, reviews) waits for a slot; a run you start yourself always starts.",
+    options: [JSON_OUT],
+    examples: [["bakery-cli agents 4", ""], ["bakery-cli agents auto", ""]],
+  },
+  {
     name: "limits", group: "Boards", args: "[on|off]", summary: "spend limits: show, or turn them on or off",
     full: "[on|off] [--board ID|PATH] [--json]",
     details: "Spend limits are the daily start limit, the daily cost budget and the agent reviewer's diff caps. They are off by default, and apply only when on; the stored values are kept either way. Concurrency and loop guards (send-back, CI-fix and retry caps) always apply. Set the values with pickup --limit and --budget.",
@@ -180,6 +187,13 @@ export const COMMANDS = [
   {
     name: "sentinel-run", group: "Sentinels", args: "SENTINEL_ID", summary: "run an enabled sentinel now",
     full: "SENTINEL_ID [--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
+  },
+  {
+    name: "service", group: "Setup", args: "ACTION", summary: "run Bakery in the background: install, restart, logs",
+    full: "install|uninstall|start|stop|restart|status|logs [--host HOST] [--yes]",
+    details: "install runs this checkout as a systemd user service (Linux) or launchd agent (macOS) that starts at login, restarts on failure and checks for updates every 2 minutes. Settings go in ~/.config/bakery/bakery.env, which install creates once and never overwrites. restart waits for active runs to finish first. stop and uninstall end active runs at once, so they need --yes. Run install again after moving node, npm or pi.",
+    options: [["--host HOST", "the bind address written to a new bakery.env (default: 127.0.0.1)"], ["--yes", "confirm stop or uninstall"]],
+    examples: [["bakery-cli service install", ""], ["bakery-cli service install --host 100.64.0.10", "listen on a tailnet address"], ["bakery-cli service restart", "after editing bakery.env"]],
   },
   {
     name: "doctor", group: "Setup", summary: "check tools, data, server and boards",

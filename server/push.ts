@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { generateVAPIDKeys, sendNotification } from "web-push";
-import { isSentinelJob, type Board, type Card } from "./board.js";
+import { isSentinelJob, reviewActionLabels, type Board, type Card } from "./board.js";
 import { isStaleReview, reviewAgeDays } from "../src/stale-review.js";
 
 // Web Push: browsers that turned notifications on in Settings get one when a card becomes your turn (in Review, with
@@ -133,7 +133,7 @@ export class PushNotifications {
     const url = boardId ? `/board/${encodeURIComponent(boardId)}/card/${encodeURIComponent(card.id)}` : "/";
     const repo = basename(card.repo);
     if (kind === "failed") return { title: `Failed: ${card.title}`.slice(0, 120), body: `${repo} · ${card.failureSummary ?? "The run failed"}`.slice(0, 240), tag: `failed-${card.id}`, url };
-    const action = card.reviewAction === "pr_ready" ? "PR ready" : card.reviewAction === "accept_findings" ? "Accept findings" : "Ready for your review";
+    const action = card.reviewAction ? reviewActionLabels[card.reviewAction] : "Ready for your review";
     return { title: `Your turn: ${card.title}`.slice(0, 120), body: `${repo} · ${action}`, tag: `turn-${card.id}`, url };
   }
 

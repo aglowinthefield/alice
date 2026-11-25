@@ -160,6 +160,50 @@ test("with limits off, a used-up start limit and budget do not stop pickup, and 
   } finally { await item.close(); }
 });
 
+test("a pickup tick looks up candidates once, and Ready cards are built without loading boards", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    const ready = item.card("Ready one");
+    const listBoards = item.board.listBoards.bind(item.board);
+    item.board.listBoards = () => { throw new Error("a Ready card must not load every board"); };
+    assert.equal(item.board.getCard(ready.id)?.status, "ready");
+    item.board.listBoards = listBoards;
+    let lookups = 0;
+    const candidates = item.board.listAutoPickupCandidates.bind(item.board);
+    item.board.listAutoPickupCandidates = () => { lookups++; return candidates(); };
+    item.pickup.tick();
+    assert.equal(lookups, 1);
+    assert.equal(item.board.getCard(ready.id)?.status, "running");
+    item.release();
+    await waitFor(() => item.board.getCard(ready.id)?.status === "review");
+  } finally { await item.close(); }
+});
+
+test("the machine-wide agent limit holds pickup and automatic starts on every board, but a person's run still starts", async () => {
+  const item = fixture();
+  try {
+    item.board.updateSettings({ maxActiveAgents: 1 });
+    assert.throws(() => item.board.updateSettings({ maxActiveAgents: 33 }), /0 \(automatic\) or from 1 to 32/);
+    assert.throws(() => item.board.updateSettings({ maxActiveAgents: -1 }), /0 \(automatic\)/);
+    item.board.setAutoPickup(item.repoBoard.id, true, 3);
+    const first = item.card("First"), second = item.card("Second"), mine = item.card("Mine");
+    item.pickup.tick();
+    item.pickup.tick();
+    assert.equal(item.board.getCard(first.id)?.status, "running");
+    assert.equal(item.board.listRuns(second.id).length, 0, "the board has room but the machine does not");
+    assert.deepEqual(item.board.machineCapacity(), { setting: 1, limit: 1, active: 1 });
+    assert.throws(() => item.worker.start(item.board.getCard(second.id)!, "manual", "to fix failing CI"), /limit of 1 agents at once across all boards/,
+      "automatic fixes started as manual runs wait too");
+    item.worker.start(item.board.getCard(mine.id)!, "manual", "", undefined, true);
+    assert.equal(item.board.getCard(mine.id)?.status, "running", "a run the operator starts is never refused");
+    item.release();
+    await waitFor(() => item.board.getCard(first.id)?.status === "review" && item.board.getCard(mine.id)?.status === "review");
+    item.pickup.tick();
+    assert.equal(item.board.getCard(second.id)?.status, "running", "a freed slot goes to the next card");
+  } finally { await item.close(); }
+});
+
 test("a rolling six-start limit prevents unbounded model spend and persists after reopening", async () => {
   const item = fixture();
   try {
@@ -313,6 +357,8 @@ test("sentinel jobs live outside auto-pickup: never picked, never limited, never
   try {
     const job = (key: string) => item.board.setStatus(item.board.createCard({ title: key, body: "Fix it", repo: item.repo, idempotencyKey: key }).id, "ready");
     const fix = job("sentinel:1:head:main"), request = job("request:c1");
+    // About the board's slots: room on the machine for all three, whatever the runner's core count.
+    item.board.updateSettings({ maxActiveAgents: 8 });
     item.board.setAutoPickup(item.repoBoard.id, true, 1);
     item.pickup.tick();
     assert.equal(item.board.listRuns(fix.id).length + item.board.listRuns(request.id).length, 0, "the sentinel starts its own jobs");
@@ -449,6 +495,55 @@ test("a temporary provider failure retries after 1, 5 and 15 minutes, then the f
   }
 });
 
+test("an HTTP 502 from the provider proxy schedules one retry, records it on the run, and explains it on the card", async () => {
+  const item = fixture();
+  try {
+    providerFailurePi(item, '502 {"error":"acp-proxy failure: upstream-timeout ETIMEDOUT api.anthropic.com","detail":"Error: upstream request failed: kind=upstream-timeout code=ETIMEDOUT message=fetch failed"}');
+    const flaky = item.card("Proxy hiccup");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.listRuns(flaky.id)[0]?.status === "failed");
+    const [run] = item.board.listRuns(flaky.id);
+    assert.match(run.error ?? "", /^Provider request failed \(HTTP 502\)/);
+    assert.equal(run.failureKind, "transient");
+    assert.equal(run.retryScheduled, 1);
+    const card = item.board.getCard(flaky.id)!;
+    assert.equal(card.status, "ready");
+    assert.equal(card.autoRetries, 1);
+    assert.ok(card.autoRetryAt);
+    assert.match(item.board.listCardEvents(flaky.id).at(-1)!.reason, /automatic retry 1 of 3/);
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(flaky.id).length, 1, "only one retry is queued, and it waits for its backoff");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
+  } finally {
+    await item.close();
+  }
+});
+
+test("a provider failure with no explanation is not retried", async () => {
+  const item = fixture();
+  try {
+    providerFailurePi(item, "");
+    const unexplained = item.card("No detail"), waiting = item.card("Waiting");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(unexplained.id)?.status === "failed");
+    const [run] = item.board.listRuns(unexplained.id);
+    assert.equal(run.failureKind, "unknown");
+    assert.equal(run.retryScheduled, 0);
+    const card = item.board.getCard(unexplained.id)!;
+    assert.equal(card.autoRetries, 0);
+    assert.equal(card.autoRetryAt, null);
+    item.pickup.tick();
+    assert.equal(item.board.getCard(unexplained.id)?.status, "failed", "the card stays Failed");
+    assert.equal(item.board.listRuns(unexplained.id).length, 1, "and is not restarted");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
+    assert.equal(item.board.listRuns(waiting.id).length, 1, "the next card starts");
+  } finally {
+    await item.close();
+  }
+});
+
 test("an authentication failure pauses pickup at once without a retry, since every card would fail", async () => {
   const item = fixture();
   try {
@@ -464,6 +559,7 @@ test("an authentication failure pauses pickup at once without a retry, since eve
     const card = item.board.getCard(rejected.id)!;
     assert.equal(card.autoRetries, 0);
     assert.equal(card.autoRetryAt, null);
+    assert.equal(item.board.listRuns(rejected.id)[0].retryScheduled, 0);
     item.pickup.tick();
     assert.equal(
       item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,

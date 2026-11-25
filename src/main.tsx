@@ -40,6 +40,7 @@ import {
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  Coins,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -58,11 +59,14 @@ import {
   agentPhases,
   emptyAgentModels,
   thinkingLevels,
+  type AgentModel,
   type AgentModels,
   type AgentPhase,
+  type BoardAgentModels,
   type ThinkingLevel,
 } from "../server/agent-models.js";
 import { AgentBadge, reworkSummary } from "./attempts.js";
+import { reworkHeavy } from "./run-kinds.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";
 import { PullRequests } from "./pull-requests.js";
@@ -112,6 +116,7 @@ import {
   sharedDropTargets,
   readyCompanions,
   needsYourReview,
+  agentApproved,
   reviewActionText,
   reviewWaitText,
   type BakerySettings,
@@ -495,12 +500,26 @@ function RepositoryPathInput({
     </div>
   );
 }
-const phaseLabels: Record<AgentPhase, string> = {
+type ModelRow = AgentPhase | "retry";
+const phaseLabels: Record<ModelRow, string> = {
   work: "Card runs",
+  retry: "Card retries",
   conflict: "Conflict fixes",
   review: "Agent review",
   draft: "PR drafts",
 };
+const blankModel: AgentModel = { model: "", thinking: "" };
+// Trimmed, with an all-blank retry rung dropped, so it matches what the server stores.
+function normalizeModels(models: BoardAgentModels): BoardAgentModels {
+  const { retry, ...phases } = models;
+  const result: BoardAgentModels = { ...phases };
+  for (const phase of agentPhases)
+    result[phase] = { ...phases[phase], model: phases[phase].model.trim() };
+  const rung = retry && { ...retry, model: retry.model.trim() };
+  return rung && (rung.model || rung.thinking)
+    ? { ...result, retry: rung }
+    : result;
+}
 function AgentModelFields({
   scope,
   value,
@@ -509,10 +528,11 @@ function AgentModelFields({
   onSave,
 }: {
   scope: string;
-  value: AgentModels;
+  value: BoardAgentModels;
+  /** Set for a repository; also offers the retry rung of the model ladder. */
   inherited?: AgentModels;
   disabled: boolean;
-  onSave: (next: AgentModels) => void;
+  onSave: (next: BoardAgentModels) => void;
 }) {
   const [draft, setDraft] = useState(value);
   const [models, setModels] = useState<string[]>([]);
@@ -525,17 +545,29 @@ function AgentModelFields({
   };
   const inheritedLabel = (text: string) =>
     inherited ? `Global: ${text || "Pi default"}` : "Pi default";
-  const changed = JSON.stringify(draft) !== JSON.stringify(value);
+  const changed =
+    JSON.stringify(normalizeModels(draft)) !==
+    JSON.stringify(normalizeModels(value));
+  const rows: ModelRow[] = inherited
+    ? ["work", "retry", ...agentPhases.filter((phase) => phase !== "work")]
+    : [...agentPhases];
+  const field = (row: ModelRow) =>
+    row === "retry" ? (draft.retry ?? blankModel) : draft[row];
+  const placeholder = (row: ModelRow) =>
+    row === "retry"
+      ? "Off: retries use the Card runs model"
+      : inheritedLabel(inherited?.[row].model ?? "");
+  const inheritOption = (row: ModelRow) =>
+    row === "retry"
+      ? "Inherit (Card runs)"
+      : inherited
+        ? `Inherit (${inheritedLabel(inherited[row].thinking)})`
+        : "Inherit (Pi default)";
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        onSave({
-          work: { ...draft.work, model: draft.work.model.trim() },
-          conflict: { ...draft.conflict, model: draft.conflict.model.trim() },
-          review: { ...draft.review, model: draft.review.model.trim() },
-          draft: { ...draft.draft, model: draft.draft.model.trim() },
-        });
+        onSave(normalizeModels(draft));
       }}
     >
       <datalist id={`${scope}-models`}>
@@ -543,35 +575,35 @@ function AgentModelFields({
           <option key={model} value={model} />
         ))}
       </datalist>
-      {agentPhases.map((phase) => (
+      {rows.map((row) => (
         <div
-          key={phase}
+          key={row}
           className="mt-3 grid grid-cols-[7rem_minmax(0,1fr)_auto] items-center gap-2 text-xs"
         >
-          <span>{phaseLabels[phase]}</span>
+          <span>{phaseLabels[row]}</span>
           <input
-            aria-label={`${phaseLabels[phase]} model`}
+            aria-label={`${phaseLabels[row]} model`}
             list={`${scope}-models`}
-            value={draft[phase].model}
+            value={field(row).model}
             onFocus={loadModels}
             onChange={(event) =>
               setDraft({
                 ...draft,
-                [phase]: { ...draft[phase], model: event.target.value },
+                [row]: { ...field(row), model: event.target.value },
               })
             }
             disabled={disabled}
-            placeholder={inheritedLabel(inherited?.[phase].model ?? "")}
+            placeholder={placeholder(row)}
             className="min-w-0 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
           />
           <select
-            aria-label={`${phaseLabels[phase]} thinking`}
-            value={draft[phase].thinking}
+            aria-label={`${phaseLabels[row]} thinking`}
+            value={field(row).thinking}
             onChange={(event) =>
               setDraft({
                 ...draft,
-                [phase]: {
-                  ...draft[phase],
+                [row]: {
+                  ...field(row),
                   thinking: event.target.value as ThinkingLevel | "",
                 },
               })
@@ -579,11 +611,7 @@ function AgentModelFields({
             disabled={disabled}
             className="rounded-md border border-border bg-background px-2 py-1"
           >
-            <option value="">
-              {inherited
-                ? `Inherit (${inheritedLabel(inherited[phase].thinking)})`
-                : "Inherit (Pi default)"}
-            </option>
+            <option value="">{inheritOption(row)}</option>
             {thinkingLevels.map((level) => (
               <option key={level} value={level}>
                 {level}
@@ -1921,15 +1949,22 @@ export function App() {
               setReviewQueue([item.id]);
               setSelected(item.id);
             }}
-            onRunAgain={(item) => {
+            onRunAgain={async (item) => {
               const target = boards.find((entry) => entry.repo === item.repo);
-              if (target)
-                void action(() =>
-                  api(`/boards/${target.id}/cards/${item.id}/start`, {
-                    method: "POST",
-                    body: JSON.stringify({ currentMain: true }),
-                  }),
-                );
+              if (
+                !target ||
+                (settings?.confirmRunStart &&
+                  !(await confirmAction(
+                    `Start Pi on "${item.title}" on current main? This run may use paid model tokens and can edit its Git worktree.`,
+                  )))
+              )
+                return;
+              void action(() =>
+                api(`/boards/${target.id}/cards/${item.id}/start`, {
+                  method: "POST",
+                  body: JSON.stringify({ currentMain: true }),
+                }),
+              );
             }}
             onClose={async (item) => {
               const target = boards.find((entry) => entry.repo === item.repo);
@@ -2921,6 +2956,21 @@ export function App() {
                                     : item.turns}
                                 </span>
                                 <span className="flex items-center gap-2">
+                                  {reworkHeavy(item) && (
+                                    <span
+                                      data-testid="rework-cost"
+                                      title={`Rework cost ${formatCost(item.reworkCost)} of ${formatCost(item.cost)}: runs after the first attempt`}
+                                      className="flex items-center gap-1 text-status-interrupted"
+                                    >
+                                      <Coins size={10} aria-hidden />
+                                      {Math.round(
+                                        ((item.reworkCost ?? 0) /
+                                          (item.cost ?? 1)) *
+                                          100,
+                                      )}
+                                      % rework
+                                    </span>
+                                  )}
                                   {(item.priority ?? 0) !== 0 && (
                                     <PriorityNumber priority={item.priority} />
                                   )}
@@ -3961,7 +4011,9 @@ export function App() {
               <div className="font-medium">Pi models</div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Overrides for this repository's Pi runs. Blank fields inherit
-                the global setting from Settings.
+                the global setting from Settings. Card retries sets a model for
+                a card's second and later attempts (after a failure, send-back
+                or CI fix); leave it blank to run every attempt on Card runs.
               </p>
               <AgentModelFields
                 key={`${editingBoard.id}-${JSON.stringify(editingBoard.agentModels)}`}
@@ -4280,6 +4332,18 @@ function ActivityBadge({
         {reviewWaitText(card)}
       </span>
     );
+  // An agent approval only waits for your Approve, so it reads quieter than a hand-off with a finding.
+  if (agentApproved(card))
+    return (
+      <span
+        data-testid="activity-badge"
+        title="The agent reviewer approved this attempt; Approve merges it"
+        className="flex items-center gap-1 rounded border border-status-review px-1.5 py-px text-[11px] leading-4 font-medium text-foreground"
+      >
+        <ShieldCheck size={10} aria-hidden />
+        {reviewActionText(card)}
+      </span>
+    );
   if (needsYourReview(card))
     return (
       <span
@@ -4289,7 +4353,9 @@ function ActivityBadge({
             ? "The run changed no files; accept its findings to finish the card"
             : card.reviewAction === "pr_ready"
               ? "The run's changes are ready for you to review and approve"
-              : "Ready for your review"
+              : card.reviewAction === "needs_you"
+                ? "The agent reviewer left this attempt for you; see its Reviews tab"
+                : "Ready for your review"
         }
         className="flex items-center gap-1 rounded border border-status-review bg-status-review px-1.5 py-px text-[11px] leading-4 font-semibold text-background"
       >

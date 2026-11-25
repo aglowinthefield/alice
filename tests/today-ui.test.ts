@@ -22,12 +22,12 @@ const boards = [
   { ...board, id: "board-a", repo: "/code/alpha", cost24h: 1.25 },
   { ...board, id: "board-b", repo: "/code/beta", cost24h: 0.5 },
 ];
-const card = (id: string, repo: string, status: string, updatedAt: string) =>
-  ({ id, title: `Card ${id}`, body: "", repo, status, source: "manual", priority: 0, createdAt: "2026-02-01T00:00:00.000Z", updatedAt, turns: 0, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "" });
+const card = (id: string, repo: string, status: string, updatedAt: string, extra: { reviewAction?: string } = {}) =>
+  ({ id, title: `Card ${id}`, body: "", repo, status, source: "manual", priority: 0, createdAt: "2026-02-01T00:00:00.000Z", updatedAt, turns: 0, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", ...extra });
 
 // Cards may carry more fields than `card` sets, such as reviewSince or reviewWait.
 type TestCard = ReturnType<typeof card> & Record<string, unknown>;
-async function open(options: { cards: TestCard[] }) {
+async function open(options: { cards: TestCard[]; settings?: Record<string, unknown> }) {
   const page = await browser.newPage();
   const requests: { method: string; path: string; input: unknown }[] = [];
   const state = { cards: options.cards };
@@ -36,7 +36,7 @@ async function open(options: { cards: TestCard[] }) {
     const request = route.request(), path = new URL(request.url()).pathname;
     requests.push({ method: request.method(), path, input: request.postDataJSON() });
     if (path === "/api/boards") return route.fulfill({ json: boards });
-    if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" } });
+    if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", ...options.settings } });
     if (path === "/api/cards") return route.fulfill({ json: state.cards });
     if (/^\/api\/boards\/board-[ab]\/cards$/.test(path) && request.method() === "POST")
       return route.fulfill({ status: 201, json: { ...card("new", "/code/beta", "triage", "2026-03-02T00:00:00.000Z"), ...request.postDataJSON() } });
@@ -230,5 +230,56 @@ test("Review cards past their board's threshold are marked stale and listed in T
     const lane = page.locator("section[data-status]");
     await lane.getByText("Card fresh", { exact: true }).waitFor();
     assert.deepEqual(await lane.getByTestId("stale-badge").allInnerTexts(), ["Stale 4d"]);
+  } finally { await page.close(); }
+});
+
+test("an agent-approved card reads as approved, apart from a hand-off that needs you", async () => {
+  const { page } = await open({ cards: [
+    card("approved", "/code/alpha", "review", "2026-03-02T10:00:00.000Z", { reviewAction: "agent_approved" }),
+    card("handed-off", "/code/alpha", "review", "2026-03-02T11:00:00.000Z", { reviewAction: "needs_you" }),
+  ] });
+  try {
+    await eventually(() => titles(page, "Needs you"), ["Card handed-off"]);
+    await eventually(() => titles(page, "Agent approved"), ["Card approved"]);
+    assert.match(await page.getByRole("status", { name: "Since your last visit" }).innerText(), /1 need you/);
+    await page.getByRole("button", { name: "alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Kanban" }).click();
+    const badge = (title: string) => page.locator("section[data-status]").getByRole("button", { name: new RegExp(title) }).getByTestId("activity-badge");
+    await expectText(() => badge("Card approved").innerText(), "Agent approved");
+    await expectText(() => badge("Card handed-off").innerText(), "Needs you");
+    await page.locator("section[data-status]").getByText("Card approved", { exact: true }).click();
+    await expectText(() => page.getByTestId("review-action-chip").innerText(), "Agent approved");
+    await page.keyboard.press("Escape");
+    await page.locator("section[data-status]").getByText("Card handed-off", { exact: true }).click();
+    await expectText(() => page.getByTestId("review-action-chip").innerText(), "Needs you");
+  } finally { await page.close(); }
+});
+const expectText = (read: () => Promise<string>, expected: string) => eventually(() => read().then(text => text.trim()), expected);
+
+test("Run again on current main asks first when run starts need confirming; cancelling sends nothing", async () => {
+  const reviewSince = new Date(Date.now() - 5 * 24 * 60 * 60_000).toISOString();
+  const { page, requests } = await open({
+    cards: [{ ...card("old", "/code/alpha", "review", "2026-03-01T10:00:00.000Z"), reviewSince }],
+    // density is applied in the same callback that stores the settings, so it marks them as loaded.
+    settings: { confirmRunStart: true, density: "cozy" },
+  });
+  try {
+    await page.locator("html[data-density=cozy]").waitFor({ state: "attached" });
+    const rerun = section(page, "Stale in Review").getByRole("button", { name: "Run again on current main" });
+    const answer = (accept: boolean) => new Promise<string>(resolve => page.once("dialog", dialog => {
+      resolve(dialog.message());
+      void (accept ? dialog.accept() : dialog.dismiss());
+    }));
+    const dismissed = answer(false);
+    // A start that skips the question fails here at once, instead of waiting for a dialog that never opens.
+    const skipped = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/start")).then(() => "started without asking", () => "");
+    await rerun.click();
+    assert.match(await Promise.race([dismissed, skipped]), /Start Pi on "Card old" on current main\? This run may use paid model tokens/);
+    const accepted = answer(true);
+    await rerun.click();
+    await accepted;
+    const starts = () => Promise.resolve(requests.filter(item => item.method === "POST").map(item => [item.path, item.input]));
+    // Only the confirmed click reached the server; the cancelled one would have come first.
+    await eventually(starts, [["/api/boards/board-a/cards/old/start", { currentMain: true }]]);
   } finally { await page.close(); }
 });

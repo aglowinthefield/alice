@@ -2760,7 +2760,7 @@ export function App() {
                                       <span
                                         data-testid="failure-summary"
                                         title="Why the latest attempt failed. Open the card for the full error."
-                                        className="flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-500"
+                                        className="flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-500"
                                       >
                                         <CircleX size={10} aria-hidden />
                                         {item.failureSummary}
@@ -2955,7 +2955,7 @@ export function App() {
                                 <div
                                   role="separator"
                                   aria-label="Your turn"
-                                  className="flex items-center gap-2 px-1 text-[10px] font-semibold uppercase tracking-[.14em] text-foreground"
+                                  className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-[.14em] text-foreground"
                                 >
                                   Your turn
                                   <span className="h-px flex-1 bg-status-review" />
@@ -2972,7 +2972,7 @@ export function App() {
                               <div
                                 role="separator"
                                 aria-label="Not your turn yet"
-                                className="flex items-center gap-2 px-1 pt-2 text-[10px] font-semibold uppercase tracking-[.14em] text-muted-foreground"
+                                className="flex items-center gap-2 px-1 pt-2 text-[11px] font-semibold uppercase tracking-[.14em] text-muted-foreground"
                               >
                                 Not your turn yet
                                 <span className="h-px flex-1 bg-border" />
@@ -3907,7 +3907,7 @@ export function App() {
           className="fixed right-3 bottom-3 z-40 rounded-md border bg-card/60 px-3 py-2 text-xs backdrop-blur-md"
         >
           <div className="mb-1 text-muted-foreground">
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+            <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
               g
             </kbd>{" "}
             then…
@@ -3918,7 +3918,7 @@ export function App() {
               .map(([keys, label]) => (
                 <Fragment key={keys}>
                   <dt>
-                    <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+                    <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
                       {keys.slice(2)}
                     </kbd>
                   </dt>
@@ -3935,7 +3935,7 @@ export function App() {
           className="fixed right-3 bottom-3 z-40 flex items-center gap-1.5 rounded-md border bg-card/60 px-2 py-1 text-xs text-muted-foreground opacity-60 backdrop-blur-md transition-opacity hover:opacity-100"
         >
           Press
-          <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+          <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
             ?
           </kbd>
           for shortcuts

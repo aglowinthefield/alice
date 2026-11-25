@@ -147,4 +147,4 @@ Built on Radix primitives and shadcn's new-york style with Lucide icons. Dialogs
 - Do keep live progress motion: the orbit on a card whose agent is working, the slow breathe on one waiting, the pulse on cards that move along during a drag. These are Bakery's spinner equivalents and stop under reduced motion.
 - Don't add new looping motion beyond progress indicators.
 - Do keep the sidebar at its fixed sizes when changing density.
-- Don't use type below 11px. Existing 10px labels are being moved up.
+- Don't use type below 11px.

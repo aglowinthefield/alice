@@ -1735,7 +1735,7 @@ function Dependencies({
               className="flex items-center gap-2"
             >
               {link(item)}
-              <span className="font-mono text-[10px] uppercase">
+              <span className="font-mono text-[11px] uppercase">
                 {statusLabel(item.status)}
               </span>
               <Button

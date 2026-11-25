@@ -242,6 +242,8 @@ export class GraphScene {
   private nodes = new Map<string, NodeObject>();
   private edges = new Map<string, EdgeObject>();
   private edgeList: GraphEdge[] = [];
+  /** The last graph setGraph drew, so a card poll that changed nothing draws nothing. */
+  private graphKey = "";
   /** The hovered node's dependency chain, or null when nothing is hovered. */
   private hovered: string | null = null;
   private chain: Set<string> | null = null;
@@ -371,6 +373,9 @@ export class GraphScene {
 
   /** Adds, updates and removes nodes and edges. Removed ones release their geometry, material and label. */
   setGraph(nodes: SceneNode[], edges: GraphEdge[]) {
+    const key = JSON.stringify([nodes, edges]);
+    if (key === this.graphKey) return;
+    this.graphKey = key;
     const ids = new Set(nodes.map((node) => node.id));
     for (const [id, node] of this.nodes)
       if (!ids.has(id)) {

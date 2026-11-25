@@ -1,10 +1,13 @@
 import { useEffect, useState, type CSSProperties } from "react";
+import { checkBeforeReady } from "./ready-check.js";
 import {
   Check,
   Copy,
+  Eye,
   Maximize2,
   Minimize2,
   Pencil,
+  ShieldCheck,
   Square,
 } from "lucide-react";
 import { api } from "./api.js";
@@ -29,6 +32,8 @@ import {
   PRIORITY_MAX,
   PRIORITY_MIN,
   parsePriorityInput,
+  needsYourReview,
+  reviewActionLabels,
   type AutoReviewJob,
   type BakerySettings,
   type Card,
@@ -421,9 +426,29 @@ export function CardDetails({
             )}
           </div>
           <DialogDescription className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="rounded bg-primary/10 px-2 py-1 uppercase tracking-wider text-primary">
+            <span className="rounded bg-primary/10 capitalize px-2 py-1 text-primary">
               {card?.status}
             </span>{" "}
+            {card &&
+              (card.reviewAction === "agent_approved" ||
+                card.reviewAction === "needs_you") &&
+              needsYourReview(card) && (
+                <span
+                  data-testid="review-action-chip"
+                  className={
+                    card.reviewAction === "agent_approved"
+                      ? "flex items-center gap-1 rounded border border-status-review px-2 py-0.5 font-medium text-foreground"
+                      : "flex items-center gap-1 rounded border border-status-review bg-status-review px-2 py-0.5 font-semibold text-background"
+                  }
+                >
+                  {card.reviewAction === "agent_approved" ? (
+                    <ShieldCheck size={12} aria-hidden />
+                  ) : (
+                    <Eye size={12} aria-hidden />
+                  )}
+                  {reviewActionLabels[card.reviewAction]}
+                </span>
+              )}
             <span title={card?.repo}>
               {card?.repo.split("/").filter(Boolean).pop()}
             </span>
@@ -629,7 +654,7 @@ export function CardDetails({
                       aria-label="Agent review progress"
                       className="mt-6 rounded-md border border-border bg-accent/10 px-4 py-3 text-sm"
                     >
-                      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      <div className="text-sm font-semibold text-muted-foreground">
                         Agent review
                       </div>
                       <p className="mt-1 whitespace-pre-line leading-6 text-foreground/80">
@@ -877,7 +902,12 @@ export function CardDetails({
             )}
             {tab === "attempts" &&
               (runs.length > 0 ? (
-                <AttemptList key={card?.id} runs={runs} card={card} />
+                <AttemptList
+                  key={card?.id}
+                  runs={runs}
+                  card={card}
+                  reviews={autoJobs}
+                />
               ) : (
                 <p className="mt-4 text-sm text-muted-foreground">
                   No attempts yet.
@@ -993,14 +1023,17 @@ export function CardDetails({
             {card?.status === "triage" && (
               <Button
                 disabled={busy}
-                onClick={() =>
-                  action(() =>
+                onClick={async () => {
+                  const check = await checkBeforeReady([card]);
+                  if (check.choice === "edit") onEdit(card);
+                  if (check.choice !== "ready") return;
+                  await action(() =>
                     api(`/boards/${boardId}/cards/${card.id}/status`, {
                       method: "POST",
                       body: JSON.stringify({ status: "ready" }),
                     }),
-                  )
-                }
+                  );
+                }}
               >
                 Move to Ready
               </Button>
@@ -1024,7 +1057,7 @@ export function CardDetails({
             {card?.startQueued && (
               <>
                 <span
-                  className="rounded border border-amber-500/50 px-2 py-1 text-xs text-amber-600"
+                  className="rounded border border-status-interrupted/50 px-2 py-1 text-xs text-status-interrupted"
                   data-testid="start-queued-badge"
                 >
                   Queued, starts after restart
@@ -1636,9 +1669,7 @@ function LiveStatus({ run, turns }: { run: Run; turns: number }) {
       className="mt-6 rounded-md border border-border bg-accent/10 px-4 py-3 text-sm"
     >
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <span className="font-semibold uppercase tracking-wider">
-          Working now
-        </span>
+        <span className="font-semibold">Working now</span>
         <span>
           {elapsed} · {turns} {turns === 1 ? "turn" : "turns"}
         </span>
@@ -1874,9 +1905,7 @@ function RunReport({
       />
       {plan && (
         <div className="mt-4 border-t border-border pt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Plan
-          </h4>
+          <h4 className="text-sm font-semibold text-muted-foreground">Plan</h4>
           {"error" in plan ? (
             <p className="mt-2 text-sm text-destructive">{plan.error}</p>
           ) : (
@@ -1922,7 +1951,7 @@ function RunReport({
       )}
       {items.length > 0 && (
         <div className="mt-4 border-t border-border pt-3">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h4 className="text-sm font-semibold text-muted-foreground">
             Follow-ups
           </h4>
           <ul className="mt-2 space-y-2">
@@ -2009,11 +2038,13 @@ function ReviewHistory({
                     ? "merged locally"
                     : job.state === "pull_request"
                       ? "approved; pull request opened"
-                      : job.requeued
-                        ? "interrupted by a restart, queued again"
-                        : requestedChanges(job).length
-                          ? "sent back to the implementer"
-                          : "needs human review"}
+                      : job.state === "approved"
+                        ? "approved; waiting for your Approve"
+                        : job.requeued
+                          ? "interrupted by a restart, queued again"
+                          : requestedChanges(job).length
+                            ? "sent back to the implementer"
+                            : "needs you"}
               </strong>{" "}
               <AgentBadge
                 phase="Review"

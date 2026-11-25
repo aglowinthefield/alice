@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Board, maxAutoPullRequestAttempts, type Card } from "../server/board.js";
+import { Board, type Card } from "../server/board.js";
+import { loopGuards } from "../server/repo-limits.js";
 import { Worker } from "../server/worker.js";
 import { AutoPullRequest } from "../server/auto-pull-request.js";
 
@@ -90,8 +91,8 @@ test("a card that keeps coming back from a refused push is only tried a few time
       item.board.finish(run.id, "review");
       return item.board.getCard(current.id)!;
     });
-    for (let round = 0; round < maxAutoPullRequestAttempts + 2; round++) await refused.tick();
-    assert.equal(pushes, maxAutoPullRequestAttempts);
+    for (let round = 0; round < loopGuards.autoPullRequestPushes + 2; round++) await refused.tick();
+    assert.equal(pushes, loopGuards.autoPullRequestPushes);
     assert.equal(item.board.getCard(card.id)!.status, "review", "then the card waits for Approve");
   } finally { item.close(); }
 });

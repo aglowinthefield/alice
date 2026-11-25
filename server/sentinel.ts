@@ -5,11 +5,12 @@ import { acknowledge, boardGithubRepo, type Check, commentOnPullRequest, fetchOr
 import { githubRepo } from "./github-url.js";
 import type { PrLocks } from "./pr-locks.js";
 import { prFindingKey, sentinelKinds, sentinelNames, type SentinelFinding, type SentinelKind, type SentinelRecord, type SentinelRun, type SentinelStore } from "./sentinel-store.js";
+import { loopGuards } from "./repo-limits.js";
 
 /** Sentinel cards per PR before it is left to a person. Counts sentinel attempts only. */
-export const maxSentinelAttempts = 3;
+export const maxSentinelAttempts = loopGuards.sentinelAttempts;
 /** Open sentinel cards per board, so a bad day on main cannot flood the board. */
-export const maxOpenSentinelCards = 5;
+export const maxOpenSentinelCards = loopGuards.openSentinelCards;
 
 const holderOf = (cardId: string) => `sentinel:${cardId}`;
 /** What a running sentinel run is doing: its ids for provenance, and the findings it has dealt with so far. */

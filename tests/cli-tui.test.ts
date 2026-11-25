@@ -7,13 +7,14 @@ type Call = [string, string, unknown?];
 const board = { id: "b1", repo: "/repo", integration: "local", autoPickupEnabled: false };
 const card = (id: string, status: string, extra: object = {}) => ({ id: `${id}-0000`, title: `${id} card`, status, attempts: 1, ...extra });
 
-function fixture(cards: object[], options: { board?: object; review?: object; fail?: string } = {}) {
+function fixture(cards: object[], options: { board?: object; review?: object; fail?: string; flags?: object[] } = {}) {
   const calls: Call[] = [];
   const opened: string[] = [];
   const api = async (method: string, path: string, input?: unknown) => {
     calls.push([method, path, input]);
     if (options.fail && path.endsWith(options.fail)) throw new Error("Bakery 409: Card is already running");
     if (path.endsWith("/cards")) return cards;
+    if (path.endsWith("/ready-check") && options.flags) return { flags: options.flags };
     if (path.endsWith("/review")) return options.review ?? { files: [{ path: "a.ts" }], fingerprint: "f".repeat(64) };
     if (path.endsWith("/runs")) return [{ attempt: 2, status: "failed", agent: "pi", error: "Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout", report: null }];
     return {};
@@ -59,6 +60,20 @@ test("paid runs ask first; only y goes ahead", async () => {
   await f.tui.key("R");
   await f.tui.key("y");
   assert.deepEqual(f.posts()[1], ["POST", "/api/boards/b1/cards/f-0000/recover", undefined]);
+});
+
+test("Ready on a flagged card lists the flags and moves only on y", async () => {
+  const flags = [{ rule: "person-only", message: "Needs a physical device, which the agent does not have" }];
+  const f = fixture([card("t", "triage", { attempts: 0 })], { flags });
+  await f.tui.refresh();
+  await f.tui.key("r");
+  assert.equal(f.posts().length, 0);
+  assert.match(f.screen(), /may need another pass: Needs a physical device/);
+  await f.tui.key("n");
+  assert.equal(f.posts().length, 0, "n leaves the card in Triage");
+  await f.tui.key("r");
+  await f.tui.key("y");
+  assert.deepEqual(f.posts(), [["POST", "/api/boards/b1/cards/t-0000/status", { status: "ready" }]]);
 });
 
 test("Ready asks only when pickup could start it; Triage and stop go through", async () => {

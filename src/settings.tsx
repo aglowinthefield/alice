@@ -144,7 +144,52 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">Cards</legend>
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Machine
+                  </legend>
+                  <label className="mt-3 flex items-center gap-2">
+                    Agents at once, all boards
+                    <select
+                      aria-label="Agents at once, all boards"
+                      value={settings?.maxActiveAgents ?? 0}
+                      onChange={(event) =>
+                        saveSettings({
+                          maxActiveAgents: Number(event.target.value),
+                        })
+                      }
+                      className="rounded-md border border-border bg-background px-2 py-1"
+                    >
+                      <option value={0}>
+                        Automatic
+                        {settings?.maxActiveAgents === 0 &&
+                        settings.activeAgentsLimit
+                          ? ` (${settings.activeAgentsLimit})`
+                          : ""}
+                      </option>
+                      {Array.from({ length: 16 }, (_, index) => index + 1).map(
+                        (count) => (
+                          <option key={count} value={count}>
+                            {count}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </label>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Card runs and agent reviews across every board, since each
+                    ends with the repository&apos;s tests. Automatic work waits
+                    for a slot; a run you start yourself always starts.
+                    {typeof settings?.activeAgents === "number" &&
+                      ` ${settings.activeAgents} running now.`}
+                  </p>
+                </fieldset>
+                <fieldset
+                  className="mt-6 border-t border-border pt-5 text-sm"
+                  disabled={!settings || busy}
+                >
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Cards
+                  </legend>
                   <label className="mt-3 flex cursor-pointer items-center gap-2">
                     <input
                       type="checkbox"
@@ -161,7 +206,7 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">
+                  <legend className="float-left mb-3 w-full font-medium">
                     Card details layout
                   </legend>
                   <div className="mt-3 flex gap-5">
@@ -197,7 +242,9 @@ export function SettingsPage({
             {section === "appearance" && (
               <>
                 <fieldset className="text-sm" disabled={!settings || busy}>
-                  <legend className="pt-5 font-medium">Theme</legend>
+                  <legend className="float-left mb-3 w-full pt-5 font-medium">
+                    Theme
+                  </legend>
                   {(() => {
                     const { family, mode } = themeParts(
                       settings?.theme ?? "default",
@@ -262,7 +309,9 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">Density</legend>
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Density
+                  </legend>
                   <div className="mt-3 flex gap-5">
                     {(["compact", "default", "cozy"] as const).map(
                       (density) => (

@@ -272,12 +272,18 @@ export class Board {
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
     // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push, 'commit' for a commit hook that refused the commit.
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
-    // A close without merging records why ('' when skipped); every other event leaves it NULL. Closes from before the column
-    // existed count as skipped, found by the text closeReview gave them.
-    if (!(this.db.prepare("PRAGMA table_info(card_events)").all() as { name: string }[]).some(column => column.name === "closeReason")) {
-      this.db.exec(`ALTER TABLE card_events ADD COLUMN closeReason TEXT;
-        ALTER TABLE card_events ADD COLUMN closeNote TEXT NOT NULL DEFAULT '';
-        UPDATE card_events SET closeReason='' WHERE toStatus='done' AND (reason LIKE 'Closed without merging%' OR reason LIKE 'Closed from % without merging');`);
+    // A close without merging records why ('' when skipped); every other event leaves it NULL. Closes from before the columns
+    // existed count as skipped, found by the text closeReview gave them. All or nothing, and a database left with only
+    // closeReason by an interrupted upgrade gets the rest.
+    const eventColumns = new Set((this.db.prepare("PRAGMA table_info(card_events)").all() as { name: string }[]).map(column => column.name));
+    if (!eventColumns.has("closeReason") || !eventColumns.has("closeNote")) {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!eventColumns.has("closeReason")) this.db.exec("ALTER TABLE card_events ADD COLUMN closeReason TEXT");
+        if (!eventColumns.has("closeNote")) this.db.exec("ALTER TABLE card_events ADD COLUMN closeNote TEXT NOT NULL DEFAULT ''");
+        this.db.exec("UPDATE card_events SET closeReason='' WHERE closeReason IS NULL AND toStatus='done' AND (reason LIKE 'Closed without merging%' OR reason LIKE 'Closed from % without merging')");
+        this.db.exec("COMMIT");
+      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     }
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
@@ -1295,10 +1301,15 @@ export class Board {
     if (!card) throw new Error("Card not found");
     if (!["triage", "ready", "failed", "review"].includes(card.status)) throw new Error("Only Triage, Ready, Failed and Review cards can be closed without merging");
     if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge into local main");
-    this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), id);
-    this.explain(id, card.status === "review" ? "Closed without merging; the worktree and branch stay, and Reopen brings it back to Review" : `Closed from ${card.status} without merging`);
-    this.db.prepare("UPDATE card_events SET closeReason=?, closeNote=? WHERE id=(SELECT MAX(id) FROM card_events WHERE cardId=? AND toStatus='done')")
-      .run(why.reason ?? "", why.reason ? (why.note ?? "").trim().slice(0, 500) : "", id);
+    // The status change, its reason text and the picked reason land together or not at all.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), id);
+      this.explain(id, card.status === "review" ? "Closed without merging; the worktree and branch stay, and Reopen brings it back to Review" : `Closed from ${card.status} without merging`);
+      this.db.prepare("UPDATE card_events SET closeReason=?, closeNote=? WHERE id=(SELECT MAX(id) FROM card_events WHERE cardId=? AND toStatus='done')")
+        .run(why.reason ?? "", why.reason ? (why.note ?? "").trim().slice(0, 500) : "", id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return this.getCard(id)!;
   }
   // Archiving only hides Done cards in a separate lane. It never touches runs, worktrees, or Git.

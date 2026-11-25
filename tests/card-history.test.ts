@@ -85,6 +85,40 @@ test("closing without merging stores the picked reason on the close event; skipp
   });
 });
 
+test("a close whose reason cannot be saved leaves the card where it was", () => {
+  withBoard((board, dir) => {
+    const card = board.createCard({ title: "T", body: "", repo: dir });
+    const db = new DatabaseSync(join(dir, "board.sqlite"));
+    try {
+      db.exec("ALTER TABLE card_events DROP COLUMN closeNote");
+      assert.throws(() => board.closeReview(card.id, { reason: "duplicate" }), /closeNote/);
+      assert.equal(board.getCard(card.id)?.status, "triage");
+      assert.equal((db.prepare("SELECT COUNT(*) AS count FROM card_events WHERE cardId=?").get(card.id) as { count: number }).count, 0, "the trigger's status event rolled back too");
+    } finally { db.close(); }
+  });
+});
+
+test("an upgrade interrupted after adding closeReason finishes on the next start", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const file = join(dir, "board.sqlite");
+    let board = new Board(file);
+    const card = board.createCard({ title: "Old", body: "", repo: dir });
+    board.closeReview(card.id);
+    board.close();
+    const db = new DatabaseSync(file);
+    db.exec("ALTER TABLE card_events DROP COLUMN closeNote; UPDATE card_events SET closeReason=NULL");
+    db.close();
+    board = new Board(file);
+    try {
+      assert.deepEqual(board.listCardEvents(card.id).map(event => [event.closeReason, event.closeNote]), [["", ""]]);
+      const next = board.createCard({ title: "New", body: "", repo: dir });
+      board.closeReview(next.id, { reason: "other", note: "works again" });
+      assert.equal(board.listCardEvents(next.id).at(-1)?.closeNote, "works again");
+    } finally { board.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("closes recorded before reasons existed count as closes without a reason", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {

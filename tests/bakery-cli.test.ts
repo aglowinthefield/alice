@@ -170,6 +170,9 @@ test("close sends an optional reason and note", async () => {
       assert.match(result.stdout, /^card-one\tdone\t/);
     }
     assert.match((await f.run("close", "card-one", "--note", "why")).stderr, /--note needs --reason/);
+    const blank = await f.run("close", "card-one", "--reason", "   ", "--note", "why");
+    assert.notEqual(blank.code, 0);
+    assert.match(blank.stderr, /--reason cannot be empty/);
     assert.match((await f.run("show", "card-one", "--reason", "duplicate")).stderr, /only valid with close/);
     assert.match((await f.run("help", "close")).stdout, /duplicate, wrong-approach, not-needed, superseded or other/);
     const closes = f.requests.filter(r => r.path.endsWith("/close"));

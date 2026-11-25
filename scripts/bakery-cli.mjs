@@ -216,6 +216,9 @@ async function main() {
   if (opts.priority !== undefined && priorityValue(opts.priority) === null) throw new Error("Priority must be a whole number from -100 to 100, or low, normal, high, or urgent");
   if (command !== "close" && (opts.reason !== undefined || opts.note !== undefined)) throw new Error("--reason and --note are only valid with close");
   if (opts.note !== undefined && opts.reason === undefined) throw new Error("--note needs --reason; use --reason other for free text");
+  // "wrong approach" and "Wrong_Approach" both mean wrong-approach; the server rejects anything outside its list.
+  const closeReason = opts.reason?.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  if (opts.reason !== undefined && !closeReason) throw new Error("--reason cannot be empty; leave it out to close without a reason");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
   if (opts.integration !== undefined && command !== "board") throw new Error("--integration is only valid with board");
@@ -384,9 +387,7 @@ async function main() {
     const card = await request(origin, `${path}/cards/${id}`, "PATCH", { title: opts.title ?? current.title, body: opts.body ?? current.body ?? "" });
     print(card, opts.json, [cardLine(card)]);
   } else if (command === "close") {
-    // "wrong approach" and "Wrong_Approach" both mean wrong-approach; the server rejects anything outside its list.
-    const reason = opts.reason?.trim().toLowerCase().replace(/[\s_]+/g, "-");
-    const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", reason ? { reason, ...(opts.note ? { note: opts.note } : {}) } : {});
+    const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", closeReason ? { reason: closeReason, ...(opts.note ? { note: opts.note } : {}) } : {});
     print(card, opts.json, [cardLine(card)]);
   } else if (command === "archive" || command === "restore") {
     const cards = await request(origin, `${path}/cards/${command === "archive" ? "archive" : "unarchive"}`, "POST", { cardIds: args });

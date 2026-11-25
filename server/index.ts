@@ -239,6 +239,16 @@ async function body(req: IncomingMessage) {
   for await (const chunk of req) { text += chunk; if (text.length > 32_000) throw new Error("Request too large"); }
   return JSON.parse(text || "{}") as Record<string, unknown>;
 }
+/** Like body, but an empty request (no body, no Content-Type) reads as {}, for actions whose fields are all optional. */
+async function optionalBody(req: IncomingMessage) {
+  let text = "";
+  for await (const chunk of req) { text += chunk; if (text.length > 32_000) throw new Error("Request too large"); }
+  if (!text.trim()) return {} as Record<string, unknown>;
+  if (!req.headers["content-type"]?.startsWith("application/json")) throw new Error("Expected JSON");
+  const value: unknown = JSON.parse(text);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON object");
+  return value as Record<string, unknown>;
+}
 function fields(value: Record<string, unknown>) {
   const title = value.title, description = value.body;
   if (typeof title !== "string" || !title.trim() || title.length > 200 || typeof description !== "string" || description.length > 16000) throw new Error("Title and description are required");
@@ -849,8 +859,8 @@ const server = createServer(async (req, res) => {
           send(res, 200, board.resolveInterrupted(id)); return;
         }
         if (req.method === "POST" && action === "close") {
-          // Both optional: skipping the reason still closes the card.
-          const { reason, note } = await body(req);
+          // Both optional: skipping the reason, or sending no body at all, still closes the card.
+          const { reason, note } = await optionalBody(req);
           if (reason != null && !isCloseReason(reason)) throw new Error(`reason must be one of ${closeReasons.join(", ")}`);
           if (note != null && (typeof note !== "string" || note.length > 500)) throw new Error("note must be text of at most 500 characters");
           if (typeof note === "string" && note.trim() && reason == null) throw new Error("A note needs a reason; use reason other for free text");

@@ -71,7 +71,13 @@ export type ReviewWait = "agent_review" | "ci_fix" | "github";
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
  * something else (an approval in progress, a merge failure, a closed PR or failing checks) has to be dealt with first.
  */
-export type ReviewAction = "pr_ready" | "accept_findings";
+/**
+ * The next step on a Review card that is your turn. `agent_approved`: the agent reviewer approved the latest attempt
+ * and only your Approve is left. `needs_you`: the agent reviewer handed the attempt to you (a finding, a failed check).
+ */
+export type ReviewAction = "pr_ready" | "accept_findings" | "agent_approved" | "needs_you";
+/** Mirrors `reviewActionLabels` in src/model.ts. */
+export const reviewActionLabels: Record<ReviewAction, string> = { pr_ready: "PR ready", accept_findings: "Accept findings", agent_approved: "Agent approved", needs_you: "Needs you" };
 /**
  * Sentinel jobs are the cards a sentinel makes for the work it finds: a fix for a broken PR or a `/bakery` comment on
  * a PR. They carry provenance (`sentinelId`, `sentinelRunId`, `findingKey`) and the sentinel starts them itself, so they
@@ -139,7 +145,7 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 /** How many runs of one card Bakery pushes to open its pull request without Approve; see `listAutoPullRequestCandidates`. */
@@ -209,7 +215,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
+      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','approved','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pr_readiness (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, data TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
@@ -389,18 +395,21 @@ export class Board {
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
       for (const definition of usageDefinitions.split(", "))
         if (!columns.has(definition.split(" ")[0])) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
-    // Older job tables reject 'pull_request' (an agent approval that opened a PR). SQLite cannot alter a CHECK, so
-    // rebuild the table from its current definition, which already lists every column added above, in order.
+    // Older job tables reject 'pull_request' (an agent approval that opened a PR) and 'approved' (an agent approval
+    // waiting for your Approve). SQLite cannot alter a CHECK, so rebuild the table from its current definition, which
+    // already lists every column added above, in order. Approvals used to be stored as needs_human with an
+    // "Agent approved: " prefix; those move to 'approved' in the same transaction.
     const jobSchema = (this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_review_jobs'").get() as { sql: string }).sql;
-    if (!jobSchema.includes("'pull_request'")) {
+    if (!jobSchema.includes("'approved'")) {
       const rebuilt = jobSchema.replace(/^CREATE TABLE (?:"auto_review_jobs"|auto_review_jobs)/, "CREATE TABLE auto_review_jobs_new")
-        .replace("CHECK(state IN ('running','needs_human','merged'))", "CHECK(state IN ('running','needs_human','merged','pull_request'))");
-      if (!rebuilt.includes("'pull_request'") || !rebuilt.includes("auto_review_jobs_new")) throw new Error("Unrecognized auto_review_jobs schema; cannot add the pull_request state");
+        .replace(/CHECK\(state IN \('running','needs_human','merged'(?:,'pull_request')?\)\)/, "CHECK(state IN ('running','needs_human','approved','merged','pull_request'))");
+      if (!rebuilt.includes("'approved'") || !rebuilt.includes("auto_review_jobs_new")) throw new Error("Unrecognized auto_review_jobs schema; cannot add the approved state");
       this.db.exec(`BEGIN IMMEDIATE;
         ${rebuilt};
         INSERT INTO auto_review_jobs_new SELECT * FROM auto_review_jobs;
         DROP TABLE auto_review_jobs;
         ALTER TABLE auto_review_jobs_new RENAME TO auto_review_jobs;
+        UPDATE auto_review_jobs SET state='approved', details=substr(details, 17) WHERE state='needs_human' AND substr(details, 1, 16)='Agent approved: ';
         COMMIT;`);
     }
     const approvalColumns = new Set((this.db.prepare("PRAGMA table_info(approvals)").all() as { name: string }[]).map(column => column.name));
@@ -956,7 +965,11 @@ export class Board {
     if (card.status !== "review" || wait || run?.status !== "review" || run.changedFiles === null) return null;
     if (this.getApproval(card.id) || this.getMergeFailure(card.id)) return null;
     if (run.changedFiles === 0) return "accept_findings";
-    return card.prState === "CLOSED" || card.prChecks === "failing" ? null : "pr_ready";
+    if (card.prState === "CLOSED" || card.prChecks === "failing") return null;
+    const job = this.getAutoReviewJob(run.id);
+    if (job?.state === "approved") return "agent_approved";
+    if (job?.state === "needs_human") return "needs_you";
+    return "pr_ready";
   }
   /** Records how many files a run changes; see `Run.changedFiles`. */
   /** What Bakery prepared for opening a run's pull request when the run reached Review (see `Readiness`), as stored JSON. */
@@ -1014,7 +1027,7 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
+  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
     this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
       .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
   }

@@ -68,7 +68,7 @@ export type Board = {
 export type AutoReviewJob = {
   cardId: string;
   runId: string;
-  state: "running" | "needs_human" | "merged" | "pull_request";
+  state: "running" | "needs_human" | "approved" | "merged" | "pull_request";
   details: string;
   fingerprint: string;
   startedAt: string;
@@ -275,11 +275,24 @@ export type CountKey = Status | "reviewWaiting";
 export const countKey = (card: Card): CountKey =>
   card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
-export type ReviewAction = "pr_ready" | "accept_findings";
+/**
+ * `agent_approved`: the agent reviewer approved the latest attempt and only your Approve is left.
+ * `needs_you`: the agent reviewer handed the attempt to you with a finding or a failed check.
+ */
+export type ReviewAction =
+  | "pr_ready"
+  | "accept_findings"
+  | "agent_approved"
+  | "needs_you";
 export const reviewActionLabels: Record<ReviewAction, string> = {
   pr_ready: "PR ready",
   accept_findings: "Accept findings",
+  agent_approved: "Agent approved",
+  needs_you: "Needs you",
 };
+/** An agent reviewer approved the card; it waits only for your Approve, not for you to fix something. */
+export const agentApproved = (card: Card) =>
+  needsYourReview(card) && card.reviewAction === "agent_approved";
 /** The next step on a Review card you can act on, or "" while it is waiting or the step is not known yet. */
 export const reviewActionText = (card: Card): string =>
   needsYourReview(card) && card.reviewAction

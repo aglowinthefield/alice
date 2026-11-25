@@ -105,6 +105,7 @@ import {
   sharedDropTargets,
   readyCompanions,
   needsYourReview,
+  agentApproved,
   reviewActionText,
   reviewWaitText,
   type BakerySettings,
@@ -4129,6 +4130,18 @@ function ActivityBadge({
         {reviewWaitText(card)}
       </span>
     );
+  // An agent approval only waits for your Approve, so it reads quieter than a hand-off with a finding.
+  if (agentApproved(card))
+    return (
+      <span
+        data-testid="activity-badge"
+        title="The agent reviewer approved this attempt; Approve merges it"
+        className="flex items-center gap-1 rounded border border-status-review px-1.5 py-px text-[11px] leading-4 font-medium text-foreground"
+      >
+        <ShieldCheck size={10} aria-hidden />
+        {reviewActionText(card)}
+      </span>
+    );
   if (needsYourReview(card))
     return (
       <span
@@ -4138,7 +4151,9 @@ function ActivityBadge({
             ? "The run changed no files; accept its findings to finish the card"
             : card.reviewAction === "pr_ready"
               ? "The run's changes are ready for you to review and approve"
-              : "Ready for your review"
+              : card.reviewAction === "needs_you"
+                ? "The agent reviewer left this attempt for you; see its Reviews tab"
+                : "Ready for your review"
         }
         className="flex items-center gap-1 rounded border border-status-review bg-status-review px-1.5 py-px text-[11px] leading-4 font-semibold text-background"
       >

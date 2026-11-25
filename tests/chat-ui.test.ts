@@ -402,7 +402,8 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
     await model.fill("anthropic/claude-sonnet-4-5");
     await model.press("Enter");
     await thinking.selectOption("medium");
-    await page.waitForTimeout(200);
+    // Picks save one after another; wait for all three instead of a fixed delay a loaded runner can outlast.
+    await waitUntil(() => patches.length >= 3);
     assert.deepEqual(patches, [
       { model: "openai/gpt-6.1-sol", thinking: "high" },
       { model: "anthropic/claude-sonnet-4-5", thinking: "high" },

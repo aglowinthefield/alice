@@ -42,6 +42,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
+import { ConflictHotspots } from "./conflict-hotspots.js";
 import {
   Dialog,
   DialogContent,
@@ -2459,6 +2460,27 @@ export function App() {
               View conflicts
             </Button>
           </div>
+        )}
+        {!selected && currentBoard && view === "board" && (
+          <ConflictHotspots
+            hotspots={currentBoard.conflictHotspots ?? []}
+            busy={busy}
+            onDismiss={(file) => {
+              const target = currentBoard;
+              void action(async () => {
+                await api(`/boards/${target.id}/conflict-hotspots/dismiss`, {
+                  method: "POST",
+                  body: JSON.stringify({ file }),
+                });
+                updateBoard({
+                  ...target,
+                  conflictHotspots: (target.conflictHotspots ?? []).filter(
+                    (item) => item.file !== file,
+                  ),
+                });
+              });
+            }}
+          />
         )}
         {moveNotice && (
           <div

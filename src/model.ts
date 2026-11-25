@@ -66,7 +66,19 @@ export type Board = {
   chatUnread?: number;
   /** Sentinel jobs that are running or queued to start. Done jobs never count. */
   sentinelsInProgress?: number;
+  /** Files that keep conflicting on this board and have not been dismissed since their last conflict. */
+  conflictHotspots?: ConflictHotspot[];
 };
+/** A file that conflicted on `cards` distinct cards within `conflictHotspotDays`. */
+export type ConflictHotspot = {
+  file: string;
+  cards: number;
+  cardIds: string[];
+  lastAt: string;
+};
+/** A file conflicting on this many cards within `conflictHotspotDays` gets a board notice. */
+export const conflictHotspotCards = 3;
+export const conflictHotspotDays = 14;
 export type AutoReviewJob = {
   cardId: string;
   runId: string;

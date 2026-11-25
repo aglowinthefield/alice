@@ -49,6 +49,8 @@ test("a repository's Card retries model is saved with its other models and is no
     await save.click();
     await page.waitForFunction(() => (document.querySelector("button[type=submit]:disabled")));
     assert.deepEqual(patches, [{ agentModels: { ...emptyAgentModels(), work: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, retry: { model: "anthropic/claude-opus-4-1", thinking: "high" } } }]);
+    // The saved, trimmed value re-renders after the save settles; under load that is after the button disables.
+    await page.waitForFunction(input => (input as HTMLInputElement).value === "anthropic/claude-opus-4-1", await retry.elementHandle()).catch(() => undefined);
     assert.equal(await retry.inputValue(), "anthropic/claude-opus-4-1");
   } finally {
     await browser?.close();

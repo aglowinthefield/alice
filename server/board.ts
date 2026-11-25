@@ -4,7 +4,7 @@ import { addAgent, type Usage } from "./agent.js";
 import type { CacheUsage } from "./turbo-summary.js";
 import { sharedCacheEnv } from "./shared-cache-env.js";
 import { validateSharedCaches, type SharedCache } from "./shared-caches.js";
-import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
+import { defaultChatModel, parseAgentModels, parseBoardAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, validateBoardAgentModels, type AgentModel, type AgentModels, type AgentPhase, type BoardAgentModels } from "./agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import { atMachineCapacity, atRunCapacity, autoStartRefusal, machineAgentLimit, maxMachineAgents, budgetReached, dailyStartsReached, loopGuards, nextStartAt } from "./repo-limits.js";
 import { classifyProviderFailure, isProviderFailureKind, type ProviderFailureKind } from "./provider-failure.js";
@@ -13,11 +13,12 @@ import type { ThemeName } from "../src/themes.js";
 import { featureOffMessage, readFeatures, type Features } from "../src/features.js";
 import { parsePlan } from "../src/plan.js";
 import { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot } from "../src/model.js";
+import { classifyRuns, type RunKind } from "../src/run-kinds.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean; maxActiveAgents: number };
@@ -30,7 +31,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullReque
   autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, pushMainAfterMerge: row.pushMainAfterMerge !== 0,
   autoPullRequestEnabled: row.autoPullRequestEnabled !== 0, autoPullRequestEnabledAt: row.autoPullRequestEnabledAt,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
-  autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels), sharedCaches: validateSharedCaches(JSON.parse(row.sharedCaches)),
+  autoPickupStarts: starts.length, agentModels: parseBoardAgentModels(row.agentModels), sharedCaches: validateSharedCaches(JSON.parse(row.sharedCaches)),
   autoPickupNextAt: nextStartAt(limitSettings(row), starts),
   pickupCostBudget: row.pickupCostBudget, cost24h, integration: pullRequests ? row.integration : "local", integrationConfigured: row.integration, integrationError: pullRequests ? row.integrationError : "", integrationWarning: pullRequests ? row.integrationWarning : "", integrationSyncedAt: row.integrationSyncedAt,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
@@ -74,7 +75,13 @@ export type ReviewWait = "agent_review" | "ci_fix" | "github";
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
  * something else (an approval in progress, a merge failure, a closed PR or failing checks) has to be dealt with first.
  */
-export type ReviewAction = "pr_ready" | "accept_findings";
+/**
+ * The next step on a Review card that is your turn. `agent_approved`: the agent reviewer approved the latest attempt
+ * and only your Approve is left. `needs_you`: the agent reviewer handed the attempt to you (a finding, a failed check).
+ */
+export type ReviewAction = "pr_ready" | "accept_findings" | "agent_approved" | "needs_you";
+/** Mirrors `reviewActionLabels` in src/model.ts. */
+export const reviewActionLabels: Record<ReviewAction, string> = { pr_ready: "PR ready", accept_findings: "Accept findings", agent_approved: "Agent approved", needs_you: "Needs you" };
 /**
  * Sentinel jobs are the cards a sentinel makes for the work it finds: a fix for a broken PR or a `/bakery` comment on
  * a PR. They carry provenance (`sentinelId`, `sentinelRunId`, `findingKey`) and the sentinel starts them itself, so they
@@ -91,7 +98,9 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
   sentinelId: string | null; sentinelRunId: string | null; findingKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
-  createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
+  createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number;
+  /** Spend on every run after the first attempt; null when there were none or none recorded usage. */
+  reworkCost: number | null; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
   /** Last time the latest run's agent reported anything; null before the first run. */
   lastActivityAt: string | null;
   /** Automatic retries spent after temporary provider failures since the card's last successful run; see `autoRetryDelaysMinutes`. */
@@ -142,7 +151,7 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot };
 // Conflict events older than this are pruned; only the hotspot window reads them.
@@ -160,6 +169,7 @@ export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: C
 const cardSpend = `(SELECT ${usageColumns.join(", ")} FROM runs spent WHERE spent.cardId=cards.id UNION ALL SELECT ${usageColumns.join(", ")} FROM auto_review_jobs spent WHERE spent.cardId=cards.id)`;
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
   COUNT(runs.id) AS attempts,
+  (SELECT SUM(rework.cost) FROM runs rework WHERE rework.cardId=cards.id AND rework.attempt>1) AS reworkCost,
   (SELECT COUNT(*) FROM attachments a WHERE a.cardId=cards.id) AS attachmentCount,
   (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds,
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
@@ -213,7 +223,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS conflict_events (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, cardId TEXT NOT NULL, file TEXT NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS conflict_events_window ON conflict_events(createdAt, repo, file);
       CREATE TABLE IF NOT EXISTS conflict_hotspot_dismissals (repo TEXT NOT NULL, file TEXT NOT NULL, lastEventId INTEGER NOT NULL, PRIMARY KEY(repo, file));
-      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
+      CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','approved','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pr_readiness (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, data TEXT NOT NULL, updatedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), fingerprint TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, fileLine INTEGER, kind TEXT NOT NULL CHECK(kind IN ('add','remove','context')), code TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','requested')), createdAt TEXT NOT NULL);
@@ -397,18 +407,21 @@ export class Board {
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
       for (const definition of usageDefinitions.split(", "))
         if (!columns.has(definition.split(" ")[0])) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
-    // Older job tables reject 'pull_request' (an agent approval that opened a PR). SQLite cannot alter a CHECK, so
-    // rebuild the table from its current definition, which already lists every column added above, in order.
+    // Older job tables reject 'pull_request' (an agent approval that opened a PR) and 'approved' (an agent approval
+    // waiting for your Approve). SQLite cannot alter a CHECK, so rebuild the table from its current definition, which
+    // already lists every column added above, in order. Approvals used to be stored as needs_human with an
+    // "Agent approved: " prefix; those move to 'approved' in the same transaction.
     const jobSchema = (this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_review_jobs'").get() as { sql: string }).sql;
-    if (!jobSchema.includes("'pull_request'")) {
+    if (!jobSchema.includes("'approved'")) {
       const rebuilt = jobSchema.replace(/^CREATE TABLE (?:"auto_review_jobs"|auto_review_jobs)/, "CREATE TABLE auto_review_jobs_new")
-        .replace("CHECK(state IN ('running','needs_human','merged'))", "CHECK(state IN ('running','needs_human','merged','pull_request'))");
-      if (!rebuilt.includes("'pull_request'") || !rebuilt.includes("auto_review_jobs_new")) throw new Error("Unrecognized auto_review_jobs schema; cannot add the pull_request state");
+        .replace(/CHECK\(state IN \('running','needs_human','merged'(?:,'pull_request')?\)\)/, "CHECK(state IN ('running','needs_human','approved','merged','pull_request'))");
+      if (!rebuilt.includes("'approved'") || !rebuilt.includes("auto_review_jobs_new")) throw new Error("Unrecognized auto_review_jobs schema; cannot add the approved state");
       this.db.exec(`BEGIN IMMEDIATE;
         ${rebuilt};
         INSERT INTO auto_review_jobs_new SELECT * FROM auto_review_jobs;
         DROP TABLE auto_review_jobs;
         ALTER TABLE auto_review_jobs_new RENAME TO auto_review_jobs;
+        UPDATE auto_review_jobs SET state='approved', details=substr(details, 17) WHERE state='needs_human' AND substr(details, 1, 16)='Agent approved: ';
         COMMIT;`);
     }
     // After any rebuild above, which drops the table's indexes. Card lookups total each card's review spend.
@@ -734,13 +747,16 @@ export class Board {
   }
   setAgentModels(id: string, agentModels: unknown): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
-    this.db.prepare("UPDATE boards SET agentModels=? WHERE id=?").run(JSON.stringify(validateAgentModels(agentModels)), id);
+    this.db.prepare("UPDATE boards SET agentModels=? WHERE id=?").run(JSON.stringify(validateBoardAgentModels(agentModels)), id);
     return this.getBoard(id)!;
   }
-  /** Repository choice per field, then the global default; empty fields leave Pi's own default. */
-  agentModelFor(repo: string, phase: AgentPhase): AgentModel {
+  /**
+   * Repository choice per field, then the global default; empty fields leave Pi's own default. A card run's `attempt`
+   * past the first uses the board's retry model when its ladder is on.
+   */
+  agentModelFor(repo: string, phase: AgentPhase, attempt = 1): AgentModel {
     const row = this.db.prepare("SELECT agentModels FROM boards WHERE repo=?").get(repo) as { agentModels: string } | undefined;
-    return resolveAgentModel(phase, row && parseAgentModels(row.agentModels), this.getSettings().agentModels);
+    return resolveAgentModel(phase, row && parseBoardAgentModels(row.agentModels), this.getSettings().agentModels, attempt);
   }
   setAutoCollapseEmptySwimlanes(id: string, enabled: boolean): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
@@ -974,7 +990,11 @@ export class Board {
     if (card.status !== "review" || wait || run?.status !== "review" || run.changedFiles === null) return null;
     if (this.getApproval(card.id) || this.getMergeFailure(card.id)) return null;
     if (run.changedFiles === 0) return "accept_findings";
-    return card.prState === "CLOSED" || card.prChecks === "failing" ? null : "pr_ready";
+    if (card.prState === "CLOSED" || card.prChecks === "failing") return null;
+    const job = this.getAutoReviewJob(run.id);
+    if (job?.state === "approved") return "agent_approved";
+    if (job?.state === "needs_human") return "needs_you";
+    return "pr_ready";
   }
   /** Records how many files a run changes; see `Run.changedFiles`. */
   /** What Bakery prepared for opening a run's pull request when the run reached Review (see `Readiness`), as stored JSON. */
@@ -1035,7 +1055,7 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
+  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
     this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
       .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
   }
@@ -1629,6 +1649,13 @@ export class Board {
   }
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
+  /** The card's runs, newest first, each with why it ran (first attempt, send-back, CI fix, retry or rerun). */
+  listRunsWithKinds(cardId: string): (Run & { kind: RunKind })[] {
+    const runs = this.listRuns(cardId);
+    const requested = new Set(this.listReviewComments(cardId).filter(comment => comment.state === "requested").map(comment => comment.runId));
+    const kinds = classifyRuns(runs, this.listCardEvents(cardId), requested);
+    return runs.map(run => ({ ...run, kind: kinds.get(run.id) ?? "first" }));
+  }
   attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=?, lastActivityAt=? WHERE id=? AND status='running'").run(pid, worktree, now(), id); }
   /** The run's agent reported something. Lets the board tell a working run from a quiet one. */
   touch(id: string) { this.db.prepare("UPDATE runs SET lastActivityAt=? WHERE id=? AND status='running'").run(now(), id); }

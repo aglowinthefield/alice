@@ -733,7 +733,7 @@ const server = createServer(async (req, res) => {
         // A sentinel job is delivered by its sentinel, never reviewed, approved, merged or published through a card flow.
         if (isSentinelJob(item) && req.method !== "GET" && action && ["approve", "approval", "pr-draft", "publish", "accept-findings", "pull-request", "request-changes", "auto-review", "create-plan", "conflict"].includes(action))
           throw new Error("This card is a sentinel job. Its sentinel delivers the result; it is not reviewed or merged here");
-        if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
+        if (req.method === "GET" && action === "runs") { send(res, 200, board.listRunsWithKinds(id)); return; }
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
         if (req.method === "GET" && action === "history") { send(res, 200, cardHistory(item, board.listCardEvents(id), board.listRuns(id), board.listAutoReviewJobs(id))); return; }
         if (req.method === "GET" && action === "push-progress") { send(res, 200, integration.pushProgress(id)); return; }

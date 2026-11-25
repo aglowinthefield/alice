@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Clock3 } from "lucide-react";
 import { date } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import type { Card, Run } from "./model.js";
+import { costByKind, runKindLabels } from "./run-kinds.js";
 import { formatCost, usageTitle, type UsageFields } from "./usage.js";
 
 // Cost of one attempt or review. Older attempts without a usage record show "—", never $0.
@@ -85,11 +86,58 @@ export function errorPrompt(
   return lines.join("\n");
 }
 
+// The card's spend split by why each run happened, plus its agent reviews, so the parts add up to the card total.
+export function CostSplit({
+  runs,
+  reviews,
+}: {
+  runs: Run[];
+  reviews: UsageFields[];
+}) {
+  const split = costByKind(runs, reviews);
+  const parts = [
+    ...split.kinds.map((part) => ({
+      key: part.kind,
+      label: runKindLabels[part.kind],
+      count: part.runs,
+      cost: part.cost,
+    })),
+    ...(reviews.length
+      ? [
+          {
+            key: "reviews",
+            label: "Agent review",
+            count: reviews.length,
+            cost: split.reviews,
+          },
+        ]
+      : []),
+  ];
+  return (
+    <ul
+      data-testid="cost-split"
+      aria-label="Cost by kind"
+      className="-mt-2 mb-4 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground"
+    >
+      {parts.map((part) => (
+        <li key={part.key} data-kind={part.key}>
+          {part.label}
+          {part.count > 1 ? ` ×${part.count}` : ""}:{" "}
+          <span className="text-foreground">{formatCost(part.cost)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function AttemptList({
   runs,
   card,
+  reviews = [],
 }: {
   runs: Run[];
+  /** The card's agent reviews; their cost is part of the card total. */
+  reviews?: UsageFields[];
   card?:
     | (Pick<Card, "title" | "repo" | "reviewRounds"> &
         Partial<Pick<Card, "cost" | "usageIncomplete">>)
@@ -145,6 +193,7 @@ export function AttemptList({
           reviewRounds: card?.reviewRounds ?? 0,
         })}
       </p>
+      {runs.length > 0 && <CostSplit runs={runs} reviews={reviews} />}
       <div className="space-y-4">
         {runs.map((run, index) => {
           const open = expanded[run.id] ?? index === 0;
@@ -170,6 +219,14 @@ export function AttemptList({
                   Attempt #{run.attempt}
                 </span>
                 <span className="capitalize">{run.status}</span>
+                {run.kind && run.kind !== "first" && (
+                  <span
+                    data-testid="run-kind"
+                    className="text-muted-foreground"
+                  >
+                    {runKindLabels[run.kind]}
+                  </span>
+                )}
                 {run.startedBy === "auto" && (
                   <span className="rounded bg-primary/10 px-1 text-primary">
                     Auto pickup

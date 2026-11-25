@@ -339,6 +339,11 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
     assert.deepEqual(updated.data.agentModels, { ...emptyAgentModels(), conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
     assert.deepEqual((await request("/boards")).data.find((item: { id: string }) => item.id === board.id).agentModels, updated.data.agentModels);
     assert.deepEqual((await request("/settings")).data.agentModels, global);
+    assert.equal((await request("/settings", "PATCH", { agentModels: { retry: { model: "anthropic/claude-opus-4-1" } } })).status, 400);
+    const ladder = await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { retry: { model: "anthropic/claude-opus-4-1", thinking: "" } } });
+    assert.equal(ladder.status, 200);
+    assert.deepEqual(ladder.data.agentModels, { ...emptyAgentModels(), retry: { model: "anthropic/claude-opus-4-1", thinking: "" } });
+    assert.equal("retry" in (await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { retry: { model: "", thinking: "" } } })).data.agentModels, false);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");

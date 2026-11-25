@@ -536,6 +536,41 @@ test("card runs and conflict repairs pass their resolved Pi model and thinking l
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a board's model ladder runs attempt 1 on the card-run model and later attempts on the retry model", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), argsFile = join(dir, "args.txt");
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+    const card = board.createCard({ title: "Ladder", body: "", repo });
+    board.setStatus(card.id, "ready");
+    board.setAgentModels(board.listBoards()[0].id, { work: { model: "anthropic/claude-sonnet-4-5", thinking: "high" }, conflict: { model: "openai-codex/gpt-5.5", thinking: "" }, retry: { model: "anthropic/claude-opus-4-1", thinking: "" } });
+    const models = () => readFileSync(argsFile, "utf8").split("\n").slice(4, 8);
+    const first = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(first.id)?.status === "review");
+    assert.equal(first.attempt, 1);
+    assert.deepEqual(models(), ["--model", "anthropic/claude-sonnet-4-5", "--thinking", "high"]);
+    for (const attempt of [2, 3]) {
+      const retry = worker.start(board.getCard(card.id)!);
+      await waitFor(() => board.getRun(retry.id)?.status === "review");
+      assert.equal(retry.attempt, attempt);
+      // A blank retry thinking level keeps the card-run level.
+      assert.deepEqual(models(), ["--model", "anthropic/claude-opus-4-1", "--thinking", "high"]);
+    }
+    // Conflict repairs keep their own model; the ladder covers card runs only.
+    board.recordMergeFailure(card.id, ["README.md"], "conflict");
+    const conflict = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(conflict.id)?.status === "review");
+    assert.deepEqual(models(), ["--model", "openai-codex/gpt-5.5", "-e", wrapUpExtension]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 function worktrunkFixture() {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), fakeWt = join(dir, "wt-fake"), log = join(dir, "wt.log");

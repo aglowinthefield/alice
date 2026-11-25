@@ -52,7 +52,7 @@ Open http://127.0.0.1:5173.
 
 `npm run dev` runs the server under a supervisor that owns ports 4317 and 5173 (the server listens on 14317 and Vite on 15173) and reloads the server when code changes. While the server or Vite is down, page loads on either port get a static status page with elapsed and typical restart time, which reloads when the server is back.
 
-To run a single production server instead, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317.
+To run a single production server instead, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317. To keep it running in the background, see [Running as a service](#running-as-a-service).
 
 Then:
 
@@ -434,8 +434,10 @@ The browser takes UI changes from a merge as hot updates, so the board and an op
 By default the server binds to 127.0.0.1 and only accepts local `Host` and `Origin` headers. To run it on an always-on box, put it on a private network such as Tailscale (Bakery has no login of its own):
 
 ```sh
-BAKERY_HOST=0.0.0.0 BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net BAKERY_SERVE_UI=1 npm start
+bakery-cli service install --host <tailnet IP>
 ```
+
+Then add `BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net` to `~/.config/bakery/bakery.env` and run `bakery-cli service restart`.
 
 `BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=mochi BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Like the desktop and iOS apps, an address without a scheme tries HTTPS, then HTTP, and one without a port uses 4317. Repository paths and merges are on the server's disk.
 
@@ -451,9 +453,21 @@ Then open `https://<machine>.<tailnet>.ts.net`. Add that name to `BAKERY_ALLOWED
 
 **Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u bakery`.
 
+### Running as a service
+
+`bakery-cli service install` runs this checkout in the background: a systemd user service on Linux, or a launchd agent on macOS. It starts at login, restarts after a crash, and checks for updates every 2 minutes. It builds the UI first if `dist/` is missing.
+
+- Settings go in `~/.config/bakery/bakery.env`, which install creates once with `BAKERY_SERVE_UI=1` and `BAKERY_HOST` (`--host`, default `127.0.0.1`) and never overwrites. Put feature switches here too, so the server and the update check both read them.
+- `bakery-cli service restart` applies a changed env file. It waits for active runs to finish, as an update does.
+- `status` and `logs` show the server's state and its last 200 log lines. `stop` and `uninstall` end active runs at once, so they need `--yes`. Uninstall keeps the env file and the data directory.
+- On Linux the service starts at login. To start it at boot and keep it running after logout, run `loginctl enable-linger`; install says so when it is off.
+- The unit records where node, npm, `pi`, `wt`, `gh` and git are. After moving any of them, run install again. `bakery-cli doctor` fails while the recorded npm is missing.
+- Install rewrites `~/.config/systemd/user/bakery.service`. Keep your own changes in drop-ins under `bakery.service.d/`.
+- Windows has no `service` command yet. Start `npm start` from Task Scheduler at logon instead.
+
 ### Keeping a hosted server up to date
 
-`npm start` has no file watcher. `deploy/bakery-update.service` and `deploy/bakery-update.timer` run `scripts/update.sh` every 2 minutes, which only fetches `origin/main`. Copy them to `~/.config/systemd/user/`, adjust `WorkingDirectory`, then `systemctl --user enable --now bakery-update.timer`.
+`npm start` has no file watcher. The service's update check runs `scripts/update.sh` every 2 minutes, which only fetches `origin/main`.
 
 When the fetch brings new commits, a notice in the bottom-left corner says how many and opens their subjects as a changelog. **Update and restart** runs `scripts/update.sh install` (fast-forward `main`, `npm install`, build the UI into `dist-next`). The server then refuses new runs, pauses pickup, waits for active runs and the agent review to finish, and exits. Until then it keeps serving the UI that matches its own API; the restarted server moves `dist-next` over `dist`. When every pending change is UI-only (under `src/`, `public/` or `index.html`, outside the modules the server imports, plus tests and docs), the server installs them by itself within 30 seconds of the fetch (the button reads **Update interface** if you get there first): it swaps the new build over `dist` at once without draining or restarting, keeps the old build's chunks so open pages still work, and open pages offer **Reload**. Updates that need a restart install only when you ask. Run it under a service manager that restarts it, such as a systemd user unit with `Restart=always`. A server under `npm run dev` never updates itself.
 

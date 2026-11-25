@@ -23,8 +23,21 @@ function gitCommand(repo: string, args: string[], index?: string, raw = false, m
   }
 }
 function git(repo: string, ...args: string[]): string { return gitCommand(repo, args); }
-/** What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies. */
-/** `work` names the reviewed run and its tree. Unlike `fingerprint`, it ignores where local main is. */
+/**
+ * The tree auto-review compares before and after the reviewer runs. `git add -A` already skips untracked files Git
+ * ignores; this also drops tracked files that match an ignore rule (a committed `dist/`), since a reviewer's build
+ * rewrites them. The full tree, and so the fingerprint and what Approve commits, still includes them. Changes `index`.
+ */
+function workTree(worktree: string, index: string, tree: string): string {
+  const ignored = gitCommand(worktree, ["ls-files", "-z", "--cached", "--ignored", "--exclude-standard"], index, true).split("\0").filter(Boolean);
+  if (!ignored.length) return tree;
+  for (let i = 0; i < ignored.length; i += 500) gitCommand(worktree, ["update-index", "--force-remove", "--", ...ignored.slice(i, i + 500)], index);
+  return gitCommand(worktree, ["write-tree"], index);
+}
+/**
+ * What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies.
+ * `work` names the reviewed run and its tree without files Git ignores. Unlike `fingerprint`, it ignores where local main is.
+ */
 export type ReviewSummary = { fingerprint: string; work: string; paths: string[]; patchChars: number | null; unsupported: boolean };
 export type ReviewDiff = { fingerprint: string; files: { path: string; patch: string }[] };
 export class IntegrationConflictError extends Error {
@@ -268,7 +281,7 @@ export class Integration {
     return { repo, worktree, run };
   }
 
-  private snapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
+  private snapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }, withWork = false) {
     const { repo, worktree, run } = this.location(card);
     // The fingerprint keys on the merge base, not the branch tip: committing the reviewed work (as opening a PR
     // does) moves HEAD without changing the tree, and must not mark the loaded diff stale.
@@ -291,7 +304,7 @@ export class Integration {
       gitCommand(worktree, ["add", "-A"], index);
       const tree = gitCommand(worktree, ["write-tree"], index);
       const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, base, tree })).digest("hex");
-      const work = `${run.id}:${tree}`;
+      const work = withWork ? `${run.id}:${workTree(worktree, index, tree)}` : "";
       if (!includeFiles && !summary) return { fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths: [] as string[], patchChars: null as number | null, unsupported: false };
       const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
       if (summary) {
@@ -342,13 +355,21 @@ export class Integration {
 
   /** The fingerprint and the work it covers (run and tree), from one snapshot. */
   reviewState(card: Card): { fingerprint: string; work: string } {
-    const { fingerprint, work } = this.snapshot(card, false);
+    const { fingerprint, work } = this.snapshot(card, false, undefined, true);
     return { fingerprint, work };
+  }
+
+  /** The paths that differ between two `work` values, to say what changed. Empty when the run changed or Git cannot tell. */
+  workChanges(card: Card, before: string, after: string): string[] {
+    const [run, from] = before.split(":"), [nextRun, to] = after.split(":");
+    if (run !== nextRun || !from || !to) return [];
+    try { return gitCommand(this.location(card).worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", from, to], undefined, true).split("\0").filter(Boolean); }
+    catch { return []; }
   }
 
   /** Changed paths, and the patch size when `measureChars`, without the diff viewer's 200-file and 2 MB caps. */
   reviewSummary(card: Card, measureChars: boolean): ReviewSummary {
-    const { fingerprint, work, paths, patchChars, unsupported } = this.snapshot(card, false, { measureChars });
+    const { fingerprint, work, paths, patchChars, unsupported } = this.snapshot(card, false, { measureChars }, true);
     return { fingerprint, work, paths, patchChars, unsupported };
   }
 

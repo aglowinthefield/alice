@@ -127,6 +127,7 @@ import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
 import { UpdateNotice } from "./update-notice.js";
 import { ConfirmHost, confirmAction } from "./confirm.js";
+import { ReadyCheckHost, checkBeforeReady } from "./ready-check.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1474,6 +1475,12 @@ export function App() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
+  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead.
+  const readyAfterCheck = async (moving: Card[]) => {
+    const check = await checkBeforeReady(moving);
+    if (check.choice === "edit") setEditing(check.card);
+    return check.choice === "ready";
+  };
   const moveSelected = async () => {
     if (
       !boardId ||
@@ -1484,6 +1491,7 @@ export function App() {
     const to = bulkTarget as Status;
     const path = `/boards/${boardId}/cards`;
     const ids = selectedCards.map((item) => item.id);
+    if (to === "ready" && !(await readyAfterCheck(selectedCards))) return;
     if (
       to === "running" &&
       settings?.confirmRunStart &&
@@ -1513,6 +1521,7 @@ export function App() {
   const moveCard = async (card: Card, to: Status, along: Card[] = []) => {
     if (!boardId || !dropTargets(card).includes(to)) return;
     const path = `/boards/${boardId}/cards`;
+    if (to === "ready" && !(await readyAfterCheck([card, ...along]))) return;
     if (to === "ready" && along.length > 0) {
       const total = along.length + 1;
       if (
@@ -1594,6 +1603,7 @@ export function App() {
       />
       <div ref={pageFadeVeil} aria-hidden="true" className="page-fade-veil" />
       <ConfirmHost />
+      <ReadyCheckHost />
       {sidebarHidden && (
         <button
           aria-label="Show sidebar"
@@ -2252,7 +2262,8 @@ export function App() {
               }
             >
               Last 24h: {formatCost(currentBoard.cost24h ?? 0)}
-              {typeof currentBoard.pickupCostBudget === "number" &&
+              {currentBoard.limitsEnabled &&
+                typeof currentBoard.pickupCostBudget === "number" &&
                 ` of ${formatCost(currentBoard.pickupCostBudget)} budget`}
             </span>
           )}
@@ -2261,6 +2272,7 @@ export function App() {
           </span>
         </div>
         {currentBoard?.autoPickupEnabled &&
+          currentBoard.limitsEnabled &&
           currentBoard.pickupDailyLimit > 0 &&
           currentBoard.autoPickupStarts >= currentBoard.pickupDailyLimit && (
             <div
@@ -3460,14 +3472,243 @@ export function App() {
           )}
           {pickupBoard && (
             <div className="mt-8 border-t border-border pt-5 text-sm">
+              <div className="font-medium">Limits</div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {pickupBoard.limitsEnabled
+                  ? "On: the daily start limit, the daily cost budget and the agent reviewer's diff caps below apply."
+                  : "Off: no daily start limit, cost budget or review diff caps. Concurrency and loop guards (send-back, CI-fix and retry caps) always apply."}
+              </p>
+              <Button
+                className="mt-3"
+                variant={pickupBoard.limitsEnabled ? "outline" : "default"}
+                disabled={busy}
+                onClick={() =>
+                  void action(async () => {
+                    updateBoard(
+                      await api<Board>(`/boards/${pickupBoard.id}/settings`, {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          limitsEnabled: !pickupBoard.limitsEnabled,
+                        }),
+                      }),
+                    );
+                  })
+                }
+              >
+                {pickupBoard.limitsEnabled
+                  ? "Turn limits off"
+                  : "Turn limits on"}
+              </Button>
+              {pickupBoard.limitsEnabled && (
+                <>
+                  <label className="mt-3 flex items-center gap-2 text-xs">
+                    Automatic starts per 24 hours{" "}
+                    <select
+                      aria-label="Auto pickup daily start limit"
+                      value={pickupBoard.pickupDailyLimit}
+                      disabled={busy}
+                      onChange={async (event) => {
+                        const limit = Number(event.target.value);
+                        if (
+                          (limit === 0 ||
+                            limit > pickupBoard.pickupDailyLimit) &&
+                          pickupBoard.autoPickupEnabled &&
+                          !(await confirmAction(
+                            `Raise automatic starts to ${limit === 0 ? "no limit" : `${limit} per 24 hours`} for ${pickupBoard.repo}? Ready cards may start immediately and spend model tokens.`,
+                          ))
+                        )
+                          return;
+                        void action(async () => {
+                          const updated = await api<Board>(
+                            `/boards/${pickupBoard.id}/settings`,
+                            {
+                              method: "PATCH",
+                              body: JSON.stringify({
+                                autoPickupEnabled:
+                                  pickupBoard.autoPickupEnabled,
+                                pickupConcurrency:
+                                  pickupBoard.pickupConcurrency,
+                                pickupDailyLimit: limit,
+                              }),
+                            },
+                          );
+                          updateBoard(updated);
+                        });
+                      }}
+                      className="rounded-md border border-border bg-background px-2 py-1"
+                    >
+                      <option value={0}>No limit</option>
+                      {Array.from({ length: 99 }, (_, index) => index + 1).map(
+                        (limit) => (
+                          <option key={limit} value={limit}>
+                            {limit}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </label>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {pickupBoard.pickupDailyLimit === 0
+                      ? `${pickupBoard.autoPickupStarts} starts in the rolling day (no limit).`
+                      : `${pickupBoard.autoPickupStarts} / ${pickupBoard.pickupDailyLimit} starts in the rolling day.`}
+                    {pickupBoard.autoPickupNextAt &&
+                      ` Next slot around ${date(pickupBoard.autoPickupNextAt)}.`}
+                  </p>
+                  <form
+                    className="mt-3 flex flex-wrap items-center gap-2 text-xs"
+                    onSubmit={(event) => saveCostBudget(event, pickupBoard)}
+                  >
+                    <label className="flex items-center gap-2">
+                      Daily cost budget (USD){" "}
+                      <input
+                        aria-label="Auto pickup daily cost budget"
+                        inputMode="decimal"
+                        placeholder="Off"
+                        value={budgetDraft}
+                        disabled={busy}
+                        onChange={(event) => setBudgetDraft(event.target.value)}
+                        className="w-24 rounded-md border border-border bg-background px-2 py-1"
+                      />
+                    </label>
+                    <Button
+                      type="submit"
+                      variant="outline"
+                      size="sm"
+                      disabled={
+                        busy ||
+                        budgetDraft.trim() ===
+                          (savedBudget === null ? "" : String(savedBudget))
+                      }
+                    >
+                      Save budget
+                    </Button>
+                  </form>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {formatCost(pickupBoard.cost24h ?? 0)} spent in the last 24
+                    hours
+                    {typeof pickupBoard.pickupCostBudget === "number"
+                      ? ` of ${formatCost(pickupBoard.pickupCostBudget)}.`
+                      : "."}{" "}
+                    Leave blank for no budget. At the budget, automatic pickup
+                    waits; running work and manual starts continue.
+                  </p>
+                  {pickupBoard.autoPickupEnabled &&
+                    pickupBoard.pickupDailyLimit > 0 &&
+                    pickupBoard.autoPickupStarts >=
+                      pickupBoard.pickupDailyLimit && (
+                      <Button
+                        className="mt-2"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => resetPickupLimit(pickupBoard)}
+                      >
+                        Reset start limit
+                      </Button>
+                    )}
+                  <label className="mt-3 flex items-center gap-2 text-xs">
+                    Largest diff the agent reviewer takes (files)
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      aria-label="Largest diff the agent reviewer takes (files)"
+                      key={`autoReviewMaxFiles-${pickupBoard.id}-${pickupBoard.autoReviewMaxFiles ?? 40}`}
+                      defaultValue={pickupBoard.autoReviewMaxFiles ?? 40}
+                      disabled={busy}
+                      onBlur={(event) => {
+                        const value = Number(event.target.value);
+                        if (
+                          event.target.value.trim() === "" ||
+                          !Number.isSafeInteger(value) ||
+                          value < 0 ||
+                          value === (pickupBoard.autoReviewMaxFiles ?? 40)
+                        ) {
+                          event.target.value = String(
+                            pickupBoard.autoReviewMaxFiles ?? 40,
+                          );
+                          return;
+                        }
+                        void action(async () => {
+                          updateBoard(
+                            await api<Board>(
+                              `/boards/${pickupBoard.id}/settings`,
+                              {
+                                method: "PATCH",
+                                body: JSON.stringify({
+                                  autoReviewMaxFiles: value,
+                                }),
+                              },
+                            ),
+                          );
+                        });
+                      }}
+                      className="w-28 rounded-md border border-border bg-background px-2 py-1"
+                    />
+                    <span className="text-muted-foreground">
+                      Changed files; 0 means no limit. Larger diffs go to a
+                      person.
+                    </span>
+                  </label>
+                  <label className="mt-3 flex items-center gap-2 text-xs">
+                    Largest diff the agent reviewer takes (characters)
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      aria-label="Largest diff the agent reviewer takes (characters)"
+                      key={`autoReviewMaxPatchChars-${pickupBoard.id}-${pickupBoard.autoReviewMaxPatchChars ?? 100000}`}
+                      defaultValue={
+                        pickupBoard.autoReviewMaxPatchChars ?? 100000
+                      }
+                      disabled={busy}
+                      onBlur={(event) => {
+                        const value = Number(event.target.value);
+                        if (
+                          event.target.value.trim() === "" ||
+                          !Number.isSafeInteger(value) ||
+                          value < 0 ||
+                          value ===
+                            (pickupBoard.autoReviewMaxPatchChars ?? 100000)
+                        ) {
+                          event.target.value = String(
+                            pickupBoard.autoReviewMaxPatchChars ?? 100000,
+                          );
+                          return;
+                        }
+                        void action(async () => {
+                          updateBoard(
+                            await api<Board>(
+                              `/boards/${pickupBoard.id}/settings`,
+                              {
+                                method: "PATCH",
+                                body: JSON.stringify({
+                                  autoReviewMaxPatchChars: value,
+                                }),
+                              },
+                            ),
+                          );
+                        });
+                      }}
+                      className="w-28 rounded-md border border-border bg-background px-2 py-1"
+                    />
+                    <span className="text-muted-foreground">
+                      Patch characters; 0 means no limit. Larger diffs go to a
+                      person.
+                    </span>
+                  </label>
+                </>
+              )}
+            </div>
+          )}
+          {pickupBoard && (
+            <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Auto pickup</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Automatically start Ready cards in creation order, up to the
-                concurrency limit including manual runs. The configurable
-                rolling start limit and the optional daily cost budget protect
-                against unbounded paid runs. A failed automatic run or
-                interrupted run pauses pickup. Starting Pi may spend model
-                tokens. Turn off pickup to stop new starts; existing runs
+                Automatically start Ready cards in priority order, up to the
+                concurrency limit including manual runs. A failed card waits in
+                Failed; an interrupted run pauses pickup. Starting Pi may spend
+                model tokens. Turn on Limits above to cap daily starts and
+                spend. Turn off pickup to stop new starts; existing runs
                 continue.
               </p>
               <label className="mt-4 flex items-center gap-2 text-xs">
@@ -3501,107 +3742,6 @@ export function App() {
                   ))}
                 </select>
               </label>
-              <label className="mt-3 flex items-center gap-2 text-xs">
-                Automatic starts per 24 hours{" "}
-                <select
-                  aria-label="Auto pickup daily start limit"
-                  value={pickupBoard.pickupDailyLimit}
-                  disabled={busy}
-                  onChange={async (event) => {
-                    const limit = Number(event.target.value);
-                    if (
-                      (limit === 0 || limit > pickupBoard.pickupDailyLimit) &&
-                      pickupBoard.autoPickupEnabled &&
-                      !(await confirmAction(
-                        `Raise automatic starts to ${limit === 0 ? "no limit" : `${limit} per 24 hours`} for ${pickupBoard.repo}? Ready cards may start immediately and spend model tokens.`,
-                      ))
-                    )
-                      return;
-                    void action(async () => {
-                      const updated = await api<Board>(
-                        `/boards/${pickupBoard.id}/settings`,
-                        {
-                          method: "PATCH",
-                          body: JSON.stringify({
-                            autoPickupEnabled: pickupBoard.autoPickupEnabled,
-                            pickupConcurrency: pickupBoard.pickupConcurrency,
-                            pickupDailyLimit: limit,
-                          }),
-                        },
-                      );
-                      updateBoard(updated);
-                    });
-                  }}
-                  className="rounded-md border border-border bg-background px-2 py-1"
-                >
-                  <option value={0}>No limit</option>
-                  {Array.from({ length: 99 }, (_, index) => index + 1).map(
-                    (limit) => (
-                      <option key={limit} value={limit}>
-                        {limit}
-                      </option>
-                    ),
-                  )}
-                </select>
-              </label>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {pickupBoard.pickupDailyLimit === 0
-                  ? `${pickupBoard.autoPickupStarts} starts in the rolling day (no limit).`
-                  : `${pickupBoard.autoPickupStarts} / ${pickupBoard.pickupDailyLimit} starts in the rolling day.`}
-                {pickupBoard.autoPickupNextAt &&
-                  ` Next slot around ${date(pickupBoard.autoPickupNextAt)}.`}
-              </p>
-              <form
-                className="mt-3 flex flex-wrap items-center gap-2 text-xs"
-                onSubmit={(event) => saveCostBudget(event, pickupBoard)}
-              >
-                <label className="flex items-center gap-2">
-                  Daily cost budget (USD){" "}
-                  <input
-                    aria-label="Auto pickup daily cost budget"
-                    inputMode="decimal"
-                    placeholder="Off"
-                    value={budgetDraft}
-                    disabled={busy}
-                    onChange={(event) => setBudgetDraft(event.target.value)}
-                    className="w-24 rounded-md border border-border bg-background px-2 py-1"
-                  />
-                </label>
-                <Button
-                  type="submit"
-                  variant="outline"
-                  size="sm"
-                  disabled={
-                    busy ||
-                    budgetDraft.trim() ===
-                      (savedBudget === null ? "" : String(savedBudget))
-                  }
-                >
-                  Save budget
-                </Button>
-              </form>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {formatCost(pickupBoard.cost24h ?? 0)} spent in the last 24
-                hours
-                {typeof pickupBoard.pickupCostBudget === "number"
-                  ? ` of ${formatCost(pickupBoard.pickupCostBudget)}.`
-                  : "."}{" "}
-                Leave blank for no budget. At the budget, automatic pickup
-                waits; running work and manual starts continue.
-              </p>
-              {pickupBoard.autoPickupEnabled &&
-                pickupBoard.pickupDailyLimit > 0 &&
-                pickupBoard.autoPickupStarts >=
-                  pickupBoard.pickupDailyLimit && (
-                  <Button
-                    className="mt-2"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => resetPickupLimit(pickupBoard)}
-                  >
-                    Reset start limit
-                  </Button>
-                )}
               <Button
                 className="mt-3"
                 variant={pickupBoard.autoPickupEnabled ? "outline" : "default"}
@@ -3611,7 +3751,7 @@ export function App() {
                   if (
                     enable &&
                     !(await confirmAction(
-                      `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
+                      `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${!pickupBoard.limitsEnabled ? "with limits off (no daily start limit or budget)" : pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
                     ))
                   )
                     return;
@@ -3682,91 +3822,6 @@ export function App() {
                     </option>
                   ))}
                 </select>
-              </label>
-              <label className="mt-3 flex items-center gap-2 text-xs">
-                Largest diff the agent reviewer takes (files)
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  aria-label="Largest diff the agent reviewer takes (files)"
-                  key={`autoReviewMaxFiles-${editingBoard.id}-${editingBoard.autoReviewMaxFiles ?? 40}`}
-                  defaultValue={editingBoard.autoReviewMaxFiles ?? 40}
-                  disabled={busy}
-                  onBlur={(event) => {
-                    const value = Number(event.target.value);
-                    if (
-                      event.target.value.trim() === "" ||
-                      !Number.isSafeInteger(value) ||
-                      value < 0 ||
-                      value === (editingBoard.autoReviewMaxFiles ?? 40)
-                    ) {
-                      event.target.value = String(
-                        editingBoard.autoReviewMaxFiles ?? 40,
-                      );
-                      return;
-                    }
-                    void action(async () => {
-                      updateBoard(
-                        await api<Board>(
-                          `/boards/${editingBoard.id}/settings`,
-                          {
-                            method: "PATCH",
-                            body: JSON.stringify({ autoReviewMaxFiles: value }),
-                          },
-                        ),
-                      );
-                    });
-                  }}
-                  className="w-28 rounded-md border border-border bg-background px-2 py-1"
-                />
-                <span className="text-muted-foreground">
-                  Changed files; 0 means no limit. Larger diffs go to a person.
-                </span>
-              </label>
-              <label className="mt-3 flex items-center gap-2 text-xs">
-                Largest diff the agent reviewer takes (characters)
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  aria-label="Largest diff the agent reviewer takes (characters)"
-                  key={`autoReviewMaxPatchChars-${editingBoard.id}-${editingBoard.autoReviewMaxPatchChars ?? 100000}`}
-                  defaultValue={editingBoard.autoReviewMaxPatchChars ?? 100000}
-                  disabled={busy}
-                  onBlur={(event) => {
-                    const value = Number(event.target.value);
-                    if (
-                      event.target.value.trim() === "" ||
-                      !Number.isSafeInteger(value) ||
-                      value < 0 ||
-                      value === (editingBoard.autoReviewMaxPatchChars ?? 100000)
-                    ) {
-                      event.target.value = String(
-                        editingBoard.autoReviewMaxPatchChars ?? 100000,
-                      );
-                      return;
-                    }
-                    void action(async () => {
-                      updateBoard(
-                        await api<Board>(
-                          `/boards/${editingBoard.id}/settings`,
-                          {
-                            method: "PATCH",
-                            body: JSON.stringify({
-                              autoReviewMaxPatchChars: value,
-                            }),
-                          },
-                        ),
-                      );
-                    });
-                  }}
-                  className="w-28 rounded-md border border-border bg-background px-2 py-1"
-                />
-                <span className="text-muted-foreground">
-                  Patch characters; 0 means no limit. Larger diffs go to a
-                  person.
-                </span>
               </label>
               <Button
                 className="mt-3"

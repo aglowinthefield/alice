@@ -139,6 +139,24 @@ test("the global tick reconciles a failed card merged outside Bakery without ena
   } finally { item.close(); }
 });
 
+test("reconciling externally merged cards runs Git without blocking the server, and overlapping calls share one pass", async () => {
+  const item = fixture();
+  try {
+    const { card, worktree } = item.reviewedCard();
+    git(worktree, "add", "README.md");
+    git(worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "external card fix");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "--no-ff", "--no-edit", git(worktree, "rev-parse", "HEAD"));
+    const integration = new Integration(item.board, item.data);
+    let served = false;
+    setImmediate(() => { served = true; });
+    const first = integration.reconcileExternallyMerged(), second = integration.reconcileExternallyMerged();
+    assert.equal(first, second, "a call while a pass runs joins it");
+    await first;
+    assert.equal(served, true, "other work ran while Git did");
+    assert.equal(item.board.wasIntegrated(card.id), true);
+  } finally { item.close(); }
+});
+
 test("the global tick ignores ancestry without integration, discarded merges, pending approval, and dirty branches", async () => {
   const item = fixture();
   try {
@@ -513,9 +531,26 @@ test("queued agent reviews show their place, and a board runs as many at once as
   } finally { item.close(); }
 });
 
+test("agent reviews take a machine-wide agent slot and wait for one", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"Check manually"}');
+  try {
+    item.board.updateSettings({ maxActiveAgents: 1 });
+    item.board.setAutoReview(item.repoBoard.id, true);
+    item.board.setAutoReviewConcurrency(item.repoBoard.id, 2);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const first = item.reviewedCard(), second = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.listAutoReviewJobs(first.card.id).length, 1);
+    assert.equal(item.board.listAutoReviewJobs(second.card.id).length, 0, "the second review waits for the slot");
+    await item.auto.tick();
+    assert.equal(item.board.listAutoReviewJobs(second.card.id).length, 1);
+  } finally { item.close(); }
+});
+
 test("a board's diff limits send big diffs to a person, and 0 turns a limit off", async () => {
   const item = fixture();
   try {
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxFiles, 40);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxPatchChars, 100000);
     assert.throws(() => item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxFiles: -1 }));

@@ -1,6 +1,6 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { command } from "./platform.js";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
 import { piModelArgs, type AgentPhase } from "./agent-models.js";
@@ -9,6 +9,8 @@ import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
 import { describeToolCall } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
+import { commitIdentityArgs } from "./git-identity.js";
+import { loopGuards } from "./repo-limits.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -56,7 +58,12 @@ export type LiveActivity = { tool: string; turn: number; since: string };
 const MAX_PI_EVENT_BYTES = 500_000_000;
 
 /** Hard limit on one agent run. The separate Worktrunk hook timeout is unaffected. */
-const runTimeoutMinutes = 60;
+const runTimeoutMinutes = loopGuards.runTimeoutMinutes;
+/** How long before the run timeout Bakery asks Pi to stop and report, so a killed run still leaves a report. */
+const wrapUpLeadMinutes = 10;
+/** The Pi extension that steers a running session with Bakery's wrap-up message (JSON mode reads no stdin). */
+const wrapUpExtension = join(import.meta.dirname, "..", "scripts", "pi-wrap-up.mjs");
+export const WRAP_UP_MESSAGE = `Bakery: this run is stopped in ${wrapUpLeadMinutes} minutes when it hits its ${runTimeoutMinutes}-minute limit, and anything unreported then is lost. Stop starting new work and commit nothing. Write your final report now: what is done, what remains, and what the next attempt should do first. Attach any screenshots, logs or other evidence as card attachments as your instructions describe, and name them in the report.`;
 
 export class Worker {
   private active = new Map<string, ChildProcess>();
@@ -65,13 +72,16 @@ export class Worker {
   private terminationReasons = new Map<string, string>();
   private draining = false;
   private idleWaiters: (() => void)[] = [];
+  /** Run limits in milliseconds; tests shorten them. */
+  timing = { runTimeoutMs: runTimeoutMinutes * 60_000, wrapUpLeadMs: wrapUpLeadMinutes * 60_000 };
   /** `wtBin` enables Worktrunk hooks for new card worktrees; omit it to skip hooks entirely. */
   constructor(private board: Board, private dataDir: string, private piBin = "pi", private wtBin?: string, private attach?: { cli: string; env: NodeJS.ProcessEnv }) {}
   private terminate(id: string, child: ChildProcess, reason: string) {
     if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
   /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
-  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run): Run {
+  /** `byPerson`: the operator asked for this run, so the machine's agent limit does not refuse it. */
+  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run, byPerson = false): Run {
     if (this.draining) throw new Error("Bakery is waiting for active runs to finish before restarting to load code changes; start this run after the restart");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
@@ -99,7 +109,7 @@ export class Worker {
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     // A session the provider rejected replays the same history every time; only an explicit recovery gets past it.
     if (!recoverFrom && latestRun?.status === "failed" && latestRun.failureKind === "invalid-history") throw new PoisonedSessionError(card.id, latestRun.id, `run ${latestRun.attempt}`);
-    const run = this.board.claim(card.id, startedBy, why, false, recoverFrom?.id ?? null);
+    const run = this.board.claim(card.id, startedBy, why, false, recoverFrom?.id ?? null, byPerson);
     const prMode = this.board.integrationFor(card.repo) === "github-pr";
     let created = false;
     let mainMerged = "";
@@ -227,7 +237,7 @@ export class Worker {
     const tip = git(worktree, "rev-parse", "origin/main");
     this.board.append(run.id, "Merging origin/main into the card branch so the fix run sees what CI tested…\n");
     try {
-      git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-edit", "origin/main");
+      git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "origin/main");
     } catch {
       let files: string[] = [];
       try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean); } catch { /* Keep going without the list. */ }
@@ -287,9 +297,11 @@ export class Worker {
   }
   private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff): Run {
     let child: ChildProcess;
+    // The wrap-up extension watches this file; Bakery writes it once, shortly before the run timeout.
+    const wrapUpFile = join(this.dataDir, "wrap-up", run.id);
     try {
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase));
-      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env } });
+      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
@@ -379,10 +391,22 @@ export class Worker {
       pendingBytes = data.length - start;
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
-    const timer = setTimeout(() => this.terminate(run.id, child, `${runTimeoutMinutes}-minute run timeout`), runTimeoutMinutes * 60 * 1000);
-    child.on("error", (error) => { this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
+    const { runTimeoutMs, wrapUpLeadMs } = this.timing;
+    const timeoutLabel = `${Math.round(runTimeoutMs / 60_000)}-minute run timeout`;
+    const timer = setTimeout(() => this.terminate(run.id, child, timeoutLabel), runTimeoutMs);
+    // Steer the run to write its report before the timeout kills it; a SIGTERM loses the report and the next attempt starts blind.
+    const wrapUpTimer = setTimeout(() => {
+      try {
+        mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
+        writeFileSync(`${wrapUpFile}.tmp`, WRAP_UP_MESSAGE);
+        renameSync(`${wrapUpFile}.tmp`, wrapUpFile);
+        this.board.append(run.id, `\nBakery asked Pi to stop starting new work and write its report: the ${timeoutLabel} is ${Math.round(wrapUpLeadMs / 60_000)} min away.\n`);
+      } catch (error) { console.error(`Could not ask run ${run.id} to wrap up:`, error); }
+    }, Math.max(0, runTimeoutMs - wrapUpLeadMs));
+    const cleanUpWrapUp = () => { for (const path of [wrapUpFile, `${wrapUpFile}.tmp`, `${wrapUpFile}.delivered`]) rmSync(path, { force: true }); };
+    child.on("error", (error) => { clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
-      clearTimeout(timer); this.active.delete(run.id); this.live.delete(run.id);
+      clearTimeout(timer); clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.active.delete(run.id); this.live.delete(run.id);
       if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
@@ -435,7 +459,7 @@ export class Worker {
     const failed = this.board.listRuns(cardId)[0];
     if (card.status !== "failed" || failed?.status !== "failed" || failed.failureKind !== "invalid-history")
       throw new Error("Only a failed card whose latest run was rejected for an invalid message history can be recovered in a fresh session");
-    const run = this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed);
+    const run = this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed, startedBy === "manual");
     this.board.append(run.id, `Fresh-session recovery of attempt ${failed.attempt}, whose session ${failed.sessionId} the provider rejected. That session and its log are kept as evidence.\n`);
     return this.board.getRun(run.id)!;
   }

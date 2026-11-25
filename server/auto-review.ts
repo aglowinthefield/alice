@@ -5,6 +5,7 @@ import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
 import { Integration } from "./integration.js";
 import { attachmentPath } from "./attachments.js";
+import { atReviewCapacity, loopGuards, needsPatchSize, reviewDiffRefusal } from "./repo-limits.js";
 
 // The reviewer is a full Pi agent in the card worktree: it can read code, run builds and tests, and use skills and
 // context files. It is told not to change anything, and the fingerprint checks after review fail closed if it does.
@@ -12,7 +13,7 @@ import { attachmentPath } from "./attachments.js";
 export type RequestedChange = { path: string; line?: number; comment: string };
 export type ReviewerVerdict = { verdict: "approve" | "needs_human" | "request_changes"; reason: string; changes?: RequestedChange[] };
 /** A card goes back to its implementer at most this many times; after that a person decides. */
-export const maxReviewerSendBacks = 2;
+export const maxReviewerSendBacks = loopGuards.reviewerSendBacks;
 
 /**
  * Tells the reviewer which files changed and how to read the diff itself. The patch is not in the prompt: the reviewer
@@ -148,11 +149,15 @@ export class AutoReview {
   async tick(): Promise<void> {
     if (this.draining) return;
     // This is the server's unconditional periodic tick, not an auto-review opt-in.
-    this.integration.reconcileExternallyMerged();
-    const started: Promise<void>[] = [];
+    // Async Git: reviews start meanwhile, and the tick resolves once both are done.
+    const reconciling = this.integration.reconcileExternallyMerged();
+    const started: Promise<void>[] = [reconciling];
     for (const candidate of this.board.listAutoReviewCandidates()) {
       const running = [...this.activeReviews.values()].filter(item => item.repo === candidate.card.repo).length;
-      if (running >= candidate.board.autoReviewConcurrency) continue;
+      if (atReviewCapacity(candidate.board, running)) continue;
+      // A review runs the repository's checks like a card run, so it takes a machine-wide agent slot. The rest wait for
+      // a later tick. `process` claims the job before its first await, so the count below includes it next time round.
+      if (this.board.atMachineCapacity()) break;
       this.activeReviews.set(candidate.run.id, { cardId: candidate.card.id, repo: candidate.card.repo });
       started.push(this.process(candidate.card, candidate.run, candidate.board).finally(() => this.activeReviews.delete(candidate.run.id)));
     }
@@ -171,12 +176,12 @@ export class AutoReview {
       fingerprint = now.fingerprint;
     };
     try {
-      const diff = this.integration.reviewSummary(card, repoBoard.autoReviewMaxPatchChars > 0);
+      const diff = this.integration.reviewSummary(card, needsPatchSize(repoBoard));
       fingerprint = diff.fingerprint;
       work = diff.work;
       if (!diff.paths.length) throw new Error("Nothing changed on this card, so there is nothing to review");
-      if (repoBoard.autoReviewMaxFiles > 0 && diff.paths.length > repoBoard.autoReviewMaxFiles) throw new Error(`Diff has ${diff.paths.length} changed files, over this board's auto-review limit of ${repoBoard.autoReviewMaxFiles}; review it yourself, or raise the limit in the board settings`);
-      if (repoBoard.autoReviewMaxPatchChars > 0 && diff.patchChars! > repoBoard.autoReviewMaxPatchChars) throw new Error(`Diff is ${Number.isFinite(diff.patchChars) ? `${diff.patchChars} characters` : "very large"}, over this board's auto-review limit of ${repoBoard.autoReviewMaxPatchChars}; review it yourself, or raise the limit in the board settings`);
+      const tooBig = reviewDiffRefusal(repoBoard, { files: diff.paths.length, patchChars: diff.patchChars });
+      if (tooBig) throw new Error(tooBig);
       if (diff.unsupported) throw new Error("Binary, symlink, or submodule changes require human review");
       if (!run.worktree) throw new Error("Card worktree is missing");
       // A pull-request board never merges locally; Bakery pushes the approved work and GitHub's checks gate the merge.

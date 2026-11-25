@@ -1,5 +1,6 @@
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { featureOffMessage, type Feature } from "../src/features.js";
+import { readyFlags } from "../src/card-lint.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -164,6 +165,8 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
   card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
 // Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
 const features = board.features;
+/** The machine-wide agent limit in force and how many agents run now, for Settings and the CLI. */
+const agentSlots = () => { const { limit, active } = board.machineCapacity(); return { activeAgentsLimit: limit, activeAgents: active }; };
 /** Routes that belong to one optional feature; with it off they are refused before any handler runs. */
 const featureRoutes: [Feature, RegExp][] = [
   ["sentinels", /^\/api\/(boards\/[\w-]+\/sentinels|sentinels\/[\w-]+(\/(runs|run))?)$/],
@@ -295,7 +298,7 @@ const server = createServer(async (req, res) => {
         for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], ...agentSlots(), draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
       return;
     }
     if (path === "/api/push/key" && req.method === "GET") { send(res, 200, { publicKey: push.publicKey() }); return; }
@@ -312,7 +315,7 @@ const server = createServer(async (req, res) => {
       send(res, 200, { startedAt: logs.startedAt, entries: logs.since(after) }); return;
     }
     // telemetryAvailable is false without an endpoint, and then the UI hides the toggle.
-    if (path === "/api/settings" && req.method === "GET") { send(res, 200, { ...board.getSettings(), telemetryAvailable: telemetry.available }); return; }
+    if (path === "/api/settings" && req.method === "GET") { send(res, 200, { ...board.getSettings(), telemetryAvailable: telemetry.available, ...agentSlots() }); return; }
     // `bakery-cli doctor` runs in another process, so it reports its failed check names here. Unknown names are ignored.
     if (path === "/api/telemetry/doctor" && req.method === "POST") {
       const { checks } = await body(req);
@@ -321,7 +324,7 @@ const server = createServer(async (req, res) => {
     }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input) && !("telemetryEnabled" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input) && !("telemetryEnabled" in input) && !("maxActiveAgents" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
@@ -330,6 +333,7 @@ const server = createServer(async (req, res) => {
       if ("discordWebhookUrl" in input && (typeof input.discordWebhookUrl !== "string" || (input.discordWebhookUrl !== "" && !isDiscordWebhookUrl(input.discordWebhookUrl)))) throw new Error("discordWebhookUrl must be empty or a https://discord.com/api/webhooks/ URL");
       if ("showCardModels" in input && typeof input.showCardModels !== "boolean") throw new Error("showCardModels must be a boolean");
       if ("telemetryEnabled" in input && typeof input.telemetryEnabled !== "boolean") throw new Error("telemetryEnabled must be a boolean");
+      if ("maxActiveAgents" in input && !Number.isSafeInteger(input.maxActiveAgents)) throw new Error("maxActiveAgents must be an integer, 0 for automatic");
       // Turning it off forgets what was gathered, so turning it on again starts from zero.
       if (input.telemetryEnabled === false) telemetry.discard();
       if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs BAKERY_TELEMETRY_ENDPOINT to be set");
@@ -343,7 +347,8 @@ const server = createServer(async (req, res) => {
         showCardModels: "showCardModels" in input ? input.showCardModels as boolean : undefined,
         agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
         discordWebhookUrl: "discordWebhookUrl" in input ? input.discordWebhookUrl as string : undefined,
-      }), telemetryAvailable: telemetry.available }); return;
+        maxActiveAgents: "maxActiveAgents" in input ? input.maxActiveAgents as number : undefined,
+      }), telemetryAvailable: telemetry.available, ...agentSlots() }); return;
     }
     if (path === "/api/models" && req.method === "GET") { send(res, 200, await listModels()); return; }
     if (path === "/api/path-suggestions" && req.method === "GET") {
@@ -497,6 +502,10 @@ const server = createServer(async (req, res) => {
         const keys = Object.keys(input);
         if (keys.some(key => key !== "autoReviewMaxFiles" && key !== "autoReviewMaxPatchChars") || [input.autoReviewMaxFiles, input.autoReviewMaxPatchChars].some(value => value !== undefined && !Number.isSafeInteger(value))) throw new Error("Update autoReviewMaxFiles and autoReviewMaxPatchChars as integers (0 for no limit), separately from other board settings");
         send(res, 200, board.setAutoReviewDiffLimits(repoBoard.id, { maxFiles: input.autoReviewMaxFiles as number | undefined, maxPatchChars: input.autoReviewMaxPatchChars as number | undefined })); return;
+      }
+      if ("limitsEnabled" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.limitsEnabled !== "boolean") throw new Error("Update limitsEnabled as a boolean, separately from other board settings");
+        send(res, 200, board.setLimitsEnabled(repoBoard.id, input.limitsEnabled)); return;
       }
       if ("autoReviewConcurrency" in input) {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewConcurrency)) throw new Error("Update autoReviewConcurrency as an integer from 1 to 4, separately from other board settings");
@@ -696,7 +705,7 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "GET" && !action) { send(res, 200, record); return; }
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history|ready-check))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -727,6 +736,8 @@ const server = createServer(async (req, res) => {
           if (reviewedRun) board.recordChangedFiles(reviewedRun.id, reviewed.files.length);
           send(res, 200, reviewed); return;
         }
+        // What the UI shows before a Triage card moves to Ready, for the CLI to print. Advice only: /status never checks it.
+        if (req.method === "GET" && action === "ready-check") { send(res, 200, { flags: readyFlags(item) }); return; }
         if (req.method === "GET" && action === "dependencies") { send(res, 200, board.listDependencies(id)); return; }
         if (req.method === "POST" && action === "dependencies") {
           const { dependsOn } = await body(req);
@@ -772,7 +783,7 @@ const server = createServer(async (req, res) => {
           if (item.reviewWait === "github") board.noteCard(id, "Changes are requested, but the pushed pull request is waiting on GitHub, so no new attempt started. Run it again once the checks finish to send Pi your feedback.");
           else if (draining.on) board.queueStart(id);
           else {
-            try { worker.start(board.getCard(id)!); }
+            try { worker.start(board.getCard(id)!, "manual", "", undefined, true); }
             catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               board.noteCard(id, `Changes are requested, but Bakery could not start the new attempt: ${message}. Run it again to send Pi your feedback.`);
@@ -786,7 +797,7 @@ const server = createServer(async (req, res) => {
           if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
           // During a restart drain, remember the start and replay it once the new server is up.
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
-          send(res, 202, worker.start(item)); return;
+          send(res, 202, worker.start(item, "manual", "", undefined, true)); return;
         }
         if (req.method === "POST" && action === "recover") {
           // Same gates as /start, since a recovery is a paid run.
@@ -887,7 +898,7 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
   for (const cardId of board.takeQueuedStarts()) {
     const card = board.getCard(cardId);
     if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
-    try { worker.start(card, "manual", "from a start queued during the last restart"); }
+    try { worker.start(card, "manual", "from a start queued during the last restart", undefined, true); }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       board.noteCard(cardId, `A start queued during the last restart could not run: ${message}`);

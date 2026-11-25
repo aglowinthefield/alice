@@ -9,6 +9,7 @@ import { doctor, report } from "./doctor.mjs";
 import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
 import { c, columns, layout, paint, pretty } from "./cli-style.mjs";
 import { renderBoard } from "./cli-board.mjs";
+import { ACTIONS as SERVICE_ACTIONS, service } from "./service.mjs";
 import { openUrl, runTui } from "./cli-tui.mjs";
 import { formatVersion, readVersion } from "./version.mjs";
 
@@ -17,7 +18,7 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration", "host"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch" || arg === "--print") result[arg.slice(2)] = true;
@@ -203,7 +204,7 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { doctor: 0, open: 0, limits: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { service: 1, doctor: 0, open: 0, limits: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
   if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
@@ -229,7 +230,15 @@ async function main() {
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
   [...opts.after, ...opts.on].forEach(cardId);
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
-  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "purge-attachments")) throw new Error("--yes is only valid with ready, start, recover, pickup or purge-attachments");
+  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "purge-attachments" || command === "service")) throw new Error("--yes is only valid with ready, start, recover, pickup, purge-attachments or service");
+  if (opts.host !== undefined && !(command === "service" && args[0] === "install")) throw new Error("--host is only valid with service install");
+  if (command === "service") {
+    if (!SERVICE_ACTIONS.includes(args[0])) throw new Error(`Unknown service action: ${args[0]}. Use one of ${SERVICE_ACTIONS.join(", ")}.\n${usageLine(command)}`);
+    if (opts.board || opts.json) throw new Error("--board and --json are not valid with service");
+    // The server may not be running yet, so this never contacts it.
+    service(args[0], { host: opts.host, yes: opts.yes });
+    return;
+  }
   if (command === "purge-attachments" && !opts.yes) throw new Error("Purging deletes the attached files from disk and cannot be undone, even if the card is restored. Repeat with --yes to confirm.");
   if (command === "recover" && args.length !== 1) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "start" || command === "recover") {

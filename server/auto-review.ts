@@ -148,6 +148,12 @@ export class AutoReview {
    */
   async tick(): Promise<void> {
     if (this.draining) return;
+    // A card whose parent merged during its review is brought up to date first, so the review it gets next sees
+    // current main. Rare, and only checked when something waits.
+    if (this.board.listDeferredDependentUpdates().length) {
+      try { await this.integration.retryDeferredDependents(); }
+      catch (error) { console.error(`Could not retry dependent updates: ${String(error)}`); }
+    }
     // This is the server's unconditional periodic tick, not an auto-review opt-in.
     // Async Git: reviews start meanwhile, and the tick resolves once both are done.
     const reconciling = this.integration.reconcileExternallyMerged();

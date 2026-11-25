@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "../server/board.js";
 import { Integration } from "../server/integration.js";
+import { AutoReview } from "../server/auto-review.js";
 
 const commitArgs = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm"];
 function git(repo: string, ...args: string[]) {
@@ -13,6 +14,14 @@ function git(repo: string, ...args: string[]) {
 }
 /** `git status --porcelain` lines, untrimmed so " M" (unstaged) and "M " (staged) stay apart. */
 const status = (worktree: string) => execFileSync("git", ["-C", worktree, "status", "--porcelain"], { encoding: "utf8" }).split("\n").filter(Boolean).sort();
+
+async function waitFor(predicate: () => boolean) {
+  const end = Date.now() + 10_000;
+  while (!predicate()) {
+    if (Date.now() > end) throw new Error("Timed out");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
 
 /** A local board with a parent card and a card that depends on it, both in Review on worktrees cut from main. */
 function fixture({ autoReview = false } = {}) {
@@ -137,7 +146,7 @@ test("a dependent that would conflict with the new main shows the conflict and i
   } finally { f.close(); }
 });
 
-test("a dependent with an approval in progress is left alone", async () => {
+test("a dependent with an approval in progress waits, and is updated once the approval is withdrawn", async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.parent.worktree, "README.md"), "original\nfrom parent\n");
@@ -151,8 +160,58 @@ test("a dependent with an approval in progress is left alone", async () => {
     writeFileSync(join(f.child.worktree, "child.txt"), "child\n");
     f.board.recordApproval(f.child.card.id, f.child.run.id, childHead);
     const [result] = await f.integration.updateDependents(f.parent.card.id);
-    assert.equal(result.outcome, "skipped");
-    assert.match(result.detail, /an approval is in progress/);
+    assert.equal(result.outcome, "deferred");
+    assert.match(result.detail, /an approval is in progress\. Bakery updates it once that finishes/);
     assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), childHead);
+    assert.deepEqual(await f.integration.retryDeferredDependents(), [{ cardId: f.child.card.id, outcome: "deferred", detail: "" }], "still busy, and noted only once");
+
+    f.board.cancelApproval(f.child.card.id, f.child.run.id);
+    const [retried] = await f.integration.retryDeferredDependents();
+    assert.equal(retried.outcome, "updated");
+    assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), git(f.repo, "rev-parse", "main"));
+    assert.equal(readFileSync(join(f.child.worktree, "other.txt"), "utf8"), "other\n");
+    assert.deepEqual(f.board.listDeferredDependentUpdates(), []);
+  } finally { f.close(); }
+});
+
+test("a parent that merges during the dependent's agent review updates it after that review, and it is reviewed again", async () => {
+  const f = fixture();
+  const log = join(f.dir, "reviews.log"), release = join(f.dir, "release"), piBin = join(f.dir, "fake-pi");
+  const settled = [
+    JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: '{"verdict":"approve","reason":"Looks right"}' }] } }),
+    JSON.stringify({ type: "agent_settled", aborted: false }),
+  ].join("\n");
+  // The fake reviewer records whether the parent's work is in the tree it reviews, then waits to be released.
+  writeFileSync(piBin, `#!/bin/sh\nif [ -f parent.txt ]; then echo with-parent >> '${log}'; else echo without-parent >> '${log}'; fi\nwhile [ ! -f '${release}' ]; do sleep 0.05; done\ncat <<'EVENTS'\n${settled}\nEVENTS\n`);
+  chmodSync(piBin, 0o755);
+  const reviews = () => readFileSync(log, "utf8").trim().split("\n");
+  try {
+    writeFileSync(join(f.parent.worktree, "parent.txt"), "from parent\n");
+    f.parent.finish();
+    // Only the child finishes after auto-review is turned on, so only the child is reviewed.
+    const enabledAt = f.board.setAutoReview(f.board.boardForRepo(f.repo)!.id, true).autoReviewEnabledAt!;
+    while (new Date().toISOString() <= enabledAt) { /* The child's run must finish after auto-review was enabled. */ }
+    writeFileSync(join(f.child.worktree, "child.txt"), "child\n");
+    f.child.finish();
+    const auto = new AutoReview(f.board, f.integration, piBin);
+    const first = auto.tick();
+    await waitFor(() => existsSync(log));
+    assert.equal(f.board.getAutoReviewJob(f.child.run.id)?.state, "running");
+
+    const childHead = git(f.child.worktree, "rev-parse", "HEAD");
+    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.integration.dependentUpdatesSettled();
+    assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), childHead, "the worktree under review is left alone");
+    assert.match(f.note(f.child.card.id), /an agent review is in progress\. Bakery updates it once that finishes/);
+
+    writeFileSync(release, "");
+    await first;
+    assert.match(f.board.getAutoReviewJob(f.child.run.id)?.details ?? "", /^Agent approved/);
+    await auto.tick();
+    assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), git(f.repo, "rev-parse", "main"), "the child received current main");
+    assert.equal(readFileSync(join(f.child.worktree, "child.txt"), "utf8"), "child\n");
+    assert.deepEqual(reviews(), ["without-parent", "with-parent"], "the child was reviewed again, on the updated tree");
+    assert.match(f.board.getAutoReviewJob(f.child.run.id)?.details ?? "", /^Agent approved/);
+    assert.deepEqual(f.board.listDeferredDependentUpdates(), []);
   } finally { f.close(); }
 });

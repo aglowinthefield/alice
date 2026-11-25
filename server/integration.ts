@@ -59,7 +59,7 @@ function mergeTreeAsync(repo: string, sides: string[]): Promise<{ tree: string; 
   });
 }
 /** What happened to one card that depends on a card that just merged; see `Integration.updateDependents`. */
-export type DependentUpdate = { cardId: string; outcome: "updated" | "current" | "conflict" | "skipped"; detail: string };
+export type DependentUpdate = { cardId: string; outcome: "updated" | "current" | "conflict" | "deferred" | "skipped"; detail: string };
 /** What `location` reads from Git to confirm a card worktree is the card's, on its branch, with no conflicts. */
 type WorktreeFacts = { repoTop: string; worktreeTop: string; repoCommon: string; worktreeCommon: string; branch: string; unmerged: string };
 const worktreeArgs = {
@@ -476,8 +476,15 @@ export class Integration {
    * After `parentId` merges (Approve, its pull request, or by hand), brings every Review card that depends on it up to
    * date with main, so it does not conflict later. Updates run one at a time, queued behind earlier ones.
    */
-  updateDependents(parentId: string): Promise<DependentUpdate[]> {
-    const next = this.dependentUpdates.then(() => this.updateDependentsNow(parentId));
+  updateDependents(parentId: string): Promise<DependentUpdate[]> { return this.queueDependentWork(() => this.updateDependentsNow(parentId)); }
+  /**
+   * Retries the updates deferred because the card was busy when its parent merged (see `updateDependent`), for cards
+   * that are back in Review and free. The auto-review tick calls it before starting reviews, so a card's next review
+   * sees current main.
+   */
+  retryDeferredDependents(): Promise<DependentUpdate[]> { return this.queueDependentWork(() => this.retryDeferredNow()); }
+  private queueDependentWork(work: () => Promise<DependentUpdate[]>): Promise<DependentUpdate[]> {
+    const next = this.dependentUpdates.then(work);
     this.dependentUpdates = next.catch(() => {});
     return next;
   }
@@ -494,14 +501,28 @@ export class Integration {
     const results: DependentUpdate[] = [];
     for (const ref of this.board.listDependencies(parentId).dependents) {
       const card = this.board.getCard(ref.id);
-      if (card?.status !== "review") continue;
-      let result: DependentUpdate;
-      try { result = await this.updateDependent(card, parent); }
-      catch (error) { result = { cardId: card.id, outcome: "skipped", detail: `Bakery could not bring this card up to date after "${parent.title}" merged: ${error instanceof Error ? error.message : String(error)}` }; }
-      if (result.outcome !== "current" && result.detail) this.board.noteCard(card.id, result.detail);
-      results.push(result);
+      if (card?.status === "review") results.push(await this.updateDependentNoted(card, parent));
     }
     return results;
+  }
+  private async retryDeferredNow(): Promise<DependentUpdate[]> {
+    const results: DependentUpdate[] = [];
+    for (const { cardId, parentId } of this.board.listDeferredDependentUpdates()) {
+      const card = this.board.getCard(cardId), parent = this.board.getCard(parentId);
+      // A card that was sent back keeps waiting until its next run reaches Review.
+      if (!card || !parent || card.status === "done" || card.status === "archived") this.board.clearDeferredDependentUpdate(cardId);
+      else if (card.status === "review") results.push(await this.updateDependentNoted(card, parent));
+    }
+    return results;
+  }
+  /** `updateDependent`, with what happened noted on the card. Anything but a deferral settles a waiting update. */
+  private async updateDependentNoted(card: Card, parent: Card): Promise<DependentUpdate> {
+    let result: DependentUpdate;
+    try { result = await this.updateDependent(card, parent); }
+    catch (error) { result = { cardId: card.id, outcome: "skipped", detail: `Bakery could not bring this card up to date after "${parent.title}" merged: ${error instanceof Error ? error.message : String(error)}` }; }
+    if (result.outcome !== "deferred") this.board.clearDeferredDependentUpdate(card.id);
+    if (result.outcome !== "current" && result.detail) this.board.noteCard(card.id, result.detail);
+    return result;
   }
   /**
    * Merges current main into one dependent card's worktree, keeping its uncommitted work uncommitted. Review
@@ -519,7 +540,12 @@ export class Integration {
     // GitHub already tests an open pull request against main, and Bakery sends its conflicts back from there.
     if (card.prState === "OPEN" || card.prOverrideUrl) return result("current", "");
     const busy = () => this.board.getApproval(card.id) ? "an approval is in progress" : this.board.getAutoReviewJob(run.id)?.state === "running" ? "an agent review is in progress" : "";
-    if (busy()) return result("skipped", `Not brought up to date with main ${after}: ${busy()}. Refresh the diff to check it against the new main`);
+    // Its worktree is in use. It is brought up to date once that finishes; see `retryDeferredDependents`.
+    const defer = () => {
+      const why = busy();
+      return result("deferred", this.board.deferDependentUpdate(card.id, parent.id) ? `Not brought up to date with main ${after} yet: ${why}. Bakery updates it once that finishes` : "");
+    };
+    if (busy()) return defer();
     const { repo, worktree } = await this.locationAsync(card);
     for (const name of ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD"])
       if (existsSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", name)))) return result("skipped", `Not brought up to date with main ${after}: the card worktree is in the middle of a Git operation (${name})`);
@@ -549,7 +575,8 @@ export class Integration {
       if (merged.conflicts.length) return conflict(merged.conflicts);
       // From here on nothing awaits, so no request can approve or start the card halfway through.
       const current = this.board.getCard(card.id);
-      if (current?.status !== "review" || this.board.listRuns(card.id)[0]?.id !== run.id || busy()) return result("skipped", `Not brought up to date with main ${after}: the card changed while Bakery was checking it`);
+      if (current?.status !== "review" || this.board.listRuns(card.id)[0]?.id !== run.id) return result("skipped", `Not brought up to date with main ${after}: the card changed while Bakery was checking it`);
+      if (busy()) return defer();
       const ref = `refs/heads/bakery/${card.id}`;
       const newHead = ownCommits
         ? git(worktree, ...commitIdentityArgs(worktree), "commit-tree", branch.tree, "-p", head, "-p", main, "-m", `Merge ${mainName} into bakery/${card.id}`, "-m", `${parent.title} (${parent.id}) merged; Bakery brought this card up to date.`)

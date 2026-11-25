@@ -1508,6 +1508,7 @@ export class Board {
   listDeferredDependentUpdates(): { cardId: string; parentId: string }[] {
     return this.db.prepare("SELECT cardId, parentId FROM dependent_updates ORDER BY deferredAt, rowid").all() as { cardId: string; parentId: string }[];
   }
+  hasDeferredDependentUpdate(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM dependent_updates WHERE cardId=?").get(cardId); }
   clearDeferredDependentUpdate(cardId: string): void { this.db.prepare("DELETE FROM dependent_updates WHERE cardId=?").run(cardId); }
   getApproval(cardId: string): Approval | undefined {
     return this.db.prepare("SELECT * FROM approvals WHERE cardId=? AND merged=0").get(cardId) as Approval | undefined;

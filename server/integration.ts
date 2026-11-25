@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Board, type Card } from "./board.js";
@@ -56,6 +56,20 @@ function mergeTreeAsync(repo: string, sides: string[]): Promise<{ tree: string; 
       const end = rest.indexOf("");
       resolve({ tree: tree.trim(), conflicts: error ? [...new Set(rest.slice(0, end < 0 ? rest.length : end))] : [] });
     });
+  });
+}
+/**
+ * Paths an update from tree `from` to tree `to` would create in `worktree` where a local file already sits that Git
+ * does not track, such as an ignored `.env` that main starts tracking. `from` holds every file Git sees (`add -A`),
+ * so anything already on disk at an added path, or a file where an added path needs a directory, is ignored.
+ * `read-tree -u` would overwrite those without asking.
+ */
+async function ignoredCollisions(worktree: string, from: string, to: string): Promise<string[]> {
+  const added = (await gitCommandAsync(worktree, ["diff", "--no-renames", "--name-only", "-z", "--diff-filter=A", from, to], true)).split("\0").filter(Boolean);
+  const kind = (path: string) => { try { return lstatSync(join(worktree, path)).isDirectory() ? "dir" : "file"; } catch { return ""; } };
+  return added.filter(path => {
+    const parts = path.split("/");
+    return !!kind(path) || parts.slice(0, -1).some((_, i) => kind(parts.slice(0, i + 1).join("/")) === "file");
   });
 }
 /** What happened to one card that depends on a card that just merged; see `Integration.updateDependents`. */
@@ -530,7 +544,9 @@ export class Integration {
    * the merge is first worked out on Git objects alone (`merge-tree`): the branch with main, then the uncommitted
    * work on top of that. A conflict in either records the usual merge failure and changes nothing. A clean result
    * moves the branch (a fast-forward, or a merge commit when the branch has commits of its own) and updates the files
-   * with `read-tree -m -u`, which refuses rather than overwrite a file edited after the snapshot.
+   * with `read-tree -m -u`, which refuses rather than overwrite a file edited after the snapshot. Staged changes are
+   * merged the same way on their own and stay staged. Everything that could stop the update (a conflict in the work or
+   * in what is staged, an ignored local file in the way) is found before anything changes, and changes nothing.
    */
   private async updateDependent(card: Card, parent: Card): Promise<DependentUpdate> {
     const result = (outcome: DependentUpdate["outcome"], detail: string): DependentUpdate => ({ cardId: card.id, outcome, detail });
@@ -562,8 +578,13 @@ export class Integration {
       catch { await gitCommandAsync(worktree, ["read-tree", "HEAD"], false, index); }
       await gitCommandAsync(worktree, ["add", "-A"], false, index);
       const work = await gitCommandAsync(worktree, ["write-tree"], false, index);
-      const conflict = (files: string[]) => {
-        const details = `Bringing the card up to date with ${mainName} (${main.slice(0, 12)}) ${after} conflicts in ${files.join(", ")}. Bakery changed nothing in the card worktree.`;
+      // What is staged, from a copy of the real index so it is only read. Usually the same as HEAD.
+      const stagedIndex = join(temp, "staged");
+      copyFileSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", "index")), stagedIndex);
+      const staged = await gitCommandAsync(worktree, ["write-tree"], false, stagedIndex);
+      const headTree = await readGit(worktree, "rev-parse", `${head}^{tree}`);
+      const conflict = (files: string[], what = "conflicts in") => {
+        const details = `Bringing the card up to date with ${mainName} (${main.slice(0, 12)}) ${after} ${what} ${files.join(", ")}. Bakery changed nothing in the card worktree.`;
         this.board.recordMergeFailure(card.id, files, details);
         return result("conflict", `${details} Choose Fix conflict with Pi, or resolve it yourself`);
       };
@@ -573,6 +594,10 @@ export class Integration {
       if (branch.conflicts.length) return conflict(branch.conflicts);
       const merged = await mergeTreeAsync(worktree, [`--merge-base=${head}`, branch.tree, work]);
       if (merged.conflicts.length) return conflict(merged.conflicts);
+      const stagedMerge = staged === headTree ? { tree: branch.tree, conflicts: [] } : await mergeTreeAsync(worktree, [`--merge-base=${head}`, branch.tree, staged]);
+      if (stagedMerge.conflicts.length) return conflict(stagedMerge.conflicts, "conflicts with changes staged in");
+      const collisions = await ignoredCollisions(worktree, work, merged.tree);
+      if (collisions.length) return conflict(collisions, "would overwrite local files Git ignores:");
       // From here on nothing awaits, so no request can approve or start the card halfway through.
       const current = this.board.getCard(card.id);
       if (current?.status !== "review" || this.board.listRuns(card.id)[0]?.id !== run.id) return result("skipped", `Not brought up to date with main ${after}: the card changed while Bakery was checking it`);
@@ -587,8 +612,13 @@ export class Integration {
         git(worktree, "update-ref", ref, head, newHead);
         throw error;
       }
-      // The branch moved under the real index: point it at the new commit, leaving the card's work unstaged as before.
-      git(worktree, "reset", "-q");
+      // The branch moved under the real index. Point it at the new commit, so the card's work stays unstaged as before,
+      // or at the merged staged changes when some were staged. A refresh after `read-tree` only updates file stats.
+      if (staged === headTree) git(worktree, "reset", "-q");
+      else {
+        git(worktree, "read-tree", stagedMerge.tree);
+        try { git(worktree, "update-index", "-q", "--refresh"); } catch { /* Exit 1 only lists files that differ from the index. */ }
+      }
       this.board.clearMergeFailure(card.id);
       const requeued = this.board.requeueAutoReview(card.id, run.id);
       return result("updated", `Brought up to date with ${mainName} (${main.slice(0, 12)}) ${after}${ownCommits ? ", with a merge commit on the card branch" : ""}.${requeued ? " Agent review runs again on the result." : " Refresh the diff to review it against the new main."}`);

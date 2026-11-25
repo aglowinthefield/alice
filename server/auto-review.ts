@@ -219,6 +219,12 @@ export class AutoReview {
         this.board.finishAutoReview(run.id, "approved", verdict.reason, fingerprint);
         return;
       }
+      // A card it depends on merged during this review, so the approved tree is on an old main. The next tick brings
+      // the card up to date and reviews it again, and that review opens the pull request.
+      if (this.board.hasDeferredDependentUpdate(card.id)) {
+        this.board.finishAutoReview(run.id, "approved", `${verdict.reason}\n\nA card this one depends on merged during the review, so Bakery brings it up to date with main and reviews it again before opening the pull request.`, fingerprint);
+        return;
+      }
       const current = this.board.getBoard(repoBoard.id);
       if (!current?.autoReviewEnabled || current.autoReviewEnabledAt !== repoBoard.autoReviewEnabledAt) throw new Error("Auto-review was disabled or its settings changed");
       // The PR is where the work waits now: GitHub's checks and reviews decide the merge, and the card goes Done

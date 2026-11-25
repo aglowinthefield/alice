@@ -63,7 +63,7 @@ test("a Review card is brought up to date with main when the card it depends on 
     f.child.finish();
     // The child was already reviewed by the agent; a new base makes that verdict stale.
     f.board.beginAutoReview(f.child.card.id, f.child.run.id);
-    f.board.finishAutoReview(f.child.run.id, "needs_human", "Agent approved: looks right");
+    f.board.finishAutoReview(f.child.run.id, "approved", "Looks right");
     assert.equal(f.board.getCard(f.child.card.id)!.reviewWait, null);
     const childHead = git(f.child.worktree, "rev-parse", "HEAD");
 
@@ -127,7 +127,7 @@ test("a dependent that would conflict with the new main shows the conflict and i
     writeFileSync(join(f.child.worktree, "child.txt"), "new child file\n");
     f.child.finish();
     f.board.beginAutoReview(f.child.card.id, f.child.run.id);
-    f.board.finishAutoReview(f.child.run.id, "needs_human", "Agent approved: looks right");
+    f.board.finishAutoReview(f.child.run.id, "approved", "Looks right");
     const childHead = git(f.child.worktree, "rev-parse", "HEAD"), before = status(f.child.worktree);
 
     f.approve(f.board.getCard(f.parent.card.id)!);
@@ -143,6 +143,54 @@ test("a dependent that would conflict with the new main shows the conflict and i
     assert.equal(child.status, "review");
     assert.equal(child.reviewWait, null, "a conflicting card is not queued for agent review");
     assert.match(f.note(child.id), /Choose Fix conflict with Pi/);
+  } finally { f.close(); }
+});
+
+test("an ignored local file that main starts tracking is reported as a conflict and nothing changes", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.parent.worktree, "secret.env"), "from main\n");
+    f.parent.finish();
+    // The child ignores secret.env and has its own copy, which the update must not overwrite.
+    writeFileSync(join(f.child.worktree, ".gitignore"), "secret.env\n");
+    writeFileSync(join(f.child.worktree, "secret.env"), "local secret\n");
+    writeFileSync(join(f.child.worktree, "notes.txt"), "notes\nfrom child\n");
+    f.child.finish();
+    const childHead = git(f.child.worktree, "rev-parse", "HEAD"), before = status(f.child.worktree), index = git(f.child.worktree, "ls-files", "-s");
+
+    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.integration.dependentUpdatesSettled();
+
+    assert.equal(readFileSync(join(f.child.worktree, "secret.env"), "utf8"), "local secret\n");
+    assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), childHead);
+    assert.equal(git(f.child.worktree, "ls-files", "-s"), index, "the index is unchanged");
+    assert.deepEqual(status(f.child.worktree), before);
+    const [failure] = f.board.listMergeFailures(f.repo);
+    assert.deepEqual(failure?.files, ["secret.env"]);
+    assert.match(failure.details, /would overwrite local files Git ignores: secret\.env\. Bakery changed nothing/);
+  } finally { f.close(); }
+});
+
+test("staged changes stay staged apart from unstaged ones, even a staged file deleted from the worktree", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.parent.worktree, "README.md"), "original\nfrom parent\n");
+    f.parent.finish();
+    writeFileSync(join(f.child.worktree, "notes.txt"), "notes\nstaged\n");
+    git(f.child.worktree, "add", "notes.txt");
+    rmSync(join(f.child.worktree, "notes.txt"));
+    writeFileSync(join(f.child.worktree, "child.txt"), "unstaged\n");
+    f.child.finish();
+
+    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.integration.dependentUpdatesSettled();
+
+    assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), git(f.repo, "rev-parse", "main"));
+    assert.equal(readFileSync(join(f.child.worktree, "README.md"), "utf8"), "original\nfrom parent\n");
+    assert.equal(git(f.child.worktree, "show", ":notes.txt"), "notes\nstaged", "the staged content is still staged");
+    assert.equal(existsSync(join(f.child.worktree, "notes.txt")), false, "and still deleted from the worktree");
+    assert.deepEqual(status(f.child.worktree), ["?? child.txt", "MD notes.txt"]);
+    assert.deepEqual(f.board.listMergeFailures(f.repo), []);
   } finally { f.close(); }
 });
 
@@ -206,12 +254,12 @@ test("a parent that merges during the dependent's agent review updates it after 
 
     writeFileSync(release, "");
     await first;
-    assert.match(f.board.getAutoReviewJob(f.child.run.id)?.details ?? "", /^Agent approved/);
+    assert.equal(f.board.getAutoReviewJob(f.child.run.id)?.state, "approved");
     await auto.tick();
     assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), git(f.repo, "rev-parse", "main"), "the child received current main");
     assert.equal(readFileSync(join(f.child.worktree, "child.txt"), "utf8"), "child\n");
     assert.deepEqual(reviews(), ["without-parent", "with-parent"], "the child was reviewed again, on the updated tree");
-    assert.match(f.board.getAutoReviewJob(f.child.run.id)?.details ?? "", /^Agent approved/);
+    assert.equal(f.board.getAutoReviewJob(f.child.run.id)?.state, "approved");
     assert.deepEqual(f.board.listDeferredDependentUpdates(), []);
   } finally { f.close(); }
 });

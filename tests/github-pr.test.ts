@@ -10,6 +10,7 @@ import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 import { Integration, PushHookError, type CommitHookError } from "../server/integration.js";
 import { Readiness } from "../server/readiness.js";
+import { AutoReview } from "../server/auto-review.js";
 import { GitHub, GitHubSync, bakeryRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 import { diffSummary, draftPrompt, draftPullRequest, maxDraftPatchChars, readPullRequestRules, type PullRequestRules } from "../server/pr-draft.js";
@@ -359,6 +360,58 @@ test("github-pr: when a PR merges, a Review card that depends on it is brought u
     assert.equal(git(worktree, "status", "--porcelain"), "?? child.txt", "its own work is still uncommitted");
     assert.equal(f.board.getCard(child.id)!.status, "review");
     assert.match(f.board.listCardEvents(child.id).at(-1)?.reason ?? "", /Brought up to date with origin\/main \([0-9a-f]{12}\) after "Parent" merged/);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: an approval during which a parent merged does not open the PR until the updated card is reviewed again", async () => {
+  const f = fixture();
+  const log = join(f.dir, "reviews.log"), release = join(f.dir, "release"), piBin = join(f.dir, "fake-reviewer");
+  const settled = [
+    JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: '{"verdict":"approve","reason":"Looks right"}' }] } }),
+    JSON.stringify({ type: "agent_settled", aborted: false }),
+  ].join("\n");
+  // The fake reviewer records whether the parent's feature.txt is in the tree it reviews, then waits to be released.
+  writeFileSync(piBin, `#!/bin/sh\nif [ -f feature.txt ]; then echo with-parent >> '${log}'; else echo without-parent >> '${log}'; fi\nwhile [ ! -f '${release}' ]; do sleep 0.05; done\ncat <<'EVENTS'\n${settled}\nEVENTS\n`);
+  chmodSync(piBin, 0o755);
+  try {
+    // The parent reaches Review before auto-review is on, so only the child is reviewed.
+    const parent = await reviewedCard(f, "Parent");
+    const enabledAt = f.board.setAutoReview(f.repoBoard.id, true).autoReviewEnabledAt!;
+    while (new Date().toISOString() <= enabledAt) { /* The child's run must finish after auto-review was enabled. */ }
+    const child = f.board.createCard({ title: "Child", body: "", repo: f.repo });
+    f.board.setStatus(child.id, "ready");
+    const run = f.board.claim(child.id), worktree = join(f.data, "worktrees", child.id);
+    git(f.repo, "worktree", "add", "-qb", `bakery/${child.id}`, worktree, "origin/main");
+    f.board.attach(run.id, process.pid, worktree);
+    writeFileSync(join(worktree, "child.txt"), "child\n");
+    f.board.finish(run.id, "review");
+    f.board.addDependency(child.id, parent.id);
+    const integration = new Integration(f.board, f.data);
+    f.sync.onMerged = id => integration.updateDependents(id);
+    const auto = new AutoReview(f.board, integration, piBin, undefined, (card, fingerprint) => integration.openPullRequest(card, fingerprint, f.github, undefined, "agent-review"));
+
+    const first = auto.tick();
+    await waitFor(() => existsSync(log));
+    await approve(f, parent.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${parent.id}`);
+    const merge = f.squashMerge(`bakery/${parent.id}`);
+    f.setPrs([{ ...pr, state: "MERGED", mergedAt: new Date().toISOString(), mergeCommit: { oid: merge }, headRefOid: pushed }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(parent.id)!.status, "done");
+    assert.equal(f.board.hasDeferredDependentUpdate(child.id), true, "the child's update waits for its review");
+
+    writeFileSync(release, "");
+    await first;
+    assert.equal(f.board.getAutoReviewJob(run.id)?.state, "approved");
+    assert.match(f.board.getAutoReviewJob(run.id)?.details ?? "", /reviews it again before opening the pull request/);
+    assert.deepEqual(f.prs().map(item => item.headRefName), [`bakery/${parent.id}`], "the first verdict opened no pull request");
+
+    await auto.tick();
+    assert.equal(git(worktree, "rev-parse", "HEAD~"), merge, "the child was brought up to date with origin/main, then committed for its PR");
+    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["without-parent", "with-parent"], "the second review saw the parent's changes");
+    assert.equal(f.board.getAutoReviewJob(run.id)?.state, "pull_request");
+    assert.deepEqual(f.prs().map(item => item.headRefName), [`bakery/${parent.id}`, `bakery/${child.id}`]);
   } finally { f.cleanup(); }
 });
 

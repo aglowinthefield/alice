@@ -911,10 +911,10 @@ function wrapUpFixture(behaviour: "obey" | "ignore") {
 import { pathToFileURL } from "node:url";
 const args = process.argv.slice(2), handlers = {};
 const emit = event => process.stdout.write(JSON.stringify(event) + "\\n");
-let steeredAt = 0;
+let steered = false;
 const pi = {
   on: (name, handler) => { handlers[name] = handler; },
-  sendUserMessage: (text, options) => { steeredAt ||= Date.now(); appendFileSync(${JSON.stringify(steers)}, JSON.stringify({ text, options }) + "\\n"); },
+  sendUserMessage: (text, options) => { steered = true; appendFileSync(${JSON.stringify(steers)}, JSON.stringify({ text, options }) + "\\n"); },
 };
 (await import(pathToFileURL(args[args.indexOf("-e") + 1]).href)).default(pi);
 emit({ type: "agent_start" }); handlers.agent_start?.();
@@ -922,8 +922,7 @@ setInterval(() => {
   emit({ type: "turn_start" });
   emit({ type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "Still working." }] } });
   emit({ type: "turn_end" });
-  // Keep going a while after the steer, so a second delivery would show up.
-  if (${JSON.stringify(behaviour)} === "obey" && steeredAt && Date.now() - steeredAt > 2500) {
+  if (${JSON.stringify(behaviour)} === "obey" && steered) {
     emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done: the parser. Remaining: the exporter. Evidence attached." }] } });
     emit({ type: "agent_settled", aborted: false }); handlers.agent_settled?.();
     process.exit(0);
@@ -950,7 +949,7 @@ test("a run still going near its timeout is steered once to write its report, an
     assert.equal(finished.report, "Done: the parser. Remaining: the exporter. Evidence attached.");
     assert.deepEqual(f.delivered(), [{ text: WRAP_UP_MESSAGE, options: { deliverAs: "steer" } }], "the message arrives once, as a steer");
     assert.match(WRAP_UP_MESSAGE, /Stop starting new work and commit nothing/);
-    assert.match(finished.output, /Bakery asked Pi to stop starting new work and write its report/);
+    assert.equal(finished.output.match(/Bakery asked Pi to stop starting new work and write its report/g)?.length, 1, "Bakery sends it once");
     assert.deepEqual(readdirSync(join(f.dir, "data", "wrap-up")), [], "the mailbox is removed when the run ends");
   } finally { f.cleanup(); }
 });
@@ -964,11 +963,11 @@ test("a run that ignores the wrap-up message is still stopped at the run timeout
     const finished = f.board.getRun(run.id)!;
     assert.equal(finished.status, "failed");
     assert.match(finished.error ?? "", /Bakery sent SIGTERM: \d+-minute run timeout/);
-    assert.equal(f.delivered().length, 1);
+    assert.equal(finished.output.match(/Bakery asked Pi to stop starting new work/g)?.length, 1, "the warning came first, once");
   } finally { f.cleanup(); }
 });
 
-test("the wrap-up extension steers only a busy session, so it never starts a turn after the run settled", async () => {
+test("the wrap-up extension steers only a busy session, once per message, so it never starts a turn after the run settled", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-wrap-up-")), file = join(dir, "message");
   const previous = process.env.BAKERY_WRAP_UP_FILE;
   process.env.BAKERY_WRAP_UP_FILE = file;
@@ -976,15 +975,21 @@ test("the wrap-up extension steers only a busy session, so it never starts a tur
     const handlers: Record<string, () => void> = {}, sent: unknown[] = [];
     type Pi = { on(name: string, handler: () => void): void; sendUserMessage(text: string, options: unknown): void };
     const { default: wrapUp } = await import(pathToFileURL(wrapUpExtension).href) as { default: (pi: Pi) => void };
+    // The extension polls on a 1-second interval; mock it so each poll runs exactly when the test ticks.
+    t.mock.timers.enable({ apis: ["setInterval"] });
     wrapUp({ on: (name: string, handler: () => void) => { handlers[name] = handler; }, sendUserMessage: (text: string, options: unknown) => { sent.push({ text, options }); } });
     writeFileSync(file, "wrap up");
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    t.mock.timers.tick(3000);
     assert.deepEqual(sent, [], "an idle session is left alone");
     handlers.agent_start();
-    await waitFor(() => sent.length > 0);
-    handlers.agent_settled();
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    t.mock.timers.tick(1000);
     assert.deepEqual(sent, [{ text: "wrap up", options: { deliverAs: "steer" } }]);
+    t.mock.timers.tick(3000);
+    assert.equal(sent.length, 1, "a message is delivered once");
+    handlers.agent_settled();
+    writeFileSync(file, "too late");
+    t.mock.timers.tick(3000);
+    assert.equal(sent.length, 1, "a settled session is not restarted");
     handlers.session_shutdown();
   } finally {
     if (previous === undefined) delete process.env.BAKERY_WRAP_UP_FILE; else process.env.BAKERY_WRAP_UP_FILE = previous;

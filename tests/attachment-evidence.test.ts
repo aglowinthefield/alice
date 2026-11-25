@@ -122,7 +122,7 @@ test("a work run's prompt tells the agent to attach evidence with the CLI, and o
     const prompts: string[] = [];
     for (const attach of [{ cli: "/opt/bakery/bakery-cli.mjs", env: { BAKERY_URL: "http://127.0.0.1:4317", BAKERY_ALLOW_REMOTE: "1" } }, undefined]) {
       const promptFile = join(dir, `prompt-${prompts.length}.txt`);
-      writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$6" > '${promptFile}'\nprintf '%s %s' "$BAKERY_URL" "$BAKERY_ALLOW_REMOTE" > '${promptFile}.env'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+      writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s %s' "$BAKERY_URL" "$BAKERY_ALLOW_REMOTE" > '${promptFile}.env'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
       chmodSync(fakePi, 0o755);
       const card = board.createCard({ title: "Test", body: "", repo });
       board.setStatus(card.id, "ready");

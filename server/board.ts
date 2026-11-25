@@ -6,7 +6,7 @@ import { sharedCacheEnv } from "./shared-cache-env.js";
 import { validateSharedCaches, type SharedCache } from "./shared-caches.js";
 import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
-import { atRunCapacity, autoStartRefusal, budgetReached, dailyStartsReached, loopGuards, nextStartAt } from "./repo-limits.js";
+import { atMachineCapacity, atRunCapacity, autoStartRefusal, machineAgentLimit, maxMachineAgents, budgetReached, dailyStartsReached, loopGuards, nextStartAt } from "./repo-limits.js";
 import { classifyProviderFailure, isProviderFailureKind, type ProviderFailureKind } from "./provider-failure.js";
 import { summarizeFailure } from "./failure-summary.js";
 import type { ThemeName } from "../src/themes.js";
@@ -19,7 +19,7 @@ export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | 
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
-export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean };
+export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean; maxActiveAgents: number };
 type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string };
 /** `integration` is what the build lets Bakery do: github-pr only with the pull requests feature. `integrationConfigured` is what is stored, kept while the feature is off. The stored sync error and warning are kept too but read empty while it is off, so they never hold back pickup. */
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullRequests: boolean): RepoBoard => ({
@@ -287,6 +287,8 @@ export class Board {
     if (!migratedSettings.has("showCardModels")) this.db.exec("ALTER TABLE settings ADD COLUMN showCardModels INTEGER NOT NULL DEFAULT 0 CHECK(showCardModels IN (0, 1))");
     if (!migratedSettings.has("discordWebhookUrl")) this.db.exec("ALTER TABLE settings ADD COLUMN discordWebhookUrl TEXT NOT NULL DEFAULT ''");
     if (!migratedSettings.has("telemetryEnabled")) this.db.exec("ALTER TABLE settings ADD COLUMN telemetryEnabled INTEGER NOT NULL DEFAULT 0 CHECK(telemetryEnabled IN (0, 1))");
+    // Agents at once across every board; 0 means automatic (see machineAgentLimit in server/repo-limits.ts).
+    if (!migratedSettings.has("maxActiveAgents")) this.db.exec("ALTER TABLE settings ADD COLUMN maxActiveAgents INTEGER NOT NULL DEFAULT 0");
     if (!migratedSettings.has("density")) this.db.exec("ALTER TABLE settings ADD COLUMN density TEXT NOT NULL DEFAULT 'default' CHECK(density IN ('compact', 'default', 'cozy'))");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
     if (!boardColumns.has("sharedCaches")) this.db.exec("ALTER TABLE boards ADD COLUMN sharedCaches TEXT NOT NULL DEFAULT '[]'");
@@ -445,12 +447,15 @@ export class Board {
   }
   close() { if (this.db.isOpen) this.db.close(); }
   getSettings(): BakerySettings {
-    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, density, showCardModels, agentModels, discordWebhookUrl, telemetryEnabled FROM settings WHERE id=1").get() as { telemetryEnabled: number; discordWebhookUrl: string; confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"]; density: BakerySettings["density"]; showCardModels: number; agentModels: string };
-    return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme, density: row.density, showCardModels: row.showCardModels === 1, agentModels: parseAgentModels(row.agentModels), discordWebhookUrl: row.discordWebhookUrl, telemetryEnabled: row.telemetryEnabled === 1 };
+    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, density, showCardModels, agentModels, discordWebhookUrl, telemetryEnabled, maxActiveAgents FROM settings WHERE id=1").get() as { maxActiveAgents: number; telemetryEnabled: number; discordWebhookUrl: string; confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"]; density: BakerySettings["density"]; showCardModels: number; agentModels: string };
+    return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme, density: row.density, showCardModels: row.showCardModels === 1, agentModels: parseAgentModels(row.agentModels), discordWebhookUrl: row.discordWebhookUrl, telemetryEnabled: row.telemetryEnabled === 1, maxActiveAgents: row.maxActiveAgents };
   }
   updateSettings(settings: Partial<BakerySettings>): BakerySettings {
     const current = this.getSettings();
     const agentModels = settings.agentModels ? validateAgentModels(settings.agentModels) : current.agentModels;
+    const maxActiveAgents = settings.maxActiveAgents ?? current.maxActiveAgents;
+    if (!Number.isSafeInteger(maxActiveAgents) || maxActiveAgents < 0 || maxActiveAgents > maxMachineAgents) throw new Error(`Agents at once must be 0 (automatic) or from 1 to ${maxMachineAgents}`);
+    this.db.prepare("UPDATE settings SET maxActiveAgents=? WHERE id=1").run(maxActiveAgents);
     this.db.prepare("UPDATE settings SET confirmRunStart=?, notifyOnReview=?, cardDetailsLayout=?, theme=?, density=?, showCardModels=?, agentModels=?, discordWebhookUrl=?, telemetryEnabled=? WHERE id=1").run((settings.confirmRunStart ?? current.confirmRunStart) ? 1 : 0, (settings.notifyOnReview ?? current.notifyOnReview) ? 1 : 0, settings.cardDetailsLayout ?? current.cardDetailsLayout, settings.theme ?? current.theme, settings.density ?? current.density, (settings.showCardModels ?? current.showCardModels) ? 1 : 0, JSON.stringify(agentModels), settings.discordWebhookUrl ?? current.discordWebhookUrl, (settings.telemetryEnabled ?? current.telemetryEnabled) ? 1 : 0);
     return this.getSettings();
   }
@@ -831,9 +836,23 @@ export class Board {
     const row = this.db.prepare(`SELECT ${boardFields} FROM boards WHERE repo=? AND archived=0`).get(repo) as BoardRow | undefined;
     return row ? this.toBoard(row).autoPickupStarts : 0;
   }
-  /** Why pickup may not start another card on this board now (capacity, daily starts or budget), or null. */
+  /** Agents working now on every board: card runs, sentinel jobs included, and agent reviews. */
+  activeAgents(): number {
+    return (this.db.prepare("SELECT (SELECT COUNT(*) FROM cards WHERE status='running') + (SELECT COUNT(*) FROM auto_review_jobs WHERE state='running') AS n").get() as { n: number }).n;
+  }
+  /** The machine's agent slots: the limit in force and how many are taken. */
+  machineCapacity(): { limit: number; active: number; setting: number } {
+    const setting = this.getSettings().maxActiveAgents;
+    return { setting, limit: machineAgentLimit(setting), active: this.activeAgents() };
+  }
+  /** Whether automatic work (pickup, send-backs, fixes, reviews) must wait for an agent slot. */
+  atMachineCapacity(): boolean {
+    return atMachineCapacity(this.getSettings().maxActiveAgents, this.activeAgents());
+  }
+  /** Why pickup may not start another card on this board now (machine, board capacity, daily starts or budget), or null. */
   autoStartRefusal(repoBoard: RepoBoard): ReturnType<typeof autoStartRefusal> {
-    return autoStartRefusal(repoBoard, { running: this.runningCount(repoBoard.repo), starts: repoBoard.autoPickupStarts, cost24h: repoBoard.cost24h });
+    return autoStartRefusal(repoBoard, { running: this.runningCount(repoBoard.repo), starts: repoBoard.autoPickupStarts, cost24h: repoBoard.cost24h,
+      machine: { setting: this.getSettings().maxActiveAgents, active: this.activeAgents() } });
   }
   /** Turns the board's spend limits on or off; the stored values are kept either way. */
   setLimitsEnabled(id: string, enabled: boolean): RepoBoard {
@@ -1521,7 +1540,8 @@ export class Board {
    * `why` says what asked for the run, for the card's history (e.g. the agent reviewer sending it back).
    * `freshSession` gives the run its own Pi session instead of resuming the card's.
    */
-  claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = "", freshSession = false, recoveryOf: string | null = null): Run {
+  /** `byPerson` marks a run the operator asked for, which the machine's agent limit counts but never refuses. */
+  claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = "", freshSession = false, recoveryOf: string | null = null, byPerson = false): Run {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId);
@@ -1539,6 +1559,8 @@ export class Board {
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);
       if (repoBoard?.autoPickupEnabled && !isSentinelJob(card) && atRunCapacity(repoBoard, this.runningCount(card.repo)))
         throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
+      if (!byPerson && this.atMachineCapacity())
+        throw new RunLimitError(`Bakery is at its limit of ${machineAgentLimit(this.getSettings().maxActiveAgents)} agents at once across all boards`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
         this.autoStartRefusal(repoBoard) || repoBoard.integrationError || this.autoPickupBlocker(repoBoard) ||
         (card.autoRetryAt !== null && card.autoRetryAt > now())))

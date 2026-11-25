@@ -80,7 +80,8 @@ export class Worker {
     if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
   /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
-  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run): Run {
+  /** `byPerson`: the operator asked for this run, so the machine's agent limit does not refuse it. */
+  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run, byPerson = false): Run {
     if (this.draining) throw new Error("Bakery is waiting for active runs to finish before restarting to load code changes; start this run after the restart");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
@@ -108,7 +109,7 @@ export class Worker {
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     // A session the provider rejected replays the same history every time; only an explicit recovery gets past it.
     if (!recoverFrom && latestRun?.status === "failed" && latestRun.failureKind === "invalid-history") throw new PoisonedSessionError(card.id, latestRun.id, `run ${latestRun.attempt}`);
-    const run = this.board.claim(card.id, startedBy, why, false, recoverFrom?.id ?? null);
+    const run = this.board.claim(card.id, startedBy, why, false, recoverFrom?.id ?? null, byPerson);
     const prMode = this.board.integrationFor(card.repo) === "github-pr";
     let created = false;
     let mainMerged = "";
@@ -458,7 +459,7 @@ export class Worker {
     const failed = this.board.listRuns(cardId)[0];
     if (card.status !== "failed" || failed?.status !== "failed" || failed.failureKind !== "invalid-history")
       throw new Error("Only a failed card whose latest run was rejected for an invalid message history can be recovered in a fresh session");
-    const run = this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed);
+    const run = this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed, startedBy === "manual");
     this.board.append(run.id, `Fresh-session recovery of attempt ${failed.attempt}, whose session ${failed.sessionId} the provider rejected. That session and its log are kept as evidence.\n`);
     return this.board.getRun(run.id)!;
   }

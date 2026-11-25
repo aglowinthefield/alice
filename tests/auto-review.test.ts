@@ -531,6 +531,22 @@ test("queued agent reviews show their place, and a board runs as many at once as
   } finally { item.close(); }
 });
 
+test("agent reviews take a machine-wide agent slot and wait for one", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"Check manually"}');
+  try {
+    item.board.updateSettings({ maxActiveAgents: 1 });
+    item.board.setAutoReview(item.repoBoard.id, true);
+    item.board.setAutoReviewConcurrency(item.repoBoard.id, 2);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const first = item.reviewedCard(), second = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.listAutoReviewJobs(first.card.id).length, 1);
+    assert.equal(item.board.listAutoReviewJobs(second.card.id).length, 0, "the second review waits for the slot");
+    await item.auto.tick();
+    assert.equal(item.board.listAutoReviewJobs(second.card.id).length, 1);
+  } finally { item.close(); }
+});
+
 test("a board's diff limits send big diffs to a person, and 0 turns a limit off", async () => {
   const item = fixture();
   try {

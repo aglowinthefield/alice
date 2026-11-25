@@ -204,7 +204,7 @@ export class Board {
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', ${usageDefinitions}, UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0, agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
@@ -314,12 +314,11 @@ export class Board {
     if (!boardColumns.has("autoPickupEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabledAt TEXT");
     if (!boardColumns.has("autoPickupError")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupError TEXT NOT NULL DEFAULT ''");
     if (!boardColumns.has("pickupCostBudget")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupCostBudget REAL");
-    if (!boardColumns.has("autoPickupResumeOnResolution")) {
-      this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0");
-      // Older failure pauses lost their enablement timestamp; recognize only this exact legacy reason.
-      this.db.prepare("UPDATE boards SET autoPickupResumeOnResolution=1 WHERE autoPickupEnabled=0 AND autoPickupError=?")
-        .run("An automatic run failed; inspect it before re-enabling pickup");
-    }
+    // A failed automatic run no longer pauses pickup: the card waits in Failed and the rest of the board carries on.
+    // Boards paused for one by an older version resume.
+    this.db.prepare("UPDATE boards SET autoPickupEnabled=1, autoPickupEnabledAt=COALESCE(autoPickupEnabledAt, ?), autoPickupError='' WHERE autoPickupEnabled=0 AND autoPickupError IN (?, ?)")
+      .run(now(), "An automatic run failed; inspect it before re-enabling pickup", "An automatic run failed; inspect and integrate its card before pickup resumes");
+    if (boardColumns.has("autoPickupResumeOnResolution")) this.db.exec("ALTER TABLE boards DROP COLUMN autoPickupResumeOnResolution");
     if (!boardColumns.has("agentModels")) this.db.exec("ALTER TABLE boards ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
     if (!boardColumns.has("integration")) this.db.exec("ALTER TABLE boards ADD COLUMN integration TEXT NOT NULL DEFAULT 'local' CHECK(integration IN ('local', 'github-pr'))");
     if (!boardColumns.has("integrationError")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationError TEXT NOT NULL DEFAULT ''");
@@ -802,7 +801,7 @@ export class Board {
     const budget = costBudget === undefined ? current.pickupCostBudget : costBudget;
     if (budget !== null && (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0.01 || budget > 10_000))
       throw new Error("Auto-pickup daily cost budget must be off or between $0.01 and $10,000");
-    this.db.prepare("UPDATE boards SET autoPickupEnabled=?, pickupConcurrency=?, pickupDailyLimit=?, pickupCostBudget=?, autoPickupEnabledAt=?, autoPickupError='', autoPickupResumeOnResolution=0 WHERE id=?")
+    this.db.prepare("UPDATE boards SET autoPickupEnabled=?, pickupConcurrency=?, pickupDailyLimit=?, pickupCostBudget=?, autoPickupEnabledAt=?, autoPickupError='' WHERE id=?")
       .run(enabled ? 1 : 0, concurrency, limit, budget === null ? null : Math.round(budget * 100) / 100, enabled ? (current.autoPickupEnabled ? current.autoPickupEnabledAt : now()) : null, id);
     return this.getBoard(id)!;
   }
@@ -819,32 +818,9 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return this.getBoard(id)!;
   }
-  pauseAutoPickup(id: string, reason: string, resumeOnResolution = false): void {
-    this.db.prepare("UPDATE boards SET autoPickupEnabled=0, autoPickupEnabledAt=CASE WHEN ? THEN autoPickupEnabledAt ELSE NULL END, autoPickupError=?, autoPickupResumeOnResolution=? WHERE id=? AND autoPickupEnabled=1")
-      .run(resumeOnResolution ? 1 : 0, reason.slice(0, 500), resumeOnResolution ? 1 : 0, id);
-  }
-  private hasUnresolvedAutoFailure(repo: string, since: string | null): boolean {
-    return !!this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId
-      WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed' AND runs.retryScheduled=0 AND runs.startedAt>=?
-        AND cards.status NOT IN ('done', 'archived') AND ${notSentinelJob}
-        AND NOT EXISTS (SELECT 1 FROM approvals WHERE approvals.cardId=cards.id AND approvals.merged=1)
-        AND NOT EXISTS (SELECT 1 FROM external_integrations WHERE external_integrations.cardId=cards.id)
-      LIMIT 1`).get(repo, since ?? "");
-  }
-  resumeResolvedAutoPickup(): void {
-    if (!this.db.prepare("SELECT 1 FROM boards WHERE archived=0 AND autoPickupEnabled=0 AND autoPickupResumeOnResolution=1 LIMIT 1").get()) return;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const paused = this.db.prepare("SELECT id, repo, autoPickupEnabledAt FROM boards WHERE archived=0 AND autoPickupEnabled=0 AND autoPickupResumeOnResolution=1")
-        .all() as { id: string; repo: string; autoPickupEnabledAt: string | null }[];
-      for (const board of paused) {
-        if (this.db.prepare(`SELECT 1 FROM cards WHERE repo=? AND status='interrupted' AND ${notSentinelJob} LIMIT 1`).get(board.repo)) continue;
-        if (this.hasUnresolvedAutoFailure(board.repo, board.autoPickupEnabledAt)) continue;
-        this.db.prepare("UPDATE boards SET autoPickupEnabled=1, autoPickupEnabledAt=COALESCE(autoPickupEnabledAt, ?), autoPickupError='', autoPickupResumeOnResolution=0 WHERE id=?")
-          .run(now(), board.id);
-      }
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  pauseAutoPickup(id: string, reason: string): void {
+    this.db.prepare("UPDATE boards SET autoPickupEnabled=0, autoPickupEnabledAt=NULL, autoPickupError=? WHERE id=? AND autoPickupEnabled=1")
+      .run(reason.slice(0, 500), id);
   }
   runningCount(repo: string): number {
     return (this.db.prepare(`SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running' AND ${notSentinelJob}`).get(repo) as { n: number }).n;
@@ -869,11 +845,17 @@ export class Board {
     }
     return result;
   }
-  autoPickupBlocker(repoBoard: RepoBoard): { kind: "interrupted" | "failed_run"; reason: string } | undefined {
+  /**
+   * Why pickup must stop on this board. A failed run on its own is not a reason: its card waits in Failed like any
+   * other and the next Ready card starts. Only an authentication or billing refusal stops pickup, because every
+   * card would fail the same way until a person fixes the account.
+   */
+  autoPickupBlocker(repoBoard: RepoBoard): { kind: "interrupted" | "account"; reason: string } | undefined {
     if (this.db.prepare(`SELECT 1 FROM cards WHERE repo=? AND status='interrupted' AND ${notSentinelJob} LIMIT 1`).get(repoBoard.repo))
       return { kind: "interrupted", reason: "An interrupted run needs inspection before automatic pickup" };
-    if (this.hasUnresolvedAutoFailure(repoBoard.repo, repoBoard.autoPickupEnabledAt))
-      return { kind: "failed_run", reason: "An automatic run failed; inspect and integrate its card before pickup resumes" };
+    if (this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed'
+        AND runs.failureKind IN ('auth', 'billing') AND runs.startedAt>=? AND cards.status='failed' AND ${notSentinelJob} LIMIT 1`).get(repoBoard.repo, repoBoard.autoPickupEnabledAt ?? ""))
+      return { kind: "account", reason: "The provider refused an automatic run for authentication or billing; fix the account, then turn pickup back on" };
     return undefined;
   }
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {

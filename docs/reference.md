@@ -297,7 +297,8 @@ The server starts Ready cards for you, highest priority first, then oldest first
 - **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
 - **Daily limit:** 1 to 99 automatic starts in any rolling 24 hours (default 6), or 0 for no limit (`--limit off` in the CLI). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
 - **Daily cost budget:** optional, off by default. When the board's last-24h cost reaches it, pickup waits and the board says why. Pickup resumes as older spend leaves the window, or when you raise or clear the budget. Running work isn't stopped, and manual starts still work. Cost comes from Pi's own pricing, so it's an estimate and can overshoot by whatever runs were already in progress.
-- **Pauses:** pickup pauses on a failed automatic run, an interrupted card, or a startup error, and the board shows why. After a failure, pickup resumes on its own once every failed automatic card is merged and nothing is interrupted. Other pauses need you to turn it back on.
+- **Failed runs:** a card whose automatic run fails waits in Failed, and pickup carries on with the other Ready cards. Pickup never restarts a failed card, except for the automatic retry of a provider error.
+- **Pauses:** pickup pauses on an interrupted card, a startup error, or an authentication or billing refusal from the provider (which would fail every card), and the board shows why. Turn it back on once you have dealt with it.
 - Turning pickup off stops new starts. Runs already in progress keep going.
 
 ### Unattended review

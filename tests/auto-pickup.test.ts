@@ -6,7 +6,6 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
-import { Integration } from "../server/integration.js";
 import { Worker } from "../server/worker.js";
 import { AutoPickup } from "../server/auto-pickup.js";
 
@@ -26,17 +25,6 @@ async function waitFor(predicate: () => boolean) {
   const end = Date.now() + 5000;
   while (!predicate()) { if (Date.now() > end) throw new Error("Timed out waiting for fake Pi"); await new Promise(resolve => setTimeout(resolve, 25)); }
 }
-function integrateFailedCard(item: ReturnType<typeof fixture>, id: string) {
-  const previous = item.board.listRuns(id)[0];
-  const retry = item.board.claim(id);
-  item.board.attach(retry.id, process.pid, previous.worktree!);
-  writeFileSync(join(previous.worktree!, `${id}.txt`), "resolved\n");
-  item.board.finish(retry.id, "review");
-  const integration = new Integration(item.board, item.data);
-  const card = item.board.getCard(id)!;
-  integration.approve(card, integration.review(card).fingerprint);
-}
-
 test("auto-pickup is opt-in, starts oldest Ready cards, and counts manual runs toward concurrency", async () => {
   const item = fixture();
   try {
@@ -101,64 +89,30 @@ test("turning off pickup blocks new runs but leaves already running Pi alone", a
   } finally { await item.close(); }
 });
 
-test("a failed automatic run pauses pickup before another card starts", async () => {
+test("a failed automatic run waits in Failed while pickup starts the next card", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.dir, "fake-pi"), "#!/bin/sh\nexit 2\n");
-    const first = item.card("Will fail"), second = item.card("Must wait");
+    const first = item.card("Will fail"), second = item.card("Starts anyway");
     item.board.setAutoPickup(item.repoBoard.id, true, 1);
     item.pickup.tick();
     await waitFor(() => item.board.getCard(first.id)?.status === "failed");
     item.pickup.tick();
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
-    assert.match(item.board.getBoard(item.repoBoard.id)?.autoPickupError ?? "", /automatic run failed/i);
-    assert.equal(item.board.listRuns(second.id).length, 0);
-  } finally { await item.close(); }
-});
-
-test("pickup resumes only after every failed automatic card is integrated, without resetting its start budget", async () => {
-  const item = fixture();
-  try {
-    writeFileSync(join(item.dir, "fake-pi"), "#!/bin/sh\nexit 2\n");
-    const first = item.card("First failure"), second = item.card("Second failure"), waiting = item.card("Waiting");
-    item.board.setAutoPickup(item.repoBoard.id, true, 2);
-    const enabledAt = item.board.getBoard(item.repoBoard.id)!.autoPickupEnabledAt;
-    item.pickup.tick();
-    await waitFor(() => item.board.getCard(first.id)?.status === "failed" && item.board.getCard(second.id)?.status === "failed");
-    item.pickup.tick();
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabledAt, enabledAt);
-    assert.equal(item.board.autoStartsToday(item.repo), 2);
-    integrateFailedCard(item, first.id);
-    item.pickup.tick();
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
-    assert.equal(item.board.listRuns(waiting.id).length, 0);
-    integrateFailedCard(item, second.id);
-    item.pickup.tick();
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupError, "");
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabledAt, enabledAt);
-    assert.equal(item.board.listRuns(waiting.id)[0]?.startedBy, "auto");
-    assert.equal(item.board.autoStartsToday(item.repo), 3);
-    item.board.setStatus(first.id, "ready");
-    assert.equal(item.board.autoPickupBlocker(item.board.getBoard(item.repoBoard.id)!), undefined,
-      "reopening an integrated card must not resurrect its old failure");
+    assert.equal(item.board.listRuns(second.id)[0]?.startedBy, "auto", "the next Ready card starts");
+    await waitFor(() => item.board.getCard(second.id)?.status === "failed");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(first.id).length, 1, "pickup never restarts a failed card");
   } finally { await item.close(); }
 });
-
-test("an explicit disable or a non-failure pause never auto-resumes", async () => {
+test("an explicit disable or a pause never resumes by itself", async () => {
   const item = fixture();
   try {
-    writeFileSync(join(item.dir, "fake-pi"), "#!/bin/sh\nexit 2\n");
-    const failed = item.card("Failed"), waiting = item.card("Waiting");
+    const waiting = item.card("Waiting");
     item.board.setAutoPickup(item.repoBoard.id, true, 1);
-    item.pickup.tick();
-    await waitFor(() => item.board.getCard(failed.id)?.status === "failed");
-    item.pickup.tick();
     item.board.setAutoPickup(item.repoBoard.id, false, 1);
-    integrateFailedCard(item, failed.id);
     item.pickup.tick();
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
     assert.equal(item.board.listRuns(waiting.id).length, 0);
     item.board.setAutoPickup(item.repoBoard.id, true, 1);
     item.board.pauseAutoPickup(item.repoBoard.id, "Could not start a card");
@@ -168,32 +122,25 @@ test("an explicit disable or a non-failure pause never auto-resumes", async () =
     assert.equal(item.board.listRuns(waiting.id).length, 0);
   } finally { await item.close(); }
 });
-
-test("legacy failure pauses resume after their failed cards are integrated", async () => {
+test("boards an older version paused for a failed run resume on startup", async () => {
   const item = fixture();
   let reopened: Board | undefined;
   try {
-    writeFileSync(join(item.dir, "fake-pi"), "#!/bin/sh\nexit 2\n");
-    const failed = item.card("Legacy failure");
     item.board.setAutoPickup(item.repoBoard.id, true, 1);
-    item.pickup.tick();
-    await waitFor(() => item.board.getCard(failed.id)?.status === "failed");
     const db = new DatabaseSync(join(item.dir, "board.sqlite"));
     try {
-      db.exec("ALTER TABLE boards DROP COLUMN autoPickupResumeOnResolution");
-      db.prepare("UPDATE boards SET autoPickupEnabled=0, autoPickupEnabledAt=NULL, autoPickupError=? WHERE id=?")
-        .run("An automatic run failed; inspect it before re-enabling pickup", item.repoBoard.id);
+      db.exec("ALTER TABLE boards ADD COLUMN autoPickupResumeOnResolution INTEGER NOT NULL DEFAULT 0");
+      db.prepare("UPDATE boards SET autoPickupEnabled=0, autoPickupError=?, autoPickupResumeOnResolution=1 WHERE id=?")
+        .run("An automatic run failed; inspect and integrate its card before pickup resumes", item.repoBoard.id);
     } finally { db.close(); }
     reopened = new Board(join(item.dir, "board.sqlite"));
-    reopened.resumeResolvedAutoPickup();
-    assert.equal(reopened.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
-    integrateFailedCard(item, failed.id);
-    reopened.resumeResolvedAutoPickup();
     assert.equal(reopened.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
     assert.equal(reopened.getBoard(item.repoBoard.id)?.autoPickupError, "");
+    const check = new DatabaseSync(join(item.dir, "board.sqlite"));
+    try { assert.equal((check.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('boards') WHERE name='autoPickupResumeOnResolution'").get() as { n: number }).n, 0); }
+    finally { check.close(); }
   } finally { reopened?.close(); await item.close(); }
 });
-
 test("a rolling six-start limit prevents unbounded model spend and persists after reopening", async () => {
   const item = fixture();
   try {
@@ -466,13 +413,10 @@ test("a temporary provider failure retries after 1, 5 and 15 minutes, then the f
     item.pickup.tick();
     assert.equal(
       item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,
-      false,
+      true,
     );
-    assert.match(
-      item.board.getBoard(item.repoBoard.id)?.autoPickupError ?? "",
-      /automatic run failed/i,
-    );
-    assert.equal(item.board.listRuns(waiting.id).length, 0);
+    assert.equal(item.board.listRuns(waiting.id).length, 1, "the next card starts");
+    assert.equal(item.board.listRuns(stuck.id).length, 4, "the failed card is not restarted");
     assert.match(
       item.board.listCardEvents(stuck.id).at(-1)!.reason,
       /after 3 automatic retries/,
@@ -482,7 +426,7 @@ test("a temporary provider failure retries after 1, 5 and 15 minutes, then the f
   }
 });
 
-test("a non-transient provider failure pauses pickup at once without a retry", async () => {
+test("an authentication failure pauses pickup at once without a retry, since every card would fail", async () => {
   const item = fixture();
   try {
     providerFailurePi(
@@ -503,12 +447,18 @@ test("a non-transient provider failure pauses pickup at once without a retry", a
       false,
     );
     assert.equal(item.board.listRuns(waiting.id).length, 0);
+    assert.match(item.board.getBoard(item.repoBoard.id)?.autoPickupError ?? "", /authentication or billing/);
+    // Turning pickup back on starts the next card; the old refusal does not pause it again.
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
+    assert.equal(item.board.listRuns(waiting.id).length, 1);
   } finally {
     await item.close();
   }
 });
 
-test("an automatic run the operator stops after a temporary provider error is not retried and pauses pickup", async () => {
+test("an automatic run the operator stops after a temporary provider error is not retried, and pickup carries on", async () => {
   const item = fixture();
   try {
     const event = JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "429 rate_limit_error" } });
@@ -524,7 +474,7 @@ test("an automatic run the operator stops after a temporary provider error is no
     assert.equal(card.autoRetryAt, null);
     assert.equal(item.board.listRuns(stopped.id)[0].retryScheduled, 0);
     item.pickup.tick();
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, false);
-    assert.equal(item.board.listRuns(waiting.id).length, 0);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
+    assert.equal(item.board.listRuns(waiting.id).length, 1);
   } finally { await item.close(); }
 });

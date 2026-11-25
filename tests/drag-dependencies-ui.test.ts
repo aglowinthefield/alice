@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-const card = (id: string, status: string, dependsOn: string[] = []) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual", status,
+const card = (id: string, status: string, dependsOn: string[] = []) => ({ id, title: `${id} card`, body: "Done when the lane shows it.", repo: "/tmp/repo", source: "manual", status,
   priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: status === "done" ? 1 : 0, dependsOn, blocked: dependsOn.length > 0 });
 
 async function drag(initial: ReturnType<typeof card>[]) {

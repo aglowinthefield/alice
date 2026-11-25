@@ -21,9 +21,10 @@ export type PullRequest = {
 
 const remembered = new Map<string, PullRequest[]>();
 const chip: Record<string, string> = {
-  passing: "border-emerald-500/40 bg-emerald-500/10 text-emerald-500",
-  failing: "border-red-500/40 bg-red-500/10 text-red-500",
-  pending: "border-amber-500/40 bg-amber-500/10 text-amber-500",
+  passing: "border-status-review/40 bg-status-review/10 text-status-review",
+  failing: "border-status-failed/40 bg-status-failed/10 text-status-failed",
+  pending:
+    "border-status-interrupted/40 bg-status-interrupted/10 text-status-interrupted",
 };
 
 /** Open pull requests of one repository: CI state and a button that queues the green ones on Trunk. */
@@ -117,7 +118,7 @@ export function PullRequests({
               <GitPullRequest
                 size={15}
                 aria-label={pr.isDraft ? "Draft" : "Open"}
-                className={`shrink-0 ${pr.isDraft ? "text-muted-foreground" : "text-emerald-500"}`}
+                className={`shrink-0 ${pr.isDraft ? "text-muted-foreground" : "text-status-review"}`}
               />
               <div className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{pr.title}</span>
@@ -131,7 +132,7 @@ export function PullRequests({
                 </span>
               )}
               {conflicting && (
-                <span className="shrink-0 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-xs text-red-500">
+                <span className="shrink-0 rounded border border-status-failed/40 bg-status-failed/10 px-2 py-0.5 text-xs text-status-failed">
                   Conflicts
                 </span>
               )}

@@ -138,6 +138,8 @@ test("command palette: open anywhere, search cards, run board actions", async ()
       request.url().endsWith("/api/boards/board/cards/a1b2c3d4-0000/status"),
     );
     await page.keyboard.press("Enter");
+    // The card has no description, so the same check as dragging to Ready asks first.
+    await page.getByRole("button", { name: "Ready anyway" }).click();
     assert.deepEqual((await moved).postDataJSON(), { status: "ready" });
     await palette.waitFor({ state: "detached" });
 

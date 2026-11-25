@@ -65,7 +65,15 @@ export class Updates {
       // left out: approving a card adds a "Merge card:" commit on top of the card's own, which would list it twice.
       const ranges = [this.originMain() && "HEAD..refs/remotes/origin/main", this.installedHead && `${this.installedHead}..HEAD`];
       const log = ranges.filter((range): range is string => !!range).map(range => this.git("log", "--no-merges", "--format=%h%x09%s", range)).filter(Boolean).join("\n");
-      this.commits = log ? log.split("\n").map(line => { const [sha, ...subject] = line.split("\t"); return { sha, subject: subject.join("\t") }; }) : [];
+      // A reworked card lands one commit per attempt under the same subject; list it once, under the newest.
+      const seen = new Set<string>();
+      this.commits = (log ? log.split("\n") : []).flatMap(line => {
+        const [sha, ...rest] = line.split("\t");
+        const subject = rest.join("\t");
+        if (seen.has(subject)) return [];
+        seen.add(subject);
+        return [{ sha, subject }];
+      });
       const targets = [this.originMain() && "refs/remotes/origin/main", "HEAD"].filter((ref): ref is string => !!ref);
       this.restart = this.commits.length > 0 && targets.some(target => this.needsRestart(target));
     } catch (error) {

@@ -6,6 +6,7 @@ import { formatCost } from "./usage.js";
 import { RepoBadge } from "./repo-badge.js";
 import { repoName } from "./repo-appearance.js";
 import {
+  agentApproved,
   needsYourReview,
   reviewWaitText,
   type Board,
@@ -52,13 +53,16 @@ export function Today({
     .filter(
       (card) =>
         card.status in needsYou &&
-        (card.status !== "review" || needsYourReview(card)),
+        (card.status !== "review" ||
+          (needsYourReview(card) && !agentApproved(card))),
     )
     .sort(
       (a, b) =>
         needsYouStatuses.indexOf(a.status) -
           needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
     );
+  // Approved by the agent reviewer: only your Approve is left, so they stay out of "Needs you".
+  const approved = cards.filter(agentApproved).sort(oldestFirst);
   const running = cards.filter(
     (card) =>
       card.status === "running" ||
@@ -71,7 +75,7 @@ export function Today({
   const spent = boards.reduce((sum, board) => sum + (board.cost24h ?? 0), 0);
   return (
     <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
+      <div className="mb-2 text-sm text-muted-foreground">
         {new Date().toLocaleDateString([], {
           weekday: "long",
           month: "long",
@@ -107,6 +111,16 @@ export function Today({
           label={(card) => needsYou[card.status] ?? card.status}
         />
       </Section>
+      {approved.length > 0 && (
+        <Section title="Agent approved">
+          <CardList
+            cards={approved}
+            boards={boards}
+            onOpen={onOpen}
+            label={() => "Approve"}
+          />
+        </Section>
+      )}
       {running.length > 0 && (
         <Section title="In progress">
           <CardList
@@ -137,10 +151,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   const id = `today-${title.toLowerCase().replace(/\W+/g, "-")}`;
   return (
     <section aria-labelledby={id} className="mt-10">
-      <h2
-        id={id}
-        className="mb-3 text-[11px] font-semibold uppercase tracking-[.18em] text-muted-foreground"
-      >
+      <h2 id={id} className="mb-3 text-sm font-semibold text-muted-foreground">
         {title}
       </h2>
       {children}

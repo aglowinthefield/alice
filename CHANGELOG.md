@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The attempt after a run timeout continues the timed-out Pi session with a short message ("You ran out of time on the previous attempt…") asking it to finish the remaining work and write its report, instead of sending the whole task again, so the agent picks up where it stopped. If the session file is gone it starts a fresh session with the whole task.
 - Moving a Triage card to Ready checks its text first. A card that asks for something only a person can do (a physical device, screenshots by hand, staging or production) or never says what done looks like shows its flags with **Edit** and **Ready anyway**; nothing is blocked. `bakery-cli ready` prints the flags and needs `--yes` to move a flagged card.
 - `bakery-cli open [CARD_ID]` opens the board, or a card by its short ID, in the browser and prints the URL. `--print` prints without opening.
 - Ten minutes before the 60-minute run timeout, Bakery tells a run still going to stop starting new work and write its report with evidence attached. A run that settles in time reaches Review with that report instead of being killed without one.

@@ -11,6 +11,13 @@ const providerSummaries: Record<ProviderFailureKind, string> = {
   unknown: "Provider request failed",
 };
 
+const RUN_TIMEOUT = /Bakery sent SIGTERM: (\d+)-minute run timeout/;
+
+/** True when Bakery killed the run at its run timeout (see the worker's `finish` call), not for any other failure. */
+export function isRunTimeout(error: string | null): boolean {
+  return !!error && RUN_TIMEOUT.test(error);
+}
+
 /**
  * A few words on why a Failed card failed, for its board tile. Reads the latest run's error text (see the worker's
  * `finish` calls) and the PR state; the full text stays on the card's details. Null when nothing explains it.
@@ -19,7 +26,7 @@ export function summarizeFailure(input: { error: string | null; failureKind: str
   const { error, failureKind } = input;
   if (isProviderFailureKind(failureKind)) return providerSummaries[failureKind];
   if (!error) return input.prState === "CLOSED" ? "PR closed unmerged" : null;
-  const timeout = error.match(/Bakery sent SIGTERM: (\d+)-minute run timeout/);
+  const timeout = error.match(RUN_TIMEOUT);
   const stuck = error.match(/; stuck in ([\w-]+) for (\d+) min/);
   if (timeout && stuck && Number(stuck[2]) >= 1) return `Timed out: ${stuck[1]} ran ${stuck[2]} min`;
   if (timeout) return `Timed out after ${timeout[1]} min`;

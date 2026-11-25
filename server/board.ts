@@ -134,6 +134,8 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   failureKind: ProviderFailureKind | null;
   /** Id of the failed run whose rejected session this run replaced with a fresh one; null for ordinary runs. */
   recoveryOf: string | null;
+  /** Pi's session file for this run, as Pi itself reported it at startup; null when unknown (older runs, or Pi never got that far). */
+  sessionFile: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
@@ -379,6 +381,8 @@ export class Board {
     }
     // The failed run a fresh-session recovery run replaced. Later runs on the card resume the recovery run's session.
     if (!runColumns.has("recoveryOf")) this.db.exec("ALTER TABLE runs ADD COLUMN recoveryOf TEXT");
+    // Lets the attempt after a run timeout check the session is still there before continuing it.
+    if (!runColumns.has("sessionFile")) this.db.exec("ALTER TABLE runs ADD COLUMN sessionFile TEXT");
     if (!runColumns.has("retryScheduled")) this.db.exec("ALTER TABLE runs ADD COLUMN retryScheduled INTEGER NOT NULL DEFAULT 0");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
@@ -1606,6 +1610,7 @@ export class Board {
       return this.getCard(cardId)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  recordSessionFile(id: string, path: string) { this.db.prepare("UPDATE runs SET sessionFile=? WHERE id=?").run(path, id); }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {
     // Keep a bounded tail. Store only human-readable text; never raw tool arguments or credentials.

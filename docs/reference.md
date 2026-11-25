@@ -169,6 +169,7 @@ flowchart TD
 In the repository's settings, **Push main to origin after merging** (local-merge boards, off by default) runs `git push origin main` after the fast-forward, for agent-reviewer merges too. If the push fails, the card stays Done and its History says why.
 
 - Manual approval doesn't run tests or CI, and doesn't push.
+- Bakery commits and merges as you: your Git `user.name` and `user.email`, signed if your config signs commits (`commit.gpgsign`). Only a repository with no name or email configured gets `Bakery <bakery@localhost>` in its place.
 - Your own uncommitted edits on `main` stay in place. Git refuses a merge that would overwrite them.
 - **Fix conflict with Pi** starts a new attempt in the card's worktree. Pi may merge `main` into the card branch and commit there, but must not touch `main`.
 - After a conflict fix, you review the result again before it merges.

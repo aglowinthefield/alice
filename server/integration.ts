@@ -8,6 +8,7 @@ import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from 
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
+import { commitIdentityArgs } from "./git-identity.js";
 import { featureOffMessage } from "../src/features.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
@@ -102,7 +103,7 @@ function mergeRemoteBranch(worktree: string, branch: string, scratch = false): {
   const blocker = scratch ? "" : mergeBlocker(worktree, branch);
   if (blocker) throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks, but Bakery could not merge them: ${blocker}. Nothing was changed or pushed. Fix that in ${worktree}, then approve again`);
   try {
-    git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
+    git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
   } catch (error) {
     let files = "";
     try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean).join(", "); } catch { /* Not mid-merge. */ }
@@ -492,10 +493,10 @@ export class Integration {
     if (await gitAsync(worktree, ["diff", "--cached", "--name-only"], signal)) {
       await gitAsync(worktree, ["diff", "--cached", "--check"], signal);
       step("Committing the card's work (the repository's pre-commit hooks run)");
-      try { await gitAsync(worktree, ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal); }
+      try { await gitAsync(worktree, [...commitIdentityArgs(worktree), "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal); }
       catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // Identity and message are set above, so a failed commit here is the repository's commit hooks refusing it.
+        // Identity and message are always set, so a failed commit here is the repository's commit hooks refusing it.
         if (signal.aborted || !message.startsWith("commit failed: ")) throw error;
         throw new CommitHookError(message, message.slice("commit failed: ".length));
       }
@@ -656,7 +657,7 @@ export class Integration {
     if (git(worktree, "write-tree") !== reviewedTree) throw new Error("Worktree changed since review; refresh the diff before approving");
     if (git(worktree, "diff", "--cached", "--name-only")) {
       git(worktree, "diff", "--cached", "--check");
-      git(worktree, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
+      git(worktree, ...commitIdentityArgs(worktree), "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
     }
     if (!clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
     const candidate = git(worktree, "rev-parse", "HEAD");
@@ -756,7 +757,7 @@ export class Integration {
     try {
       git(repo, "worktree", "add", "--detach", scratch, base);
       try {
-        git(scratch, "-c", "user.name=Bakery", "-c", "user.email=bakery@localhost", "merge", "--no-ff", "--no-edit", ...mergeMessage(card), approved.candidate);
+        git(scratch, ...commitIdentityArgs(scratch), "merge", "--no-ff", "--no-edit", ...mergeMessage(card), approved.candidate);
       } catch (error) {
         // No integration was published. Read the scratch index before removing it so the UI can name the conflicts.
         let files: string[] = [];

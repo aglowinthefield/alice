@@ -27,14 +27,30 @@ function httpStatus(text: string): number | null {
   return status || null;
 }
 
+/**
+ * Network, gateway and server wording that names a passing failure even without a 5xx status. Pi retries these itself
+ * (pi-ai's `RETRYABLE_PROVIDER_ERROR_PATTERN`), so what reaches Bakery is one Pi gave up on, and it often carries no
+ * status: "Connection error.", "terminated", "other side closed", "stream ended before message_stop".
+ */
+const TRANSIENT = new RegExp([
+  "overloaded", "server_busy", "servers are currently busy", "high demand", "at capacity",
+  "service.?(?:is.?)?(?:temporarily.?)?unavailable", "server.?error", "internal.?error", "provider.?returned.?(?:an.?)?error",
+  "upstream.?(?:request.?failed|connect|timeout)", "unable to forward upstream", "upstream_stream_read_error",
+  "network.?error", "connection.?(?:error|refused|lost|closed|reset)", "other side closed", "fetch failed", "getaddrinfo",
+  "(?<![a-z0-9_])(?:ECONNRESET|ECONNABORTED|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND)(?![a-z0-9_])",
+  "socket hang up", "socket connection was closed", "reset before headers", "timed? ?out", "terminated",
+  "websocket.?(?:closed|error)", "stream was interrupted", "ended without", "stream ended before", "stream disconnected",
+  "cut short", "pending stream has been canceled", "tunnel destination",
+].join("|"), "i");
+
 export function classifyProviderFailure(text: string | null | undefined): ProviderFailureKind {
   if (!text) return "unknown";
   const status = httpStatus(text);
   if (/reverse engineering or duplicating model outputs/i.test(text)) return "output-blocked";
   if (status === 402 || /credit balance|billing|payment required|insufficient[_ ](quota|funds)|exceeded your current quota/i.test(text)) return "billing";
   if (status === 401 || status === 403 || /authentication_error|permission_error|invalid[ _-]?(x-)?api[ _-]?key|unauthorized|oauth token (has )?expired/i.test(text)) return "auth";
-  if (status === 429 || /rate[_ ]limit/i.test(text)) return "rate-limit";
-  if (status !== null && status >= 500 || /overloaded|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|timed? ?out|tunnel destination/i.test(text)) return "transient";
+  if (status === 429 || /rate[_ ]limit|too many requests/i.test(text)) return "rate-limit";
+  if (status !== null && status >= 500 || TRANSIENT.test(text)) return "transient";
   if (status === 400 && /invalid_request_error/.test(text) && /"message":"messages\.\d+|tool_reference_unresolved|role 'system' must precede/i.test(text)) return "invalid-history";
   if (status !== null && status >= 400 || /invalid_request_error/.test(text)) return "invalid-request";
   return "unknown";

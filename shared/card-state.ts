@@ -5,6 +5,8 @@ import type { Card, CardStatus, ReviewAction, ReviewWait } from "./wire.js";
 export const reviewActionLabels: Record<ReviewAction, string> = {
   pr_ready: "PR ready",
   accept_findings: "Accept findings",
+  agent_approved: "Agent approved",
+  needs_you: "Needs you",
 };
 export const reviewWaitLabels: Record<ReviewWait, string> = {
   agent_review: "Agent reviewing",
@@ -15,6 +17,11 @@ export const reviewWaitLabels: Record<ReviewWait, string> = {
 /** A Review card you can act on now, rather than one an agent, CI or GitHub still has. */
 export const needsYourReview = (card: Pick<Card, "status" | "reviewWait">) =>
   card.status === "review" && !card.reviewWait;
+
+/** An agent reviewer approved the card; it waits only for your Approve, not for you to fix something. */
+export const agentApproved = (
+  card: Pick<Card, "status" | "reviewWait" | "reviewAction">,
+) => needsYourReview(card) && card.reviewAction === "agent_approved";
 
 /** The next step on a Review card you can act on, or "" while it is waiting or the step is not known yet. */
 export const reviewActionText = (

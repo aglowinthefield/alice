@@ -205,11 +205,11 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { service: 1, doctor: 0, open: 0, limits: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw unknown(command);
   if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
-  if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "limits" ? args.length > 1 || (args.length === 1 && !["on", "off"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
+  if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "limits" ? args.length > 1 || (args.length === 1 && !["on", "off"].includes(args[0])) : command === "agents" ? args.length > 1 || (args.length === 1 && !/^(auto|\d{1,2})$/.test(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
@@ -263,6 +263,13 @@ async function main() {
     // The server resolves PATH to its git root and refuses a repository that already has a board.
     const added = await request(origin, "/api/boards", "POST", { repo: resolve(args[0] ?? process.cwd()) });
     print(added, opts.json, [`${added.id}\t${added.repo}`]);
+    return;
+  }
+  if (command === "agents") {
+    if (opts.board) throw new Error("--board is not valid with agents; the limit covers every board");
+    const settings = args.length ? await request(origin, "/api/settings", "PATCH", { maxActiveAgents: args[0] === "auto" ? 0 : Number(args[0]) }) : await request(origin, "/api/settings");
+    print({ maxActiveAgents: settings.maxActiveAgents, limit: settings.activeAgentsLimit, active: settings.activeAgents }, opts.json,
+      [`Agents at once, all boards: ${settings.activeAgentsLimit}${settings.maxActiveAgents ? "" : " (automatic)"}; ${settings.activeAgents} running now. Automatic work waits for a slot; runs you start always start.`]);
     return;
   }
   const boards = await request(origin, "/api/boards");
@@ -438,7 +445,8 @@ async function main() {
     const daily = updated.pickupDailyLimit === 0 ? "no daily start limit" : `${updated.pickupDailyLimit} starts per 24h`;
     const budget = typeof updated.pickupCostBudget === "number" ? `${money(updated.pickupCostBudget)} daily budget` : "no budget";
     const diff = updated.autoReviewMaxFiles || updated.autoReviewMaxPatchChars ? `review diffs up to ${updated.autoReviewMaxFiles || "any"} files / ${updated.autoReviewMaxPatchChars || "any"} characters` : "no review diff caps";
-    print(updated, opts.json, [`Limits ${updated.limitsEnabled ? "on" : "off"}${updated.limitsEnabled ? "" : " (stored, not applied)"}: ${daily}; ${budget}; ${diff}. Concurrency ${updated.pickupConcurrency} runs, ${updated.autoReviewConcurrency ?? 1} reviews; loop guards always apply.`]);
+    print(updated, opts.json, [`Limits ${updated.limitsEnabled ? "on" : "off"}${updated.limitsEnabled ? "" : " (stored, not applied)"}: ${daily}; ${budget}; ${diff}. Concurrency ${updated.pickupConcurrency} runs, ${updated.autoReviewConcurrency ?? 1} reviews; loop guards always apply.`,
+      ...await request(origin, "/api/settings").then(settings => typeof settings.activeAgentsLimit === "number" ? [`All boards: ${settings.activeAgents} of ${settings.activeAgentsLimit} agents running (bakery-cli agents).`] : [], () => [])]);
   } else if (command === "pickup") {
     const summary = pickupSummary;
     if (!args.length) { print(board, opts.json, [summary(board)]); return; }

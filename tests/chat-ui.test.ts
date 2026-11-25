@@ -378,18 +378,25 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
   try {
     const page = await (await browser.newContext()).newPage();
     const patches: unknown[] = [];
+    // Keeps each save like the real server does, so the chat list's periodic refresh never hands back the old choice.
+    let saved = chat;
+    let thirdSave!: () => void;
+    const savedThree = new Promise<void>(resolve => { thirdSave = resolve; });
     await page.route("**/api/**", async route => {
       const request = route.request(), path = new URL(request.url()).pathname;
       if (path === "/api/boards") return route.fulfill({ json: boards });
       if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
       if (path === "/api/models") return route.fulfill({ json: { models: ["openai/gpt-6.1-sol", "anthropic/claude-sonnet-4-5"] } });
-      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [chat] });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [saved] });
       if (path === "/api/boards/b1/chats/c1" && request.method() === "PATCH") {
         const input = request.postDataJSON();
         patches.push(input);
-        return route.fulfill({ json: { ...chat, ...input } });
+        saved = { ...saved, ...input };
+        await route.fulfill({ json: saved });
+        if (patches.length === 3) thirdSave();
+        return;
       }
-      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: saved, messages: [], live: null } });
       if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "live", live: null })}\n\n` });
       await route.fulfill({ json: [] });
     });
@@ -402,8 +409,7 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
     await model.fill("anthropic/claude-sonnet-4-5");
     await model.press("Enter");
     await thinking.selectOption("medium");
-    // Picks save one after another; wait for all three instead of a fixed delay a loaded runner can outlast.
-    await waitUntil(() => patches.length >= 3);
+    await savedThree;
     assert.deepEqual(patches, [
       { model: "openai/gpt-6.1-sol", thinking: "high" },
       { model: "anthropic/claude-sonnet-4-5", thinking: "high" },

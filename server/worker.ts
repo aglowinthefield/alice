@@ -2,12 +2,11 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { command } from "./platform.js";
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { agentLabel, messageUsage } from "./agent.js";
+import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
 import { piModelArgs, type AgentPhase } from "../shared/agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
 import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from "./board.js";
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
-import { describeToolCall } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 import { commitIdentityArgs } from "./git-identity.js";
 import { loopGuards } from "./repo-limits.js";
@@ -23,13 +22,6 @@ function fetchOrigin(repo: string) {
 function isAncestor(repo: string, ancestor: string, descendant: string) {
   try { execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant], { stdio: "ignore" }); return true; }
   catch (error) { if ((error as { status?: number }).status === 1) return false; throw error; }
-}
-
-// Keep Pi's error text so the card shows why the provider call failed; cap it so one line cannot flood the transcript.
-function providerFailure(error: unknown): string {
-  const text = typeof error === "string" ? error.trim() : "";
-  const status = text.match(/\b[45]\d{2}\b/)?.[0];
-  return `Provider request failed${status ? ` (HTTP ${status})` : ""}${text ? `: ${text.slice(0, 1000)}` : ""}`;
 }
 
 // Anthropic's classifier sometimes blocks a long run as "reverse engineering or duplicating model outputs". The
@@ -51,7 +43,6 @@ export class PoisonedSessionError extends Error {
 
 const RECOVERY = "The earlier Pi session for this card was rejected by the model provider (invalid message history), so this is a fresh session that has none of its conversation. The card's worktree, branch and uncommitted edits are untouched and may hold that session's partial work: check `git status` and `git diff` first and build on them rather than starting over. Do not discard or reset existing changes. ";
 
-import type { LiveActivity } from "../shared/wire.js";
 export type { LiveActivity };
 
 // Screenshots read back into a session make single events several MB; the cap only guards against a runaway line.
@@ -80,7 +71,8 @@ export class Worker {
     if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
   /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
-  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run): Run {
+  /** `byPerson`: the operator asked for this run, so the machine's agent limit does not refuse it. */
+  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run, byPerson = false): Run {
     if (this.draining) throw new Error("Bakery is waiting for active runs to finish before restarting to load code changes; start this run after the restart");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
@@ -108,7 +100,7 @@ export class Worker {
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     // A session the provider rejected replays the same history every time; only an explicit recovery gets past it.
     if (!recoverFrom && latestRun?.status === "failed" && latestRun.failureKind === "invalid-history") throw new PoisonedSessionError(card.id, latestRun.id, `run ${latestRun.attempt}`);
-    const run = this.board.claim(card.id, startedBy, why, false, recoverFrom?.id ?? null);
+    const run = this.board.claim(card.id, startedBy, why, false, recoverFrom?.id ?? null, byPerson);
     const prMode = this.board.integrationFor(card.repo) === "github-pr";
     let created = false;
     let mainMerged = "";
@@ -299,7 +291,7 @@ export class Worker {
     // The wrap-up extension watches this file; Bakery writes it once, shortly before the run timeout.
     const wrapUpFile = join(this.dataDir, "wrap-up", run.id);
     try {
-      const models = piModelArgs(this.board.agentModelFor(card.repo, phase));
+      const models = piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt));
       child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
@@ -308,9 +300,31 @@ export class Worker {
     // Pi writes each event as one JSON line, and a line holding a screenshot can run to several MB.
     // Chunks stay as Buffers until a newline arrives, so a long line is concatenated once rather than rescanned per chunk.
     let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
-    let settled = false, aborted = false, terminalModelError: string | null = null, protocolError: string | null = null, stderr = "";
-    let turn = 0, lastWorktreeSnapshot = "", lastAgent = "";
-    const tools = new Map<string, { name: string; finished: boolean; failed: boolean; since: number; detail: string }>();
+    let stream = initialPiStreamState(), stderr = "", lastWorktreeSnapshot = "";
+    const applyEffect = (effect: PiEffect) => {
+      switch (effect.type) {
+        case "append": this.board.append(run.id, effect.text); break;
+        case "recordAgent": this.board.recordAgent(run.id, effect.label); break;
+        case "recordUsage": this.board.recordUsage(run.id, effect.usage); break;
+        case "recordReport": this.board.recordReport(run.id, effect.text); break;
+        case "completeTurn": this.board.completeTurn(run.id); break;
+        case "live": this.live.set(run.id, effect.activity); break;
+        case "snapshotWorktree":
+          try {
+            const paths = [
+              execFileSync("git", ["-C", worktree, "diff", "--name-only", "-z", "HEAD", "--"], { encoding: "utf8" }),
+              execFileSync("git", ["-C", worktree, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }),
+            ].flatMap(list => list.split("\0").filter(Boolean)).sort();
+            const snapshot = JSON.stringify(paths);
+            if (paths.length && snapshot !== lastWorktreeSnapshot) {
+              const shown = paths.slice(0, 3).map(path => path.replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 80));
+              this.board.append(run.id, `worktree: ${paths.length} changed file${paths.length === 1 ? "" : "s"} (${shown.join(", ")}${paths.length > shown.length ? `, +${paths.length - shown.length} more` : ""})\n`);
+            }
+            lastWorktreeSnapshot = snapshot;
+          } catch { /* A transcript hint must not fail the run if Git is unavailable. */ }
+          break;
+      }
+    };
     let touchedAt = Date.now();
     child.stdout?.on("data", (chunk: Buffer) => {
       // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
@@ -320,7 +334,7 @@ export class Worker {
       if (chunk.indexOf(10) < 0) {
         if (pendingBytes > MAX_PI_EVENT_BYTES) {
           overflowed = true; pending = []; pendingBytes = 0;
-          protocolError = "Pi event exceeded 500 MB"; this.terminate(run.id, child, "Pi event exceeded 500 MB");
+          stream = { ...stream, protocolError: "Pi event exceeded 500 MB" }; this.terminate(run.id, child, "Pi event exceeded 500 MB");
         }
         return;
       }
@@ -328,63 +342,10 @@ export class Worker {
       let start = 0, i: number;
       while ((i = data.indexOf(10, start)) >= 0) {
         const line = data.toString("utf8", start, i).replace(/\r$/, ""); start = i + 1;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "agent_settled") { settled = true; aborted = event.aborted === true; }
-          if (event.type === "message_start" || event.type === "message_end") {
-            const label = agentLabel(event.message);
-            if (label && label !== lastAgent) { lastAgent = label; this.board.recordAgent(run.id, label); }
-          }
-          if (event.type === "message_end" && event.message?.role === "assistant") {
-            const usage = messageUsage(event.message);
-            if (usage) this.board.recordUsage(run.id, usage);
-            if (event.message.stopReason !== "error" && Array.isArray(event.message.content))
-              this.board.recordReport(run.id, event.message.content.filter((part: { type?: string }) => part?.type === "text").map((part: { text?: unknown }) => typeof part.text === "string" ? part.text : "").join(""));
-            if (event.message.stopReason === "error") {
-              terminalModelError = providerFailure(event.message.errorMessage);
-              this.board.append(run.id, `\n${terminalModelError}; Pi may retry.\n`);
-            } else if (terminalModelError) {
-              terminalModelError = null;
-              this.board.append(run.id, "\nPi recovered and continued after a provider error.\n");
-            }
-          }
-          if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") this.board.append(run.id, event.assistantMessageEvent.delta);
-          if (event.type === "turn_start") { turn++; tools.clear(); }
-          if (event.type === "tool_execution_start" && typeof event.toolCallId === "string") {
-            const name = typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName) ? event.toolName : "tool";
-            tools.set(event.toolCallId, { name, finished: false, failed: false, since: Date.now(), detail: describeToolCall(event.args, worktree) });
-            this.live.set(run.id, { tool: name, turn: turn || 1, since: new Date().toISOString() });
-          }
-          if (event.type === "tool_execution_end" && typeof event.toolCallId === "string") {
-            const tool = tools.get(event.toolCallId);
-            if (tool) { tool.finished = true; tool.failed = event.isError === true; }
-          }
-          if (event.type === "turn_end") this.board.completeTurn(run.id);
-          if (event.type === "turn_end" && tools.size) {
-            const counts = new Map<string, number>();
-            let failed = 0, unfinished = 0;
-            for (const tool of tools.values()) {
-              counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
-              if (!tool.finished) unfinished++;
-              else if (tool.failed) failed++;
-            }
-            const summary = [...counts].map(([name, count]) => `${name} ×${count}`).join(", ");
-            this.board.append(run.id, `\nTurn ${turn || 1}: ${summary}${failed ? `; ${failed} failed` : ""}${unfinished ? `; ${unfinished} unfinished` : ""}\n`);
-            try {
-              const paths = [
-                execFileSync("git", ["-C", worktree, "diff", "--name-only", "-z", "HEAD", "--"], { encoding: "utf8" }),
-                execFileSync("git", ["-C", worktree, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }),
-              ].flatMap(list => list.split("\0").filter(Boolean)).sort();
-              const snapshot = JSON.stringify(paths);
-              if (paths.length && snapshot !== lastWorktreeSnapshot) {
-                const shown = paths.slice(0, 3).map(path => path.replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 80));
-                this.board.append(run.id, `worktree: ${paths.length} changed file${paths.length === 1 ? "" : "s"} (${shown.join(", ")}${paths.length > shown.length ? `, +${paths.length - shown.length} more` : ""})\n`);
-              }
-              lastWorktreeSnapshot = snapshot;
-            } catch { /* A transcript hint must not fail the run if Git is unavailable. */ }
-            tools.clear();
-          }
-        } catch { protocolError = "Invalid Pi event stream"; }
+        const result = reducePiLine(stream, line, { now: Date.now(), worktree });
+        stream = result.state;
+        try { for (const effect of result.effects) applyEffect(effect); }
+        catch { stream = { ...stream, protocolError: INVALID_STREAM }; }
       }
       pending = start < data.length ? [data.subarray(start)] : [];
       pendingBytes = data.length - start;
@@ -409,10 +370,11 @@ export class Worker {
       if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
+      const { settled, aborted, terminalModelError, protocolError } = stream;
       const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
       // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
       // Name the call a killed run was stuck in, so a timeout says what ate the time.
-      const running = [...tools.values()].filter(tool => !tool.finished).sort((a, b) => a.since - b.since)[0];
+      const running = stuckTool(stream);
       const stuck = running ? `; stuck in ${running.name} for ${Math.round((Date.now() - running.since) / 60_000)} min${running.detail ? `: ${running.detail}` : ""}` : "; no tool was running";
       const termination = reason ? `; Bakery sent SIGTERM: ${reason}${stuck}`
         : signal || code === 143 ? "; termination source unknown (Bakery did not send SIGTERM)" : "";
@@ -458,7 +420,7 @@ export class Worker {
     const failed = this.board.listRuns(cardId)[0];
     if (card.status !== "failed" || failed?.status !== "failed" || failed.failureKind !== "invalid-history")
       throw new Error("Only a failed card whose latest run was rejected for an invalid message history can be recovered in a fresh session");
-    const run = this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed);
+    const run = this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed, startedBy === "manual");
     this.board.append(run.id, `Fresh-session recovery of attempt ${failed.attempt}, whose session ${failed.sessionId} the provider rejected. That session and its log are kept as evidence.\n`);
     return this.board.getRun(run.id)!;
   }

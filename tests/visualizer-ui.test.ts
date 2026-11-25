@@ -179,10 +179,11 @@ test("a running card shows its live tool, turn and elapsed time, and the time ti
   const page = await open([card("root", "done"), card("mid", "running", ["root"], { live: { tool: "bash", turn: 7, since } })]);
   try {
     const label = page.locator('[data-viz-label="mid"]');
-    await page.waitForFunction(() => /bash · turn 7 · 1\ds/.test(document.querySelector('[data-viz-label="mid"]')?.textContent ?? ""));
+    // At least 10s: counted from `since`, not from page load. A slow page load under CI pushes it past 19s.
+    await page.waitForFunction(() => /bash · turn 7 · \d{2,}s/.test(document.querySelector('[data-viz-label="mid"]')?.textContent ?? ""));
     const first = await label.textContent();
     await page.waitForFunction((was) => document.querySelector('[data-viz-label="mid"]')!.textContent !== was, first, { timeout: 3000 });
-    assert.match((await label.textContent())!, /bash · turn 7 · 1\ds/);
+    assert.match((await label.textContent())!, /bash · turn 7 · \d{2,}s/);
   } finally { await page.close(); }
 });
 

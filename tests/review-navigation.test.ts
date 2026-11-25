@@ -216,7 +216,7 @@ test("Run again is unavailable while agent review is running and returns when it
     await page.getByText("Agent review: checking").waitFor();
     assert.equal(await runAgain.isDisabled(), true);
     reviewState = "needs_human";
-    await page.getByText("Agent review: needs human review").waitFor();
+    await page.getByText("Agent review: needs you").waitFor();
     assert.equal(await runAgain.isEnabled(), true);
     assert.equal(starts, 0);
   } finally { await page.close(); }

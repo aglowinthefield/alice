@@ -30,6 +30,8 @@ export type ProviderFailureKind =
   | "rate-limit"
   | "transient"
   | "unknown";
+/** Why a run happened, so a card's cost can be split into its first attempt and the rework after it. */
+export type RunKind = "first" | "send_back" | "ci_fix" | "retry" | "rerun";
 /** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
 export type LiveActivity = { tool: string; turn: number; since: string };
 
@@ -42,8 +44,14 @@ export type ReviewWait = "agent_review" | "ci_fix" | "github";
  * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
  * something else (an approval in progress, a merge failure, a closed PR or failing checks) has to be dealt with first.
+ * `agent_approved`: the agent reviewer approved the latest attempt and only your Approve is left. `needs_you`: the
+ * agent reviewer handed the attempt to you (a finding, a failed check).
  */
-export type ReviewAction = "pr_ready" | "accept_findings";
+export type ReviewAction =
+  | "pr_ready"
+  | "accept_findings"
+  | "agent_approved"
+  | "needs_you";
 /**
  * The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup.
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
@@ -90,6 +98,8 @@ export type Card = {
   reviewAgent: string;
   /** 1 when an older attempt or review of this card has no usage record, so its totals are a lower bound. */
   usageIncomplete: number;
+  /** Spend on every run after the first attempt; null when there were none or none recorded usage. */
+  reworkCost: number | null;
   /** Cards on the same board that must be Done or archived before this one starts. */
   dependsOn: string[];
   /** True while any card in dependsOn is not Done or archived. */
@@ -151,6 +161,8 @@ export type Run = {
   retryScheduled: number;
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null;
+  /** Why the run happened; only a card's run list carries it (see src/run-kinds.ts). */
+  kind?: RunKind;
 } & UsageFields;
 
 export type DayPoint = {

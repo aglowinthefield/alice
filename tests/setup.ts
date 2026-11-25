@@ -1,9 +1,13 @@
 import { chromium, webkit } from "playwright";
+import { sharedCaches } from "../server/shared-caches.js";
 
 // Tests that spawn `server/index.ts` poll http://127.0.0.1:<port>. When the suite runs inside a Bakery agent, the
 // environment carries Bakery's own remote-hosting settings, which would bind the test server to another address.
 delete process.env.BAKERY_HOST;
 delete process.env.BAKERY_ALLOWED_HOSTS;
+// A card run on a board with shared caches also carries their variables (server/shared-cache-env.ts), which the worker
+// would pass on to the fake agent in tests that expect them only when a board turns the cache on.
+for (const cache of Object.values(sharedCaches)) for (const name of [cache.env, ...Object.keys(cache.extraEnv)]) delete process.env[name];
 // Optional features are off in a default build (src/features.ts). Most tests cover them, so the suite turns them on;
 // tests/features.test.ts sets each combination itself.
 process.env.BAKERY_FEATURE_SENTINELS ??= "1";

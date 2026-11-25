@@ -72,8 +72,8 @@ export const COMMANDS = [
   {
     name: "ready", group: "Runs", args: "CARD_ID", summary: "move a card to Ready",
     full: "CARD_ID [--board ID|PATH] [--yes]",
-    details: "On a board with pickup on, Ready can start a paid Pi run at once, so it needs --yes there.",
-    options: [BOARD, ["--yes", "confirm on a pickup-enabled board"]],
+    details: "On a board with pickup on, Ready can start a paid Pi run at once, so it needs --yes there. A Triage card whose text asks for something only a person can do (a physical device, screenshots by hand, staging) or never says what done looks like is listed with its flags and needs --yes too.",
+    options: [BOARD, ["--yes", "confirm on a pickup-enabled board, or move a flagged card anyway"]],
   },
   {
     name: "triage", group: "Runs", args: "CARD_ID", summary: "move a card back to Triage",

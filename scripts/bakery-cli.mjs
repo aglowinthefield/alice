@@ -93,6 +93,21 @@ function selectBoard(boards, selector) {
   return matches[0];
 }
 
+/**
+ * Prints what may make the card churn before it moves to Ready (asks only a person can meet, no acceptance criteria).
+ * A flagged card needs --yes, the CLI's "Ready anyway"; with it the flags still go to stderr. Servers without the
+ * check answer 404 and the move goes ahead as before.
+ */
+async function readyCheck(origin, boardPath, id, yes) {
+  let flags;
+  try { ({ flags } = await request(origin, `${boardPath}/cards/${id}/ready-check`)); }
+  catch (error) { if (/^Bakery 404: Not found$/.test(error.message)) return; throw error; }
+  if (!flags?.length) return;
+  const lines = flags.map(flag => `  - ${flag.message}${flag.quote ? `: "${flag.quote}"` : ""}`).join("\n");
+  if (!yes) throw new Error(`This card may need another pass before a run:\n${lines}\nEdit it (bakery-cli edit ${id} --body ...), or repeat with --yes to move it to Ready anyway.`);
+  process.stderr.write(`bakery-cli: moving to Ready anyway:\n${lines}\n`);
+}
+
 function cardId(value) {
   if (!value || !/^[\w-]+$/.test(value)) throw new Error("A card ID (letters, numbers, - or _) is required");
   return value;
@@ -301,6 +316,7 @@ async function main() {
     print(card, opts.json, [`${cardLine(card)}\tdepends on:${card.dependsOn?.length ? card.dependsOn.join(",") : "none"}${card.blocked ? "\tblocked" : ""}`]);
   } else if (command === "ready" || command === "triage") {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
+    if (command === "ready") await readyCheck(origin, path, cardId(args[0]), opts.yes);
     const card = await request(origin, `${path}/cards/${cardId(args[0])}/status`, "POST", { status: command });
     print(card, opts.json, [`${card.id}\t${card.status}\t${card.title ?? ""}`]);
   } else if (command === "recover") {

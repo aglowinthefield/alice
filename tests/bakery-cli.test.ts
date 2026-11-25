@@ -44,7 +44,12 @@ async function fixture(boards: object[] = [board]) {
     }
     else if (path === `/api/boards/${board.id}/cards/purge-attachments` && req.method === "POST") data = (input as { cardIds: string[] }).cardIds.map(cardId => ({ cardId, files: 2, bytes: 10 }));
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
-    else if (path === `/api/boards/${board.id}/cards/card-one/status` && req.method === "POST") data = { id: "card-one", status: (input as { status: string }).status };
+    else if (/^\/api\/boards\/board-one\/cards\/card-(one|flagged)\/status$/.test(path) && req.method === "POST") data = { id: path.split("/")[5], status: (input as { status: string }).status };
+    // card-one stands in for an older server without the check, which answers 404.
+    else if (path === `/api/boards/${board.id}/cards/card-flagged/ready-check`) data = { flags: [
+      { rule: "person-only", message: "Needs a physical device, which the agent does not have", quote: "Verify on a physical iPhone." },
+      { rule: "no-acceptance", message: "No acceptance criteria" },
+    ] };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|two)\/start$/.test(path) && req.method === "POST") data = { id: `run-${path.split("/")[5]}`, attempt: 2, status: "running" };
     else if (path === `/api/boards/${board.id}/cards/card-three/start` && req.method === "POST") { res.writeHead(400); res.end(JSON.stringify({ error: "Move this card to Ready before starting a run" })); return; }
     else if (path === `/api/boards/${board.id}/cards/card-one/runs`) data = [
@@ -151,6 +156,26 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.match((await f.run("cards", "--key", "nightly-1")).stderr, /only valid with create/);
     assert.match((await f.run("create", "--title", "Long", "--key", "k".repeat(201))).stderr, /1 to 200/);
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }, { title: "Hotfix", body: "", priority: "urgent" }, { title: "Scripted", body: "", idempotencyKey: "nightly-1" }]);
+  } finally { await f.close(); }
+});
+
+test("ready lists a Triage card's flags and moves it only with --yes", async () => {
+  const f = await fixture([{ ...board, autoPickupEnabled: false }]);
+  try {
+    const flagged = await f.run("ready", "card-flagged");
+    assert.notEqual(flagged.code, 0);
+    assert.match(flagged.stderr, /may need another pass/);
+    assert.match(flagged.stderr, /Needs a physical device.*"Verify on a physical iPhone\."/);
+    assert.match(flagged.stderr, /No acceptance criteria/);
+    assert.match(flagged.stderr, /bakery-cli edit card-flagged .*--yes to move it to Ready anyway/s);
+    assert.equal(f.requests.filter(r => r.method === "POST").length, 0, "a flagged card stays in Triage");
+    const anyway = await f.run("ready", "card-flagged", "--yes");
+    assert.equal(anyway.code, 0, anyway.stderr);
+    assert.match(anyway.stderr, /moving to Ready anyway:\n  - Needs a physical device/);
+    assert.equal(anyway.stdout, "card-flagged\tready\t\n");
+    const unchecked = await f.run("ready", "card-one");
+    assert.equal(unchecked.code, 0, "a server without the check still moves the card");
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.path), [`/api/boards/${board.id}/cards/card-flagged/status`, `/api/boards/${board.id}/cards/card-one/status`]);
   } finally { await f.close(); }
 });
 

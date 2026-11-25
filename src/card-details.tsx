@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
+import { checkBeforeReady } from "./ready-check.js";
 import {
   Check,
   Copy,
@@ -993,14 +994,17 @@ export function CardDetails({
             {card?.status === "triage" && (
               <Button
                 disabled={busy}
-                onClick={() =>
-                  action(() =>
+                onClick={async () => {
+                  const check = await checkBeforeReady([card]);
+                  if (check.choice === "edit") onEdit(card);
+                  if (check.choice !== "ready") return;
+                  await action(() =>
                     api(`/boards/${boardId}/cards/${card.id}/status`, {
                       method: "POST",
                       body: JSON.stringify({ status: "ready" }),
                     }),
-                  )
-                }
+                  );
+                }}
               >
                 Move to Ready
               </Button>

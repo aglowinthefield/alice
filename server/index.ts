@@ -1,5 +1,6 @@
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { featureOffMessage, type Feature } from "../src/features.js";
+import { readyFlags } from "../src/card-lint.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -696,7 +697,7 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "GET" && !action) { send(res, 200, record); return; }
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history))?)?$/);
+    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history|ready-check))?)?$/);
     if (route) {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -727,6 +728,8 @@ const server = createServer(async (req, res) => {
           if (reviewedRun) board.recordChangedFiles(reviewedRun.id, reviewed.files.length);
           send(res, 200, reviewed); return;
         }
+        // What the UI shows before a Triage card moves to Ready, for the CLI to print. Advice only: /status never checks it.
+        if (req.method === "GET" && action === "ready-check") { send(res, 200, { flags: readyFlags(item) }); return; }
         if (req.method === "GET" && action === "dependencies") { send(res, 200, board.listDependencies(id)); return; }
         if (req.method === "POST" && action === "dependencies") {
           const { dependsOn } = await body(req);

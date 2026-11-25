@@ -495,6 +495,55 @@ test("a temporary provider failure retries after 1, 5 and 15 minutes, then the f
   }
 });
 
+test("an HTTP 502 from the provider proxy schedules one retry, records it on the run, and explains it on the card", async () => {
+  const item = fixture();
+  try {
+    providerFailurePi(item, '502 {"error":"acp-proxy failure: upstream-timeout ETIMEDOUT api.anthropic.com","detail":"Error: upstream request failed: kind=upstream-timeout code=ETIMEDOUT message=fetch failed"}');
+    const flaky = item.card("Proxy hiccup");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.listRuns(flaky.id)[0]?.status === "failed");
+    const [run] = item.board.listRuns(flaky.id);
+    assert.match(run.error ?? "", /^Provider request failed \(HTTP 502\)/);
+    assert.equal(run.failureKind, "transient");
+    assert.equal(run.retryScheduled, 1);
+    const card = item.board.getCard(flaky.id)!;
+    assert.equal(card.status, "ready");
+    assert.equal(card.autoRetries, 1);
+    assert.ok(card.autoRetryAt);
+    assert.match(item.board.listCardEvents(flaky.id).at(-1)!.reason, /automatic retry 1 of 3/);
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(flaky.id).length, 1, "only one retry is queued, and it waits for its backoff");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
+  } finally {
+    await item.close();
+  }
+});
+
+test("a provider failure with no explanation is not retried", async () => {
+  const item = fixture();
+  try {
+    providerFailurePi(item, "");
+    const unexplained = item.card("No detail"), waiting = item.card("Waiting");
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.pickup.tick();
+    await waitFor(() => item.board.getCard(unexplained.id)?.status === "failed");
+    const [run] = item.board.listRuns(unexplained.id);
+    assert.equal(run.failureKind, "unknown");
+    assert.equal(run.retryScheduled, 0);
+    const card = item.board.getCard(unexplained.id)!;
+    assert.equal(card.autoRetries, 0);
+    assert.equal(card.autoRetryAt, null);
+    item.pickup.tick();
+    assert.equal(item.board.getCard(unexplained.id)?.status, "failed", "the card stays Failed");
+    assert.equal(item.board.listRuns(unexplained.id).length, 1, "and is not restarted");
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled, true);
+    assert.equal(item.board.listRuns(waiting.id).length, 1, "the next card starts");
+  } finally {
+    await item.close();
+  }
+});
+
 test("an authentication failure pauses pickup at once without a retry, since every card would fail", async () => {
   const item = fixture();
   try {
@@ -510,6 +559,7 @@ test("an authentication failure pauses pickup at once without a retry, since eve
     const card = item.board.getCard(rejected.id)!;
     assert.equal(card.autoRetries, 0);
     assert.equal(card.autoRetryAt, null);
+    assert.equal(item.board.listRuns(rejected.id)[0].retryScheduled, 0);
     item.pickup.tick();
     assert.equal(
       item.board.getBoard(item.repoBoard.id)?.autoPickupEnabled,

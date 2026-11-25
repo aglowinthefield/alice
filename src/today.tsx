@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Eye } from "lucide-react";
+import { CalendarClock, Check, RotateCcw, X, Eye } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { date } from "./api.js";
 import { formatCost } from "./usage.js";
@@ -12,6 +12,12 @@ import {
   type Card,
   type Status,
 } from "./model.js";
+import { isSentinelJob } from "./sentinels.js";
+import {
+  defaultStaleReviewDays,
+  isStaleReview,
+  reviewAgeDays,
+} from "./stale-review.js";
 
 // What each status asks of you. Statuses not listed (Triage, Ready, Archived) stay on their boards.
 const needsYou: Partial<Record<Status, string>> = {
@@ -30,6 +36,27 @@ const oldestFirst = (a: Card, b: Card) =>
 export const reviewOrder = (cards: Card[]) =>
   cards.filter(needsYourReview).sort(oldestFirst);
 
+/** Review cards past their board's stale threshold, oldest first: what the daily push digest lists. */
+export const staleReviewCards = (
+  cards: Card[],
+  boards: Board[],
+  now = Date.now(),
+) =>
+  cards
+    .filter((card) => {
+      const board = boards.find((item) => item.repo === card.repo);
+      return (
+        !!board &&
+        !isSentinelJob(card) &&
+        isStaleReview(
+          card,
+          board.staleReviewDays ?? defaultStaleReviewDays,
+          now,
+        )
+      );
+    })
+    .sort((a, b) => (a.reviewSince ?? "").localeCompare(b.reviewSince ?? ""));
+
 type Props = {
   boards: Board[];
   cards: Card[];
@@ -37,6 +64,11 @@ type Props = {
   since: string;
   onOpen: (card: Card) => void;
   onReview: () => void;
+  /** Opens the card's review, where Approve is. */
+  onApprove: (card: Card) => void;
+  /** Starts a run that first brings the card's work up to date with main. */
+  onRunAgain: (card: Card) => void;
+  onClose: (card: Card) => void;
   onCapture: (board: Board, title: string) => Promise<boolean>;
 };
 
@@ -46,8 +78,12 @@ export function Today({
   since,
   onOpen,
   onReview,
+  onApprove,
+  onRunAgain,
+  onClose,
   onCapture,
 }: Props) {
+  const stale = staleReviewCards(cards, boards);
   const attention = cards
     .filter(
       (card) =>
@@ -88,6 +124,23 @@ export function Today({
         {formatCost(spent)} in the last 24h
       </p>
       <Capture boards={boards} onCapture={onCapture} />
+      {stale.length > 0 && (
+        <Section title="Stale in Review">
+          <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+            {stale.map((card) => (
+              <StaleRow
+                key={card.id}
+                card={card}
+                board={boards.find((item) => item.repo === card.repo)}
+                onOpen={onOpen}
+                onApprove={onApprove}
+                onRunAgain={onRunAgain}
+                onClose={onClose}
+              />
+            ))}
+          </ul>
+        </Section>
+      )}
       <Section title="Needs you">
         {attention.length === 0 && (
           <p className="text-sm text-muted-foreground">
@@ -181,6 +234,77 @@ function CardList({
         );
       })}
     </ul>
+  );
+}
+
+function StaleRow({
+  card,
+  board,
+  onOpen,
+  onApprove,
+  onRunAgain,
+  onClose,
+}: {
+  card: Card;
+  board: Board | undefined;
+} & Pick<Props, "onOpen" | "onApprove" | "onRunAgain" | "onClose">) {
+  const days = reviewAgeDays(card) ?? 0;
+  // Approve and a new run wait while an agent, CI or GitHub still has the card; Close never does.
+  const waiting = card.reviewWait ? reviewWaitText(card) : "";
+  return (
+    <li className="flex items-start gap-3 px-4 py-3">
+      {board && <RepoBadge board={board} size={14} />}
+      <div className="min-w-0 flex-1">
+        <button
+          onClick={() => onOpen(card)}
+          className="block w-full min-w-0 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="block truncate text-sm font-medium">
+            {card.title}
+          </span>
+          <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+            <CalendarClock
+              size={11}
+              className="shrink-0 text-status-interrupted"
+              aria-hidden
+            />
+            {repoName(card.repo)} · {days} {days === 1 ? "day" : "days"} in
+            Review{waiting && ` · ${waiting}`}
+          </span>
+        </button>
+        <span className="mt-2 flex flex-wrap gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!!waiting}
+            title={waiting || "Open the review to approve it"}
+            onClick={() => onApprove(card)}
+          >
+            <Check size={13} aria-hidden /> Approve
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!!waiting}
+            title={
+              waiting ||
+              "Start a run that brings the work up to date with main first"
+            }
+            onClick={() => onRunAgain(card)}
+          >
+            <RotateCcw size={13} aria-hidden /> Run again on current main
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            title="Close without merging"
+            onClick={() => onClose(card)}
+          >
+            <X size={13} aria-hidden /> Close
+          </Button>
+        </span>
+      </div>
+    </li>
   );
 }
 

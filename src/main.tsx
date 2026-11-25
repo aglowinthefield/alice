@@ -19,6 +19,7 @@ import {
   GitMerge,
   GitPullRequest,
   Hourglass,
+  CalendarClock,
   Pencil,
   Plus,
   RotateCcw,
@@ -74,6 +75,12 @@ import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
 import { needsYouStatuses, reviewOrder, Today } from "./today.js";
+import {
+  defaultStaleReviewDays,
+  isStaleReview,
+  maxStaleReviewDays,
+  reviewAgeDays,
+} from "./stale-review.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
@@ -1910,6 +1917,37 @@ export function App() {
               setReviewQueue(queue);
               setSelected(queue[0] ?? null);
             }}
+            onApprove={(item) => {
+              setReviewQueue([item.id]);
+              setSelected(item.id);
+            }}
+            onRunAgain={(item) => {
+              const target = boards.find((entry) => entry.repo === item.repo);
+              if (target)
+                void action(() =>
+                  api(`/boards/${target.id}/cards/${item.id}/start`, {
+                    method: "POST",
+                    body: JSON.stringify({ currentMain: true }),
+                  }),
+                );
+            }}
+            onClose={async (item) => {
+              const target = boards.find((entry) => entry.repo === item.repo);
+              if (
+                !target ||
+                !(await confirmAction(
+                  `Close "${item.title}" without merging? Its worktree and branch stay, and Reopen brings it back.`,
+                  { confirmLabel: "Close without merging" },
+                ))
+              )
+                return;
+              void action(() =>
+                api(`/boards/${target.id}/cards/${item.id}/close`, {
+                  method: "POST",
+                  body: "{}",
+                }),
+              );
+            }}
             onCapture={(board, title) =>
               action(() =>
                 api(`/boards/${board.id}/cards`, {
@@ -2769,6 +2807,11 @@ export function App() {
                                     card={item}
                                     activity={activity}
                                   />
+                                  {isStaleReview(
+                                    item,
+                                    currentBoard?.staleReviewDays ??
+                                      defaultStaleReviewDays,
+                                  ) && <StaleBadge card={item} />}
                                   {item.status === "failed" &&
                                     item.failureSummary && (
                                       <span
@@ -3379,6 +3422,59 @@ export function App() {
                   </span>
                 </label>
               )}
+              <label className="mt-4 flex items-start gap-2 text-xs">
+                <input
+                  key={`${editingBoard.id}-${editingBoard.staleReviewDays}`}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={maxStaleReviewDays}
+                  aria-label="Days in Review before a card is stale"
+                  defaultValue={
+                    editingBoard.staleReviewDays ?? defaultStaleReviewDays
+                  }
+                  disabled={busy}
+                  onBlur={(event) => {
+                    const staleReviewDays = Number(event.target.value);
+                    const current =
+                      editingBoard.staleReviewDays ?? defaultStaleReviewDays;
+                    if (
+                      event.target.value.trim() === "" ||
+                      !Number.isSafeInteger(staleReviewDays) ||
+                      staleReviewDays < 0 ||
+                      staleReviewDays > maxStaleReviewDays ||
+                      staleReviewDays === current
+                    ) {
+                      event.target.value = String(current);
+                      return;
+                    }
+                    void action(async () => {
+                      const updated = await api<Board>(
+                        `/boards/${editingBoard.id}/settings`,
+                        {
+                          method: "PATCH",
+                          body: JSON.stringify({ staleReviewDays }),
+                        },
+                      );
+                      setBoards((previous) =>
+                        previous.map((item) =>
+                          item.id === updated.id ? updated : item,
+                        ),
+                      );
+                      setEditingBoard(updated);
+                    });
+                  }}
+                  step={1}
+                  className="w-16 rounded-md border border-border bg-background px-2 py-1 tabular-nums"
+                />
+                <span>
+                  Days in Review before a card is stale
+                  <span className="block text-muted-foreground">
+                    Stale cards get a mark on the board and a daily push digest.
+                    0 turns this off.
+                  </span>
+                </span>
+              </label>
               {Object.entries(sharedCaches).map(([name, cache]) => (
                 <label
                   key={name}
@@ -4213,6 +4309,21 @@ function ActivityBadge({
     >
       <CirclePause size={10} aria-hidden />
       Quiet {minutes}m
+    </span>
+  );
+}
+
+/** A Review card that has sat past its board's threshold, so its work has likely drifted from main. */
+function StaleBadge({ card }: { card: Card }) {
+  const days = reviewAgeDays(card) ?? 0;
+  return (
+    <span
+      data-testid="stale-badge"
+      title={`In Review for ${days} ${days === 1 ? "day" : "days"}, so main has likely moved on. Approve it, run it again on current main, or close it.`}
+      className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
+    >
+      <CalendarClock size={10} aria-hidden />
+      Stale {days}d
     </span>
   );
 }

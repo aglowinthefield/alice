@@ -403,7 +403,7 @@ function DiscordWebhookField({
   );
 }
 
-/** Web Push for this browser: a notification when a card becomes your turn or fails, with or without a Bakery tab open. */
+/** Web Push for this browser: a notification when a card becomes your turn or fails, and a daily stale-Review digest, with or without a Bakery tab open. */
 function PushNotificationsField({
   onError,
 }: {
@@ -446,7 +446,7 @@ function PushNotificationsField({
         Notify this browser when a card needs you
         <span className="mt-1 block text-xs text-muted-foreground">
           {supported
-            ? "When a card becomes your turn in Review or fails, even with no Bakery tab open. Clicking one opens the card. Each browser turns this on separately."
+            ? "When a card becomes your turn in Review or fails, even with no Bakery tab open, and once a day when cards have sat in Review too long. Clicking one opens the card, or Today for the daily list. Each browser turns this on separately."
             : "Notifications need Bakery on HTTPS or localhost. See \u201cHTTPS on a tailnet\u201d in docs/reference.md."}
         </span>
       </span>

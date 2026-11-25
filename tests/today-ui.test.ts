@@ -25,7 +25,9 @@ const boards = [
 const card = (id: string, repo: string, status: string, updatedAt: string) =>
   ({ id, title: `Card ${id}`, body: "", repo, status, source: "manual", priority: 0, createdAt: "2026-02-01T00:00:00.000Z", updatedAt, turns: 0, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "" });
 
-async function open(options: { cards: ReturnType<typeof card>[] }) {
+// Cards may carry more fields than `card` sets, such as reviewSince or reviewWait.
+type TestCard = ReturnType<typeof card> & Record<string, unknown>;
+async function open(options: { cards: TestCard[] }) {
   const page = await browser.newPage();
   const requests: { method: string; path: string; input: unknown }[] = [];
   const state = { cards: options.cards };
@@ -133,7 +135,7 @@ const openBoard = async (page: Page, repo: string, title: string) => {
   await page.getByRole("button", { name: "Kanban" }).click();
   await page.locator("section[data-status]").getByText(title, { exact: true }).click();
 };
-const asStatus = (state: { cards: ReturnType<typeof card>[] }, id: string, status: string) => {
+const asStatus = (state: { cards: TestCard[] }, id: string, status: string) => {
   state.cards = state.cards.map(item => item.id === id ? { ...item, status } : item);
 };
 
@@ -196,5 +198,37 @@ test("sidebar switches between Today and a repository board, and the choice pers
     await page.getByRole("heading", { name: "beta" }).waitFor();
     await page.getByRole("button", { name: /^Today/ }).click();
     await page.getByRole("heading", { name: "Today" }).waitFor();
+  } finally { await page.close(); }
+});
+
+test("Review cards past their board's threshold are marked stale and listed in Today with their actions", async () => {
+  const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60_000).toISOString();
+  const { page, requests } = await open({ cards: [
+    { ...card("old", "/code/alpha", "review", "2026-03-01T10:00:00.000Z"), reviewSince: daysAgo(4) },
+    { ...card("fresh", "/code/alpha", "review", "2026-03-01T11:00:00.000Z"), reviewSince: daysAgo(1) },
+    { ...card("waiting", "/code/beta", "review", "2026-03-01T12:00:00.000Z"), reviewSince: daysAgo(6), reviewWait: "github" },
+  ] });
+  try {
+    await eventually(() => titles(page, "Stale in Review"), ["Card waiting", "Card old"]);
+    const stale = section(page, "Stale in Review");
+    const old = stale.getByRole("listitem").filter({ hasText: "Card old" });
+    await old.getByText("alpha · 4 days in Review").waitFor();
+    const waiting = stale.getByRole("listitem").filter({ hasText: "Card waiting" });
+    assert.equal(await waiting.getByRole("button", { name: "Run again on current main" }).isDisabled(), true, "GitHub still has it");
+    await old.getByRole("button", { name: "Run again on current main" }).click();
+    await old.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Close without merging" }).click();
+    await eventually(() => Promise.resolve(requests.filter(item => item.method === "POST").map(item => [item.path, item.input])), [
+      ["/api/boards/board-a/cards/old/start", { currentMain: true }],
+      ["/api/boards/board-a/cards/old/close", {}],
+    ]);
+    await old.getByRole("button", { name: "Approve" }).click();
+    await page.getByRole("dialog").getByRole("heading", { name: "Card old" }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Kanban" }).click();
+    const lane = page.locator("section[data-status]");
+    await lane.getByText("Card fresh", { exact: true }).waitFor();
+    assert.deepEqual(await lane.getByTestId("stale-badge").allInnerTexts(), ["Stale 4d"]);
   } finally { await page.close(); }
 });

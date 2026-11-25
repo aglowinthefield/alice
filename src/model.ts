@@ -44,6 +44,8 @@ export type Board = {
   autoReviewEnabledAt: string | null;
   /** Spend limits (daily starts, cost budget, review diff caps) apply only when on; off by default. */
   limitsEnabled?: boolean;
+  /** Days a card may sit in Review before it is marked stale (src/stale-review.ts); 0 is off. */
+  staleReviewDays?: number;
   autoReviewConcurrency?: number;
   autoReviewMaxFiles?: number;
   autoReviewMaxPatchChars?: number;
@@ -262,6 +264,8 @@ export type Card = {
   failureSummary?: string | null;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
+  /** When a Review card last entered Review; null in other lanes. */
+  reviewSince?: string | null;
   /** Automatic retries (of 3) spent after temporary provider failures since the card's last successful run. */
   autoRetries?: number;
   /** When auto-pickup retries this Ready card after a temporary provider failure; null when none is waiting. */

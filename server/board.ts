@@ -12,15 +12,18 @@ import { summarizeFailure } from "./failure-summary.js";
 import type { ThemeName } from "../src/themes.js";
 import { featureOffMessage, readFeatures, type Features } from "../src/features.js";
 import { parsePlan } from "../src/plan.js";
+import { defaultStaleReviewDays, validateStaleReviewDays } from "../src/stale-review.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[];
+  /** Days a card may sit in Review before the board marks it stale and the push digest lists it; 0 is off. */
+  staleReviewDays: number };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string; staleReviewDays: number };
 /** `integration` is what the build lets Bakery do: github-pr only with the pull requests feature. `integrationConfigured` is what is stored, kept while the feature is off. The stored sync error and warning are kept too but read empty while it is off, so they never hold back pickup. */
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullRequests: boolean): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl,
@@ -34,7 +37,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullReque
   pickupCostBudget: row.pickupCostBudget, cost24h, integration: pullRequests ? row.integration : "local", integrationConfigured: row.integration, integrationError: pullRequests ? row.integrationError : "", integrationWarning: pullRequests ? row.integrationWarning : "", integrationSyncedAt: row.integrationSyncedAt,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
   autoPickupBudgetReached: budgetReached(limitSettings(row), cost24h),
-  limitsEnabled: row.limitsEnabled !== 0,
+  limitsEnabled: row.limitsEnabled !== 0, staleReviewDays: row.staleReviewDays,
 });
 const limitSettings = (row: BoardRow) => ({ ...row, limitsEnabled: row.limitsEnabled !== 0 });
 // Token and cost columns are NULL for attempts recorded before Bakery tracked usage; new attempts start at 0.
@@ -93,6 +96,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
   /** Last time the latest run's agent reported anything; null before the first run. */
   lastActivityAt: string | null;
+  /** When a Review card last entered Review (see `isStaleReview`); null on cards in other lanes. */
+  reviewSince: string | null;
   /** Automatic retries spent after temporary provider failures since the card's last successful run; see `autoRetryDelaysMinutes`. */
   autoRetries: number;
   /** When auto-pickup may retry this Ready card after a temporary provider failure; null when no retry is waiting. */
@@ -144,7 +149,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches, staleReviewDays";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
 export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
@@ -159,6 +164,8 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   COALESCE((SELECT latest.agent FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), '') AS runAgent,
   COALESCE((SELECT job.agent FROM auto_review_jobs job WHERE job.cardId=cards.id ORDER BY job.startedAt DESC LIMIT 1), '') AS reviewAgent,
   (SELECT latest.lastActivityAt FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) AS lastActivityAt,
+  -- Cards that reached Review before status changes were recorded fall back to their last update.
+  CASE WHEN cards.status='review' THEN COALESCE((SELECT MAX(e.at) FROM card_events e WHERE e.cardId=cards.id AND e.toStatus='review'), cards.updatedAt) END AS reviewSince,
   ${usageColumns.map(column => `MAX(spend.${column}) AS ${column}`).join(", ")}, COALESCE(MAX(spend.unrecorded), 0) AS usageIncomplete,
   (SELECT json_group_array(edge.dependsOn) FROM (SELECT d.dependsOn FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id ORDER BY parent.createdAt, parent.rowid) edge) AS dependsOn,
   EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked,
@@ -288,6 +295,7 @@ export class Board {
     if (!migratedSettings.has("telemetryEnabled")) this.db.exec("ALTER TABLE settings ADD COLUMN telemetryEnabled INTEGER NOT NULL DEFAULT 0 CHECK(telemetryEnabled IN (0, 1))");
     if (!migratedSettings.has("density")) this.db.exec("ALTER TABLE settings ADD COLUMN density TEXT NOT NULL DEFAULT 'default' CHECK(density IN ('compact', 'default', 'cozy'))");
     const boardColumns = new Set((this.db.prepare("PRAGMA table_info(boards)").all() as { name: string }[]).map(column => column.name));
+    if (!boardColumns.has("staleReviewDays")) this.db.exec(`ALTER TABLE boards ADD COLUMN staleReviewDays INTEGER NOT NULL DEFAULT ${defaultStaleReviewDays}`);
     if (!boardColumns.has("sharedCaches")) this.db.exec("ALTER TABLE boards ADD COLUMN sharedCaches TEXT NOT NULL DEFAULT '[]'");
     if (!boardColumns.has("pushMainAfterMerge")) this.db.exec("ALTER TABLE boards ADD COLUMN pushMainAfterMerge INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoPullRequestEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPullRequestEnabled INTEGER NOT NULL DEFAULT 0");
@@ -831,6 +839,12 @@ export class Board {
   /** Why pickup may not start another card on this board now (capacity, daily starts or budget), or null. */
   autoStartRefusal(repoBoard: RepoBoard): ReturnType<typeof autoStartRefusal> {
     return autoStartRefusal(repoBoard, { running: this.runningCount(repoBoard.repo), starts: repoBoard.autoPickupStarts, cost24h: repoBoard.cost24h });
+  }
+  /** Days a card may sit in Review before it counts as stale (0 turns the mark and the digest off). */
+  setStaleReviewDays(id: string, days: unknown): RepoBoard {
+    if (!this.getBoard(id)) throw new Error("Board not found");
+    this.db.prepare("UPDATE boards SET staleReviewDays=? WHERE id=?").run(validateStaleReviewDays(days), id);
+    return this.getBoard(id)!;
   }
   /** Turns the board's spend limits on or off; the stored values are kept either way. */
   setLimitsEnabled(id: string, enabled: boolean): RepoBoard {

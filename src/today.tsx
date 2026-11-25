@@ -6,6 +6,7 @@ import { formatCost } from "./usage.js";
 import { RepoBadge } from "./repo-badge.js";
 import { repoName } from "./repo-appearance.js";
 import {
+  agentApproved,
   needsYourReview,
   reviewWaitText,
   type Board,
@@ -52,13 +53,16 @@ export function Today({
     .filter(
       (card) =>
         card.status in needsYou &&
-        (card.status !== "review" || needsYourReview(card)),
+        (card.status !== "review" ||
+          (needsYourReview(card) && !agentApproved(card))),
     )
     .sort(
       (a, b) =>
         needsYouStatuses.indexOf(a.status) -
           needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
     );
+  // Approved by the agent reviewer: only your Approve is left, so they stay out of "Needs you".
+  const approved = cards.filter(agentApproved).sort(oldestFirst);
   const running = cards.filter(
     (card) =>
       card.status === "running" ||
@@ -107,6 +111,16 @@ export function Today({
           label={(card) => needsYou[card.status] ?? card.status}
         />
       </Section>
+      {approved.length > 0 && (
+        <Section title="Agent approved">
+          <CardList
+            cards={approved}
+            boards={boards}
+            onOpen={onOpen}
+            label={() => "Approve"}
+          />
+        </Section>
+      )}
       {running.length > 0 && (
         <Section title="In progress">
           <CardList

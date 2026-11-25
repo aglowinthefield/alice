@@ -9,7 +9,8 @@ import { doctor, report } from "./doctor.mjs";
 import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
 import { c, columns, layout, paint, pretty } from "./cli-style.mjs";
 import { renderBoard } from "./cli-board.mjs";
-import { runTui } from "./cli-tui.mjs";
+import { ACTIONS as SERVICE_ACTIONS, service } from "./service.mjs";
+import { openUrl, runTui } from "./cli-tui.mjs";
 import { formatVersion, readVersion } from "./version.mjs";
 
 
@@ -17,10 +18,10 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration", "host"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch") result[arg.slice(2)] = true;
+    if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch" || arg === "--print") result[arg.slice(2)] = true;
     else if (arg === "--help" || arg === "-h") result.help = true;
     else if (arg === "--version" || arg === "-v") result.version = true;
     else if (arg.startsWith("--") && lists.has(arg.slice(2))) {
@@ -93,6 +94,21 @@ function selectBoard(boards, selector) {
   return matches[0];
 }
 
+/**
+ * Prints what may make the card churn before it moves to Ready (asks only a person can meet, no acceptance criteria).
+ * A flagged card needs --yes, the CLI's "Ready anyway"; with it the flags still go to stderr. Servers without the
+ * check answer 404 and the move goes ahead as before.
+ */
+async function readyCheck(origin, boardPath, id, yes) {
+  let flags;
+  try { ({ flags } = await request(origin, `${boardPath}/cards/${id}/ready-check`)); }
+  catch (error) { if (/^Bakery 404: Not found$/.test(error.message)) return; throw error; }
+  if (!flags?.length) return;
+  const lines = flags.map(flag => `  - ${flag.message}${flag.quote ? `: "${flag.quote}"` : ""}`).join("\n");
+  if (!yes) throw new Error(`This card may need another pass before a run:\n${lines}\nEdit it (bakery-cli edit ${id} --body ...), or repeat with --yes to move it to Ready anyway.`);
+  process.stderr.write(`bakery-cli: moving to Ready anyway:\n${lines}\n`);
+}
+
 function cardId(value) {
   if (!value || !/^[\w-]+$/.test(value)) throw new Error("A card ID (letters, numbers, - or _) is required");
   return value;
@@ -111,7 +127,7 @@ const priorityValue = value => Object.hasOwn(priorities, value) ? priorities[val
 const priorityName = value => Object.keys(priorities).find(key => priorities[key] === (value ?? 0)) ?? String(value ?? 0);
 const money = cost => typeof cost !== "number" ? "—" : cost > 0 && cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
 const lanes = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
-const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.pickupDailyLimit === 0 ? `${item.autoPickupStarts ?? 0} starts in 24h (no limit)` : `${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h`}${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
+const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${!item.limitsEnabled ? `limits off; ${item.autoPickupStarts ?? 0} starts in 24h` : item.pickupDailyLimit === 0 ? `${item.autoPickupStarts ?? 0} starts in 24h (no limit)` : `${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h`}${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${item.limitsEnabled && typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
 const cardLine = card => `${card.id}\t${card.status}\t${card.title ?? ""}`;
 
 // The API has no single-card GET, so find the card in its board's list.
@@ -170,9 +186,10 @@ async function watch(render) {
   }
 }
 
+// A usage mistake, so it exits 2 like other CLIs (house-style references/cli.md).
 function unknown(name) {
   const near = suggest(name);
-  return `Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run bakery-cli help to see them all.`;
+  return Object.assign(new Error(`Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run bakery-cli help to see them all.`), { exitCode: 2 });
 }
 
 async function main() {
@@ -183,16 +200,16 @@ async function main() {
   if (opts.help || command === "help") {
     const name = command === "help" ? args[0] : command;
     const text = commandHelp(name);
-    if (!text) throw new Error(unknown(name));
+    if (!text) throw unknown(name);
     console.log(text);
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { doctor: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
-  if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
-  if ((command === "board" || command === "board-add") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
+  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw unknown(command);
+  if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
-  if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
+  if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "limits" ? args.length > 1 || (args.length === 1 && !["on", "off"].includes(args[0])) : command === "agents" ? args.length > 1 || (args.length === 1 && !/^(auto|\d{1,2})$/.test(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
@@ -206,6 +223,7 @@ async function main() {
   if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (command === "attach") cardId(args[0]);
   if ((opts.all || opts.watch) && command !== "cards") throw new Error("--all and --watch are only valid with cards");
+  if (opts.print && command !== "open") throw new Error("--print is only valid with open");
   if (command === "tui" && (opts.json || !process.stdout.isTTY || !process.stdin.isTTY)) throw new Error("tui needs a terminal and no --json; use cards for a pipe");
   if (opts.watch && (opts.json || !process.stdout.isTTY)) throw new Error("--watch needs a terminal and no --json");
   if (opts.after.length && command !== "create") throw new Error("--after is only valid with create");
@@ -213,7 +231,15 @@ async function main() {
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
   [...opts.after, ...opts.on].forEach(cardId);
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
-  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "purge-attachments")) throw new Error("--yes is only valid with ready, start, recover, pickup or purge-attachments");
+  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "purge-attachments" || command === "service")) throw new Error("--yes is only valid with ready, start, recover, pickup, purge-attachments or service");
+  if (opts.host !== undefined && !(command === "service" && args[0] === "install")) throw new Error("--host is only valid with service install");
+  if (command === "service") {
+    if (!SERVICE_ACTIONS.includes(args[0])) throw new Error(`Unknown service action: ${args[0]}. Use one of ${SERVICE_ACTIONS.join(", ")}.\n${usageLine(command)}`);
+    if (opts.board || opts.json) throw new Error("--board and --json are not valid with service");
+    // The server may not be running yet, so this never contacts it.
+    service(args[0], { host: opts.host, yes: opts.yes });
+    return;
+  }
   if (command === "purge-attachments" && !opts.yes) throw new Error("Purging deletes the attached files from disk and cannot be undone, even if the card is restored. Repeat with --yes to confirm.");
   if (command === "recover" && args.length !== 1) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "start" || command === "recover") {
@@ -239,10 +265,36 @@ async function main() {
     print(added, opts.json, [`${added.id}\t${added.repo}`]);
     return;
   }
+  if (command === "agents") {
+    if (opts.board) throw new Error("--board is not valid with agents; the limit covers every board");
+    const settings = args.length ? await request(origin, "/api/settings", "PATCH", { maxActiveAgents: args[0] === "auto" ? 0 : Number(args[0]) }) : await request(origin, "/api/settings");
+    print({ maxActiveAgents: settings.maxActiveAgents, limit: settings.activeAgentsLimit, active: settings.activeAgents }, opts.json,
+      [`Agents at once, all boards: ${settings.activeAgentsLimit}${settings.maxActiveAgents ? "" : " (automatic)"}; ${settings.activeAgents} running now. Automatic work waits for a slot; runs you start always start.`]);
+    return;
+  }
   const boards = await request(origin, "/api/boards");
   if (command === "boards") {
     if (opts.board) throw new Error("--board is not valid with boards");
     print(boards, opts.json, boards.map(item => `${item.id}\t${item.repo}\tpickup:${item.autoPickupEnabled ? "on" : "off"}\treview:${item.autoReviewEnabled ? "on" : "off"}${item.autoPickupError ? `\tpaused:${item.autoPickupError}` : ""}`));
+    return;
+  }
+  if (command === "open") {
+    if (args.length) cardId(args[0]);
+    // With no card and no board to pick, open Bakery's home page rather than failing.
+    const target = !args.length && !opts.board && boards.length > 1 && !boards.some(item => process.cwd() === item.repo || process.cwd().startsWith(item.repo + sep)) ? null : selectBoard(boards, opts.board);
+    let route = "/";
+    if (target) {
+      route = `/board/${encodeURIComponent(target.id)}`;
+      if (args.length) {
+        // The CLI prints 8-character ids, so a unique prefix is enough.
+        const found = (await request(origin, `/api/boards/${encodeURIComponent(target.id)}/cards`)).filter(item => item.id === args[0] || item.id.startsWith(args[0]));
+        if (found.length !== 1) throw new Error(found.length ? `More than one card starts with ${args[0]}; give more of the ID` : `Card not found on this board: ${args[0]}`);
+        route += `/card/${encodeURIComponent(found[0].id)}`;
+      }
+    }
+    const url = new URL(route, origin).href;
+    const opened = !opts.print && openUrl(url);
+    print({ url, opened }, opts.json, [opened || opts.print ? url : `${url}\t(no browser here; open it yourself)`]);
     return;
   }
   const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
@@ -281,6 +333,7 @@ async function main() {
     print(card, opts.json, [`${cardLine(card)}\tdepends on:${card.dependsOn?.length ? card.dependsOn.join(",") : "none"}${card.blocked ? "\tblocked" : ""}`]);
   } else if (command === "ready" || command === "triage") {
     if (command === "ready" && board.autoPickupEnabled && !opts.yes) throw new Error("Auto pickup is enabled: Ready may start paid Pi immediately. Repeat with --yes to confirm.");
+    if (command === "ready") await readyCheck(origin, path, cardId(args[0]), opts.yes);
     const card = await request(origin, `${path}/cards/${cardId(args[0])}/status`, "POST", { status: command });
     print(card, opts.json, [`${card.id}\t${card.status}\t${card.title ?? ""}`]);
   } else if (command === "recover") {
@@ -387,6 +440,13 @@ async function main() {
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));
+  } else if (command === "limits") {
+    const updated = args.length ? await request(origin, `${path}/settings`, "PATCH", { limitsEnabled: args[0] === "on" }) : board;
+    const daily = updated.pickupDailyLimit === 0 ? "no daily start limit" : `${updated.pickupDailyLimit} starts per 24h`;
+    const budget = typeof updated.pickupCostBudget === "number" ? `${money(updated.pickupCostBudget)} daily budget` : "no budget";
+    const diff = updated.autoReviewMaxFiles || updated.autoReviewMaxPatchChars ? `review diffs up to ${updated.autoReviewMaxFiles || "any"} files / ${updated.autoReviewMaxPatchChars || "any"} characters` : "no review diff caps";
+    print(updated, opts.json, [`Limits ${updated.limitsEnabled ? "on" : "off"}${updated.limitsEnabled ? "" : " (stored, not applied)"}: ${daily}; ${budget}; ${diff}. Concurrency ${updated.pickupConcurrency} runs, ${updated.autoReviewConcurrency ?? 1} reviews; loop guards always apply.`,
+      ...await request(origin, "/api/settings").then(settings => typeof settings.activeAgentsLimit === "number" ? [`All boards: ${settings.activeAgents} of ${settings.activeAgentsLimit} agents running (bakery-cli agents).`] : [], () => [])]);
   } else if (command === "pickup") {
     const summary = pickupSummary;
     if (!args.length) { print(board, opts.json, [summary(board)]); return; }
@@ -416,4 +476,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(`${paint("31", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = 1; });
+main().catch(error => { console.error(`${paint("31", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = error?.exitCode ?? 1; });

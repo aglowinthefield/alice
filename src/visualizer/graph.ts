@@ -91,7 +91,9 @@ export function activityText(
         "waiting"
       );
     case "needs_review":
-      return "needs your review";
+      return card.reviewAction === "agent_approved"
+        ? "agent approved"
+        : "needs your review";
     case "failed":
       return `failed · attempt ${card.attempts}`;
     case "blocked":

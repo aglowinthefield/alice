@@ -218,6 +218,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Long", body: "", idempotencyKey: "k".repeat(201) })).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Blank", body: "", idempotencyKey: " " })).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Number", body: "", idempotencyKey: 7 })).status, 400);
+    assert.equal(card.source, "api", "a caller that names no source is recorded as api");
+    assert.equal(keyed.data.source, "api");
+    for (const source of ["Hermes", "", "a b", 7, "x".repeat(41)])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Bad", body: "", source })).data.error, /Source must be a lower-case name/);
+    for (const source of ["manual", "plan", "sentinel", "pr-comment"])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Claimed", body: "", source })).data.error, /set by Bakery itself/);
     assert.match((await request(`/boards/${first.id}/cards/${card.id}/start`, "POST")).data.error, /Move.*Ready/);
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.deepEqual(await request(`/boards/${first.id}/cards/${card.id}/push-progress`), { status: 200, data: null }, "card details poll push progress");
@@ -261,6 +267,9 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Typed", body: "", origin: "ui" })).data.source, "ui");
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Agent", body: "", source: "hermes" })).data.source, "hermes");
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Follow-up", body: "", source: "follow-up", idempotencyKey: "follow-up:run:0" })).data.source, "follow-up");
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");

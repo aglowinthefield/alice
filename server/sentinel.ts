@@ -275,7 +275,7 @@ export class Sentinel {
     const requests = items.map(item => ({ author: item.author, comment: item.body.trim().slice(0, 4000), ...(item.path ? { path: item.path, line: item.line } : {}) }));
     const findingKey = `request:${items[0].id}`;
     // One transaction: the attempt exists before the card is Ready, so its run locks the PR and its result is pushed.
-    const card = this.board.createCard({ title: `Requested on PR #${number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: findingKey, priority: 0,
+    const card = this.board.createCard({ title: `Requested on PR #${number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: findingKey, priority: 0, source: "pr-comment",
       provenance: { sentinelId: context.sentinel.id, sentinelRunId: context.runId, findingKey },
       body: withInstructions(requestBrief({ url: pr.url, branch: pr.headRefName, head: pr.headRefOid, requests }), context.sentinel),
       ready: `Created by a /bakery comment on pull request #${number}`,
@@ -355,7 +355,7 @@ export class Sentinel {
   private async createCard(repoBoard: RepoBoard, repo: string, pr: { number: number; title: string; url: string }, head: string, branch: string, mainTip: string, problems: string[], context: RunContext): Promise<boolean> {
     const findingKey = prFindingKey(pr.number);
     // The card, its attempt and its Ready status are one transaction, so a crash leaves no half-made finding that later runs would skip.
-    const ready = this.board.createCard({ title: `Fix PR #${pr.number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: `sentinel:${pr.number}:${head}:${mainTip}`, priority: 0,
+    const ready = this.board.createCard({ title: `Fix PR #${pr.number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: `sentinel:${pr.number}:${head}:${mainTip}`, priority: 0, source: "sentinel",
       provenance: { sentinelId: context.sentinel.id, sentinelRunId: context.runId, findingKey },
       body: withInstructions(sentinelBrief({ repo, number: pr.number, url: pr.url, branch, head, mainTip, problems }), context.sentinel),
       ready: "Created by Bakery's sentinel: the pull request is not mergeable and nothing is working on it",

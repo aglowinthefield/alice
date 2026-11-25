@@ -78,6 +78,7 @@ test("a conflicting PR by the owner gets a Ready card whose brief rebases onto m
     await f.sentinel.pass(f.repoBoard.id);
     const [card] = f.sentinelCards();
     assert.equal(card.status, "ready");
+    assert.equal(card.source, "sentinel");
     assert.match(card.body, /It conflicts with main/);
     assert.ok(card.body.indexOf("rebase origin/main") < card.body.indexOf("Only now look at CI"));
     const lock = parseLock(f.comments.get(pr.number)![0].body);
@@ -313,6 +314,7 @@ test("a /bakery comment from a trusted author on any PR makes a Ready request ca
     const cards = f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR"));
     assert.equal(cards.length, 1);
     assert.equal(cards[0].status, "ready");
+    assert.equal(cards[0].source, "pr-comment");
     assert.match(cards[0].body, /rename foo to bar/);
     assert.doesNotMatch(cards[0].body, /delete everything/);
     assert.match(cards[0].body, new RegExp(`git switch -C feature-${pr.number}`));

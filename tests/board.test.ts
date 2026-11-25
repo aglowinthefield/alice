@@ -105,6 +105,28 @@ test("older card tables gain a nullable idempotency key with a per-board unique 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a card records where it came from, and older cards get the source their key prefix names", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const board = new Board(path);
+    assert.equal(board.createCard({ title: "Typed", body: "", repo: dir, origin: "ui" }).source, "ui");
+    assert.equal(board.createCard({ title: "Script", body: "", repo: dir }).source, "api");
+    assert.equal(board.createCard({ title: "Agent", body: "", repo: dir, source: "hermes" }).source, "hermes");
+    assert.equal(board.createCard({ title: "Old Hermes", body: "", repo: dir, idempotencyKey: "hermes:t_new" }).source, "hermes", "a key prefix stands in for a missing source");
+    assert.equal(board.createCard({ title: "CLI", body: "", repo: dir, idempotencyKey: "plan:x:y", source: "cli" }).source, "cli", "an explicit source wins over the key");
+    const keys = ["hermes:t_1", "plan:card:a", "follow-up:run:0", "sentinel:4:abc:def", "request:issues/comments:9", "bakery-local-1234", "nightly-1", null];
+    const ids = keys.map((key, index) => board.createCard({ title: `Legacy ${index}`, body: "", repo: dir, idempotencyKey: key }).id);
+    board.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("UPDATE cards SET source='manual'; PRAGMA user_version = 1");
+    raw.close();
+    const migrated = new Board(path);
+    assert.deepEqual(ids.map(id => migrated.getCard(id)!.source), ["hermes", "plan", "follow-up", "sentinel", "pr-comment", "manual", "manual", "manual"]);
+    migrated.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("settings default to notifications off and persist across restarts", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
   try {
@@ -570,6 +592,7 @@ test("creating cards from a plan records their ids and refuses a second set", ()
     assert.equal(done.createdCardIds?.length, 2);
     const [first, second] = done.createdCardIds!.map(id => board.getCard(id)!);
     assert.equal(first.title, "First");
+    assert.deepEqual([first.source, second.source], ["plan", "plan"]);
     assert.deepEqual(second.dependsOn, [first.id]);
     assert.throws(() => board.createPlanCards(card.id), /already created/);
     board.close();

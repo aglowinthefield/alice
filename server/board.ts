@@ -84,7 +84,29 @@ export const isSentinelJob = (card: { sentinelId?: string | null; idempotencyKey
 const notSentinelJob = "(cards.sentinelId IS NULL AND (cards.idempotencyKey IS NULL OR (cards.idempotencyKey NOT LIKE 'sentinel:%' AND cards.idempotencyKey NOT LIKE 'request:%')))";
 /** Where a job card came from: the sentinel, the run that found it and the finding's stable key. */
 export type CardProvenance = { sentinelId: string; sentinelRunId: string; findingKey: string };
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null;
+/**
+ * Where a card came from: `ui`, `cli`, `plan`, `follow-up`, `sentinel`, `pr-comment`, `api` (an API caller that named
+ * none) or the agent name an API caller supplied (Hermes sends `hermes`). `manual` marks older cards whose source is unknown.
+ */
+export type CardSource = string;
+/** Sources only Bakery itself sets; API callers may not claim them. */
+const serverOnlySources = new Set(["manual", "plan", "sentinel", "pr-comment"]);
+/** A source from an API caller: a lower-case name of up to 40 letters, digits, dots, dashes or underscores. */
+export function parseCardSource(value: unknown): CardSource | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9._-]{0,39}$/.test(value)) throw new Error("Source must be a lower-case name of up to 40 letters, digits, dots, dashes or underscores, such as hermes");
+  if (serverOnlySources.has(value)) throw new Error(`Source ${value} is set by Bakery itself`);
+  return value;
+}
+/**
+ * The source an idempotency key's prefix implies, or null when it implies none. Only prefixes one path writes count:
+ * `bakery-local-` keys came from a bulk copy of plan, follow-up and typed cards alike, so they say nothing.
+ */
+export function sourceFromKey(key: string | null): CardSource | null {
+  const prefix = key?.match(/^(hermes|plan|follow-up|sentinel|request):/)?.[1];
+  return prefix === "request" ? "pr-comment" : prefix ?? null;
+}
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: CardSource; priority: CardPriority; idempotencyKey: string | null;
   /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
   sentinelId: string | null; sentinelRunId: string | null; findingKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
@@ -243,6 +265,14 @@ export class Board {
       this.db.exec("UPDATE cards SET priority = CASE priority WHEN -1 THEN -10 WHEN 1 THEN 50 WHEN 2 THEN 100 ELSE priority END; PRAGMA user_version = 1");
     }
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
+    // Every card was 'manual' before sources were recorded. Cards whose key prefix names their path get that source once.
+    if ((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version < 2) {
+      this.db.exec("BEGIN IMMEDIATE");
+      const keyed = this.db.prepare("SELECT id, idempotencyKey FROM cards WHERE source='manual' AND idempotencyKey IS NOT NULL").all() as { id: string; idempotencyKey: string }[];
+      const update = this.db.prepare("UPDATE cards SET source=? WHERE id=?");
+      for (const row of keyed) { const source = sourceFromKey(row.idempotencyKey); if (source) update.run(source, row.id); }
+      this.db.exec("PRAGMA user_version = 2; COMMIT");
+    }
     for (const column of ["sentinelId TEXT", "sentinelRunId TEXT", "findingKey TEXT"]) if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     this.db.exec("CREATE INDEX IF NOT EXISTS cards_sentinel_finding ON cards(sentinelId, findingKey) WHERE sentinelId IS NOT NULL");
     // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
@@ -1152,6 +1182,7 @@ export class Board {
   }
   /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
   createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin; provenance?: CardProvenance;
+    /** Defaults to what the key's prefix implies (see `sourceFromKey`), then `ui` or `api` by origin. */ source?: CardSource;
     /** Makes the card Ready in the same transaction, with this reason in its history. */ ready?: string;
     /** Runs inside the same transaction, after the card exists. If it throws, no card is made. */ inTransaction?: (card: Card) => void }): Card {
     const key = input.idempotencyKey ?? null;
@@ -1162,8 +1193,8 @@ export class Board {
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen, sentinelId, sentinelRunId, findingKey) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1, input.provenance?.sentinelId ?? null, input.provenance?.sentinelRunId ?? null, input.provenance?.findingKey ?? null);
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen, sentinelId, sentinelRunId, findingKey) VALUES (?, ?, ?, ?, 'triage', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, input.source ?? sourceFromKey(key) ?? (input.origin === "ui" ? "ui" : "api"), key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1, input.provenance?.sentinelId ?? null, input.provenance?.sentinelRunId ?? null, input.provenance?.findingKey ?? null);
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);
@@ -1192,7 +1223,7 @@ export class Board {
     const made = new Map<string, string>();
     for (const task of plan.subtasks) {
       made.set(task.id, this.createCard({ title: task.title, body: `${task.body}\n\nPart of the plan from card ${card.id}: ${card.title}`, repo: card.repo,
-        idempotencyKey: `plan:${card.id}:${task.id}`, dependsOn: task.dependsOn.map(dep => made.get(dep)!) }).id);
+        idempotencyKey: `plan:${card.id}:${task.id}`, source: "plan", dependsOn: task.dependsOn.map(dep => made.get(dep)!) }).id);
     }
     this.db.prepare("UPDATE cards SET createdCardIds=? WHERE id=?").run(JSON.stringify([...made.values()]), cardId);
     return this.getCard(cardId)!;

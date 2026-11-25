@@ -205,7 +205,8 @@ export type Card = {
   title: string;
   body: string;
   repo: string;
-  source: "manual";
+  /** Where the card came from: ui, cli, plan, follow-up, sentinel, pr-comment, api, an agent name, or manual (unknown, older cards). */
+  source: string;
   idempotencyKey?: string | null;
   /** Set on a job card made by a sentinel: the sentinel, its run, and the finding's stable key. */
   sentinelId?: string | null;

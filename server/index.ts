@@ -8,7 +8,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
+import { Board, isSentinelJob, parseCardSource, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
@@ -703,11 +703,11 @@ const server = createServer(async (req, res) => {
       if (!id) {
         if (req.method === "GET") { send(res, 200, worker.withLive(originMain.annotate(repoBoard, board.listCards(repoBoard.repo)))); return; }
         if (req.method === "POST") {
-          const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey);
+          const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey), source = parseCardSource(input.source);
           // A repeated key returns the board's existing card unchanged, whatever its status.
           const existing = key === null ? undefined : board.getCardByIdempotencyKey(repoBoard.repo, key);
           if (existing) { send(res, 200, existing); return; }
-          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api" })); return;
+          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api", source })); return;
         }
       } else {
         const item = board.getCard(id);

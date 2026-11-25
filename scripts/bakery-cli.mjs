@@ -17,7 +17,7 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "concurrency", "limit", "budget", "integration"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "source", "concurrency", "limit", "budget", "integration"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch") result[arg.slice(2)] = true;
@@ -195,7 +195,7 @@ async function main() {
   if (command === "board" || command === "board-add" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
-  if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
+  if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined || opts.source !== undefined)) throw new Error("--key, --priority and --source are only valid with create or add");
   if (opts.priority !== undefined && priorityValue(opts.priority) === null) throw new Error("Priority must be a whole number from -100 to 100, or low, normal, high, or urgent");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
@@ -264,7 +264,8 @@ async function main() {
     if (command === "add") opts.title = args.join(" ");
     if (!opts.title?.trim()) throw new Error(command === "add" ? "add requires a title" : "create requires --title TITLE");
     if (opts.key !== undefined && (!opts.key.trim() || opts.key.length > 200)) throw new Error("--key must be 1 to 200 characters");
-    const input = { title: opts.title, body: opts.body ?? "" };
+    // Cards record where they came from; an agent driving the CLI names itself with --source.
+    const input = { title: opts.title, body: opts.body ?? "", source: opts.source ?? "cli" };
     if (opts.priority !== undefined) input.priority = Object.hasOwn(priorities, opts.priority) ? opts.priority : Number(opts.priority);
     if (opts.key !== undefined) input.idempotencyKey = opts.key;
     if (opts.after.length) input.dependsOn = opts.after;

@@ -4,6 +4,7 @@ import { banner, c, columns, pad, pretty, wrap } from "./cli-style.mjs";
 
 const BOARD = ["--board ID|PATH", "the board (default: the one whose repository holds the current directory, or the only one)"];
 const JSON_OUT = ["--json", "print the full API data"];
+const SOURCE = ["--source NAME", "where the card came from (default: cli); agents give their name"];
 const PRIORITY = ["--priority P", "-100 to 100, or low, normal, high or urgent (default: normal)"];
 
 export const GROUPS = ["Cards", "Runs", "Tidy up", "Boards", "Sentinels", "Setup"];
@@ -11,16 +12,16 @@ export const GROUPS = ["Cards", "Runs", "Tidy up", "Boards", "Sentinels", "Setup
 export const COMMANDS = [
   {
     name: "add", group: "Cards", args: "TITLE...", summary: "quick capture: a new Triage card",
-    full: "TITLE... [--body BODY] [--priority P] [--board ID|PATH] [--json]",
+    full: "TITLE... [--body BODY] [--priority P] [--source NAME] [--board ID|PATH] [--json]",
     details: "The words after add become the title.",
-    options: [["--body BODY", "the description"], PRIORITY, BOARD, JSON_OUT],
+    options: [["--body BODY", "the description"], PRIORITY, SOURCE, BOARD, JSON_OUT],
     examples: [["bakery-cli add Fix the flaky login test", ""], ["bakery-cli add Ship it --priority urgent", ""]],
   },
   {
     name: "create", group: "Cards", args: "--title TITLE", summary: "a new card, with a key or dependencies",
-    full: "--title TITLE [--body BODY] [--key KEY] [--priority P] [--after CARD_ID]... [--board ID|PATH] [--json]",
-    details: "--key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status, it is printed instead of creating another.\n--after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.",
-    options: [["--title TITLE", "the title"], ["--body BODY", "the description"], ["--key KEY", "create once per board; later calls print the same card"], PRIORITY, ["--after CARD_ID", "wait for that card first (repeatable)"], BOARD, JSON_OUT],
+    full: "--title TITLE [--body BODY] [--key KEY] [--priority P] [--source NAME] [--after CARD_ID]... [--board ID|PATH] [--json]",
+    details: "--key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status, it is printed instead of creating another.\n--after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.\n--source NAME records where the card came from, shown on its Details tab; it defaults to cli. Agents name themselves, for example --source hermes.",
+    options: [["--title TITLE", "the title"], ["--body BODY", "the description"], ["--key KEY", "create once per board; later calls print the same card"], PRIORITY, SOURCE, ["--after CARD_ID", "wait for that card first (repeatable)"], BOARD, JSON_OUT],
     examples: [["bakery-cli create --title 'Add the API' --key gh-42/t1", ""], ["bakery-cli create --title 'Use the API' --after CARD_ID", "start only after CARD_ID is done"]],
   },
   {

@@ -710,6 +710,7 @@ export function CardDetails({
                             title,
                             body: `${body}\n\nFollow-up from card ${card.id}: ${card.title}`,
                             idempotencyKey: `follow-up:${runs[0].id}:${index}`,
+                            source: "follow-up",
                           }),
                         }).then(
                           () => true,
@@ -966,6 +967,20 @@ export function CardDetails({
                         </>
                       )}
                     </Button>
+                  </div>
+                )}
+                {card && (
+                  <div
+                    data-testid="card-source"
+                    className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+                  >
+                    <span>Source</span>
+                    <code className="font-mono text-foreground">
+                      {card.source}
+                    </code>
+                    {card.source === "manual" && (
+                      <span>(made before Bakery recorded sources)</span>
+                    )}
                   </div>
                 )}
                 <CardHistory entries={history} />

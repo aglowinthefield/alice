@@ -919,6 +919,16 @@ export class Board {
     }
     return waiting.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
   }
+  /**
+   * Bakery changed a Review card's work itself (brought it up to date with main), so a finished agent review of the
+   * old work no longer counts and the card goes back in the queue. Returns whether an agent review is now waiting.
+   */
+  requeueAutoReview(cardId: string, runId: string): boolean {
+    const card = this.getCard(cardId), run = this.getRun(runId), repoBoard = card && this.boardForRepo(card.repo);
+    if (!repoBoard?.autoReviewEnabled || !run) return false;
+    this.db.prepare("UPDATE auto_review_jobs SET requeued=1 WHERE runId=? AND state!='running'").run(runId);
+    return this.awaitsAutoReview(repoBoard, cardId, run);
+  }
   /** The run finished after auto-review was enabled and nothing (a person, an earlier job) has handled it yet. */
   private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
     return repoBoard.autoReviewEnabled &&

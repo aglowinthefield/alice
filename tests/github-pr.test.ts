@@ -330,6 +330,38 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
   } finally { f.cleanup(); }
 });
 
+test("github-pr: when a PR merges, a Review card that depends on it is brought up to date with origin/main", async () => {
+  const f = fixture();
+  try {
+    const parent = await reviewedCard(f, "Parent");
+    // The dependent was cut from origin/main before the parent merged and holds uncommitted work, as runs leave it.
+    const child = f.board.createCard({ title: "Child", body: "", repo: f.repo });
+    f.board.setStatus(child.id, "ready");
+    const run = f.board.claim(child.id), worktree = join(f.data, "worktrees", child.id);
+    git(f.repo, "worktree", "add", "-qb", `bakery/${child.id}`, worktree, "origin/main");
+    f.board.attach(run.id, process.pid, worktree);
+    writeFileSync(join(worktree, "child.txt"), "child\n");
+    f.board.finish(run.id, "review");
+    f.board.addDependency(child.id, parent.id);
+    const integration = new Integration(f.board, f.data);
+    f.sync.onMerged = id => integration.updateDependents(id);
+
+    await approve(f, parent.id);
+    const [pr] = f.prs();
+    const pushed = git(f.origin, "rev-parse", `refs/heads/bakery/${parent.id}`);
+    const merge = f.squashMerge(`bakery/${parent.id}`);
+    f.setPrs([{ ...pr, state: "MERGED", mergedAt: new Date().toISOString(), mergeCommit: { oid: merge }, headRefOid: pushed }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+
+    assert.equal(f.board.getCard(parent.id)!.status, "done");
+    assert.equal(git(worktree, "rev-parse", "HEAD"), merge, "the dependent's branch moved to the new origin/main");
+    assert.equal(readFileSync(join(worktree, "feature.txt"), "utf8"), `feature from ${parent.id}\n`);
+    assert.equal(git(worktree, "status", "--porcelain"), "?? child.txt", "its own work is still uncommitted");
+    assert.equal(f.board.getCard(child.id)!.status, "review");
+    assert.match(f.board.listCardEvents(child.id).at(-1)?.reason ?? "", /Brought up to date with origin\/main \([0-9a-f]{12}\) after "Parent" merged/);
+  } finally { f.cleanup(); }
+});
+
 // Shaped like silkcx/silk-remix: amannn/action-semantic-pull-request with types and scopes, and a template with
 // Staging QA and Screenshots sections that a separate workflow checks.
 const semanticWorkflow = `name: Semantic PR Title

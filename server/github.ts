@@ -426,6 +426,8 @@ export class GitHubSync {
   /** When fetching first failed in the current run of failures, per board. */
   private fetchFailingSince = new Map<string, number>();
   fetchGraceMs = 5 * 60_000;
+  /** Called after a card's pull request merges and the card is Done; brings the cards that depend on it up to date. */
+  onMerged: (cardId: string) => Promise<unknown> = async () => {};
   /** `rework` starts a fix run on a card whose PR failed CI; without it failures are only shown. */
   constructor(private readonly board: Board, private readonly dataDir: string, private readonly github: GitHub, private readonly wtBin?: string, private readonly intervalMs = 60_000,
     private readonly rework?: (card: Card) => unknown, private readonly autoApprove?: (card: Card) => Promise<unknown>) {}
@@ -531,6 +533,8 @@ export class GitHubSync {
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} merged as ${merge.slice(0, 12)}`);
     this.board.recordPullRequestMerge(card.id, pr.headRefOid || merge, merge);
     await this.removeWorktree(repoBoard.repo, card);
+    try { await this.onMerged(card.id); }
+    catch (error) { console.error(`[sync ${repo}] could not update the cards that depend on ${card.id.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`); }
   }
   /**
    * A comment on the PR that starts with `/bakery`, from someone with write-level access to the

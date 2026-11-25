@@ -163,6 +163,7 @@ const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
+githubSync.onMerged = cardId => integration.updateDependents(cardId);
 // Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
 const features = board.features;
 /** Routes that belong to one optional feature; with it off they are refused before any handler runs. */

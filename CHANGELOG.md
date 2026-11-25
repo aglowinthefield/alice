@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- When a card merges, cards in Review that depend on it are brought up to date with main, keeping their uncommitted work, and agent review runs again on the result. One that would conflict is left unchanged and shows the merge conflict instead of surprising you at Approve.
 - The server stays responsive on a busy machine. The 2-second pickup tick found its candidates with one board rebuild per Ready card (880 ms on a 29-card queue, now 17 ms), and the auto-review tick checked externally merged cards with blocking Git. Card lookups no longer total every run on the board, and Ready cards skip loading boards.
 - Spend limits (the daily start limit, the daily cost budget and the agent reviewer's diff caps) sit behind one **Limits** switch per board, off by default, in the board settings or `bakery-cli limits on|off`. Stored values are kept while it's off. Concurrency and loop guards (send-back, CI-fix and retry caps, the run timeout) always apply. Every limit is decided in `server/repo-limits.ts`. Existing boards start with limits off.
 - A failed automatic run no longer pauses pickup. Its card waits in Failed, pickup never restarts it, and the next Ready card starts. Only an authentication or billing refusal from the provider still pauses pickup, since every card would fail the same way. Boards paused for a failed run resume on startup.

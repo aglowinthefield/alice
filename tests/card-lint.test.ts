@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lintCard, readyFlags } from "../src/card-lint.js";
+import { estimateWidth, isPlanningCard, lintCard, planningCard, readyFlags } from "../src/card-lint.js";
 
 const rules = (title: string, body: string) => lintCard({ title, body }).map(flag => flag.rule);
 const messages = (title: string, body: string) => lintCard({ title, body }).map(flag => flag.message);
@@ -98,4 +98,91 @@ test("only Triage cards written by people are checked on the way to Ready", () =
   assert.deepEqual(readyFlags({ ...card, status: "failed" }), [], "a retry was committed to before");
   assert.deepEqual(readyFlags({ ...card, status: "done" }), [], "reopening is not a first move to Ready");
   assert.deepEqual(readyFlags({ ...card, sentinelId: "sentinel-1" }), [], "sentinel cards come from Bakery's own template");
+});
+
+const tenRoutes = ["/settings", "/settings/profile", "/settings/billing", "/settings/team", "/settings/keys", "/boards/:id",
+  "/boards/:id/cards", "/statistics", "/logs", "/today"];
+
+test("a card listing 10 routes is wide, and the flag says why", () => {
+  const card = { title: "Move the settings routes to the file router", body: `Move these routes:\n${tenRoutes.map(route => `- \`${route}\``).join("\n")}${done}` };
+  const width = estimateWidth(card);
+  assert.equal(width.routes, 10);
+  assert.equal(width.wide, true);
+  assert.deepEqual(width.reasons, ["10 routes"], "the list of routes is not counted a second time as items");
+  const [flag] = lintCard(card);
+  assert.equal(flag.rule, "wide");
+  assert.match(flag.message, /too wide for one run \(10 routes\).*turning it into a plan/);
+});
+
+test("a one-file fix is not wide", () => {
+  const fix = { title: "Fix the off-by-one in the pager", body: "`src/pager.ts` skips the last page. Fix the bound.\n\n## Acceptance\n- A test covers the last page.\n- All tests pass." };
+  assert.equal(estimateWidth(fix).wide, false);
+  assert.equal(estimateWidth(fix).files, 1);
+  assert.deepEqual(lintCard(fix), []);
+});
+
+test("routes skip file system paths, full URLs and slashes between words", () => {
+  const width = estimateWidth({ title: "Links", body: "See https://example.com/a/b and /home/me/repo, /tmp/x.log, and/or 1/2 of `/api/boards` and `/api/boards/`." });
+  assert.equal(width.routes, 1);
+});
+
+test("files count distinct paths, not library names", () => {
+  const width = estimateWidth({ title: "Files", body: "Edit `src/a.ts`, `src/a.ts`, `server/b.ts`, `package.json` and README.md. Built on Node.js and Next.js." });
+  assert.equal(width.files, 4);
+});
+
+test("sweeping a whole kind of thing with a migration verb is wide on its own", () => {
+  for (const title of ["Migrate the remaining pages to Tailwind", "Convert every route to the new loader", "Port all of the remaining endpoints to oRPC", "Replace the old toast across the whole codebase"]) {
+    const width = estimateWidth({ title, body: "Done when nothing uses the old one." });
+    assert.equal(width.wide, true, title);
+    assert.equal(width.sweep?.strong, true, title);
+  }
+});
+
+test("a sweep alone without a migration verb, in acceptance, or negated is not enough", () => {
+  assert.equal(estimateWidth({ title: "Rename fooBar", body: "Rename `fooBar` to `fooBaz` in `server/board.ts` and all its callers.\n\nTests cover it." }).wide, false);
+  const acceptanceOnly = estimateWidth({ title: "Fix the route guard", body: "The guard in `src/route.ts` lets signed-out users through.\n\n## Acceptance\n- Every route redirects signed-out users." });
+  assert.equal(acceptanceOnly.sweep, null, "acceptance says what done looks like, not the scope");
+  assert.equal(estimateWidth({ title: "Fix the settings page", body: "Do not migrate the remaining pages; only settings.\n\nTests cover it." }).wide, false);
+});
+
+test("a feature across five surfaces is wide; four alone, or a surface named in a file path, is not", () => {
+  const width = estimateWidth({ title: "Add a pickup limit", body: "Add the limit to the web board, the CLI, the TUI, the desktop app and the server API.\n\nTests cover each." });
+  assert.deepEqual(width.surfaces, ["web", "CLI", "TUI", "server", "desktop"]);
+  assert.equal(width.wide, true);
+  assert.equal(estimateWidth({ title: "Add a pickup limit", body: "Add the limit to the web board, the CLI, the TUI and the server API.\n\nTests cover each." }).wide, false);
+  assert.deepEqual(estimateWidth({ title: "Fix it", body: "Edit `server/board.ts`." }).surfaces, []);
+});
+
+test("two weaker signs together are wide; one alone is not", () => {
+  const files = Array.from({ length: 8 }, (_, index) => `\`src/part${index}.ts\``).join(", ");
+  assert.equal(estimateWidth({ title: "Tidy", body: `Tidy ${files}.\n\nTests cover it.` }).wide, false, "naming files is a careful brief, not width");
+  assert.equal(estimateWidth({ title: "Tidy", body: `Tidy ${files} and all their callers.\n\nTests cover it.` }).wide, true);
+  assert.equal(estimateWidth({ title: "Wire it up", body: "Touch `/a`, `/b` and `/c` on the web, CLI, TUI and server sides.\n\nTests cover it." }).wide, true);
+});
+
+test("a long list of things to change is wide, but a long acceptance list is not", () => {
+  const items = Array.from({ length: 12 }, (_, index) => `- Page ${index}`).join("\n");
+  assert.equal(estimateWidth({ title: "Restyle pages", body: `Restyle:\n${items}\n\nTests cover it.` }).listItems, 12);
+  assert.equal(estimateWidth({ title: "Restyle pages", body: `Restyle:\n${items}\n\nTests cover it.` }).wide, true);
+  assert.equal(estimateWidth({ title: "Restyle the header", body: `Restyle the header.\n\n## Acceptance\n${items}` }).wide, false);
+});
+
+test("cards that already ask for a plan are never wide", () => {
+  const wide = { title: "Migrate the remaining pages to Tailwind", body: "Done when no CSS modules remain." };
+  const plan = planningCard(wide);
+  assert.equal(plan.title, "Plan: Migrate the remaining pages to Tailwind");
+  assert.match(plan.body, /^Plan this work; do not implement it\..*bakery-plan block\.\n\n## The work to plan\n\nDone when no CSS modules remain\.$/s);
+  assert.equal(isPlanningCard(plan), true);
+  assert.equal(estimateWidth(plan).wide, false);
+  assert.deepEqual(planningCard(plan), { title: plan.title, body: planningCard({ title: plan.title, body: plan.body }).body }, "the title is not prefixed twice");
+  assert.equal(planningCard({ title: "x".repeat(200), body: "" }).title.length, 200, "the title stays within the server's limit");
+  assert.equal(isPlanningCard({ title: "Plan the auth refactor", body: "" }), true);
+  assert.equal(isPlanningCard({ title: "Fix the planner", body: "" }), false);
+});
+
+test("Bakery's own wide card text is not flagged, and a wide card in Triage is flagged on the way to Ready", () => {
+  const own = "## Steps\n- Extend the Ready lint with a width estimate from the card text (many routes, files or surfaces, or words like \"all\", \"every\", \"migrate the remaining\").\n- For a wide card, offer \"Turn into a plan\".\n\n## Acceptance\n- A card listing 10 routes is flagged; a one-file fix is not flagged.\n- Tests cover the estimate.";
+  assert.equal(estimateWidth({ title: "Warn about wide cards at Ready", body: own }).wide, false);
+  assert.deepEqual(readyFlags({ title: "Migrate the remaining pages", body: `Move them.${done}`, status: "triage" }).map(flag => flag.rule), ["wide"]);
 });

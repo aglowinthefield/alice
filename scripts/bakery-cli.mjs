@@ -94,7 +94,8 @@ function selectBoard(boards, selector) {
 }
 
 /**
- * Prints what may make the card churn before it moves to Ready (asks only a person can meet, no acceptance criteria).
+ * Prints what may make the card churn before it moves to Ready (asks only a person can meet, no acceptance criteria,
+ * work too wide for one run).
  * A flagged card needs --yes, the CLI's "Ready anyway"; with it the flags still go to stderr. Servers without the
  * check answer 404 and the move goes ahead as before.
  */

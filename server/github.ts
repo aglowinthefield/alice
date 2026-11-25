@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Board, Card, RepoBoard } from "./board.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import { githubMarkdown } from "./github-markdown.js";
+import { loopGuards } from "./repo-limits.js";
 
 // GitHub pull request integration. On a `github-pr` board a card is Done once its PR has merged on GitHub
 // and the merge commit is on origin/main. Local main is only ever fast-forwarded to origin/main.
@@ -144,9 +145,9 @@ export function trimFailedLog(log: string, maxLines = 60, maxChars = 4000): stri
 const draftCi = "CI is failing on a draft PR. Bakery doesn't send drafts back for CI fixes; mark the PR ready for review and it will.";
 
 /** Most automatic CI fix runs per card. After that a failing PR waits for the operator. */
-export const maxCiReworks = 3;
+export const maxCiReworks = loopGuards.ciFixRuns;
 /** Every conflict is attempted; the agent leaves one alone only when it takes a human decision. */
-const maxConflictRepairs = 3;
+const maxConflictRepairs = loopGuards.conflictRepairs;
 const ciFixUnchanged = (head: string) => `The CI fix run made no change, so CI still fails at ${head.slice(0, 12)}. Read its report, then rerun the failed checks on GitHub or fix it in the card worktree.`;
 
 /**

@@ -537,6 +537,41 @@ test("card runs and conflict repairs pass their resolved Pi model and thinking l
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a board's model ladder runs attempt 1 on the card-run model and later attempts on the retry model", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), argsFile = join(dir, "args.txt");
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    chmodSync(fakePi, 0o755);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+    const card = board.createCard({ title: "Ladder", body: "", repo });
+    board.setStatus(card.id, "ready");
+    board.setAgentModels(board.listBoards()[0].id, { work: { model: "anthropic/claude-sonnet-4-5", thinking: "high" }, conflict: { model: "openai-codex/gpt-5.5", thinking: "" }, retry: { model: "anthropic/claude-opus-4-1", thinking: "" } });
+    const models = () => readFileSync(argsFile, "utf8").split("\n").slice(4, 8);
+    const first = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(first.id)?.status === "review");
+    assert.equal(first.attempt, 1);
+    assert.deepEqual(models(), ["--model", "anthropic/claude-sonnet-4-5", "--thinking", "high"]);
+    for (const attempt of [2, 3]) {
+      const retry = worker.start(board.getCard(card.id)!);
+      await waitFor(() => board.getRun(retry.id)?.status === "review");
+      assert.equal(retry.attempt, attempt);
+      // A blank retry thinking level keeps the card-run level.
+      assert.deepEqual(models(), ["--model", "anthropic/claude-opus-4-1", "--thinking", "high"]);
+    }
+    // Conflict repairs keep their own model; the ladder covers card runs only.
+    board.recordMergeFailure(card.id, ["README.md"], "conflict");
+    const conflict = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(conflict.id)?.status === "review");
+    assert.deepEqual(models(), ["--model", "openai-codex/gpt-5.5", "-e", wrapUpExtension]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 function worktrunkFixture() {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), fakeWt = join(dir, "wt-fake"), log = join(dir, "wt.log");
@@ -999,15 +1034,18 @@ test("the wrap-up extension steers only a busy session, once per message, so it 
 });
 
 // A fake Pi that loads the real wrap-up extension and works in turns. `loop` runs the same command every turn until it
-// is steered and the test has written `release`, then reports and settles. `long` reads a new file each turn and edits one every sixth turn, then settles.
-function stuckFixture(behaviour: "loop" | "long", turns = 80) {
+// is steered and the test has written `release`, then reports and settles. Each other mode settles after `turns`.
+// `append-untracked` and `rewrite-tracked` change files only through bash, with a different command each turn: the
+// first appends to one untracked file, the second rewrites README.md's one line, so the diff's line counts never move.
+// `long` reads a new file each turn and edits one every sixth turn, then settles.
+function stuckFixture(behaviour: "loop" | "long" | "append-untracked" | "rewrite-tracked", turns = 80) {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), script = join(dir, "pi-fake.mjs"), steers = join(dir, "steers.jsonl"), release = join(dir, "release");
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   writeFileSync(join(repo, "README.md"), "fixture\n");
   execFileSync("git", ["-C", repo, "add", "README.md"]);
   execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-  writeFileSync(script, `import { appendFileSync, existsSync } from "node:fs";
+  writeFileSync(script, `import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const args = process.argv.slice(2), handlers = {};
 const emit = event => process.stdout.write(JSON.stringify(event) + "\\n");
@@ -1031,7 +1069,10 @@ const settle = text => {
 const timer = setInterval(() => {
   turn++;
   emit({ type: "turn_start" });
-  if (${JSON.stringify(behaviour)} === "loop") tool("t" + turn, "bash", { command: "npm test -- --grep flaky", timeout: 600 });
+  const mode = ${JSON.stringify(behaviour)};
+  if (mode === "loop") tool("t" + turn, "bash", { command: "npm test -- --grep flaky", timeout: 600 });
+  else if (mode === "append-untracked") { appendFileSync("notes.md", "step " + turn + "\\n"); tool("b" + turn, "bash", { command: "echo step " + turn + " >> notes.md" }); }
+  else if (mode === "rewrite-tracked") { writeFileSync("README.md", "fixture " + turn + "\\n"); tool("b" + turn, "bash", { command: "echo fixture " + turn + " > README.md" }); }
   else {
     tool("r" + turn, "read", { path: "src/module-" + turn + ".ts" });
     if (turn % 6 === 0) { appendFileSync("notes.md", "step " + turn + "\\n"); tool("e" + turn, "edit", { path: "notes.md" }); tool("b" + turn, "bash", { command: "npm test" }); }
@@ -1082,3 +1123,20 @@ test("a normal long run that keeps changing files is not flagged", async () => {
     assert.doesNotMatch(finished.output, /may be stuck/);
   } finally { f.cleanup(); }
 });
+
+for (const behaviour of ["append-untracked", "rewrite-tracked"] as const) {
+  test(`a run whose bash commands keep changing files is not flagged (${behaviour})`, async () => {
+    // Well past the 25-turn idle limit, so a fingerprint blind to these changes would flag the run.
+    const f = stuckFixture(behaviour, 40);
+    try {
+      const run = f.worker.start(f.board.getCard(f.card.id)!);
+      await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
+      const finished = f.board.getRun(run.id)!;
+      assert.equal(finished.status, "review", finished.error ?? "");
+      assert.ok(finished.turns >= 40, `ran ${finished.turns} turns`);
+      assert.equal(finished.stuck, null);
+      assert.deepEqual(f.delivered(), []);
+      assert.doesNotMatch(finished.output, /may be stuck/);
+    } finally { f.cleanup(); }
+  });
+}

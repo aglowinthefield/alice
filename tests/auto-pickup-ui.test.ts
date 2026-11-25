@@ -12,7 +12,7 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
   try {
     const page = await browser.newPage();
     let board = { id: "board", repo: "/tmp/bakery", autoPickupEnabled: true, pickupConcurrency: 2,
-      pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z" as string | null,
+      limitsEnabled: true, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z" as string | null,
       autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false };
     let resets = 0, dialogs = 0;
     page.on("dialog", dialog => { dialogs++; void (dialogs === 1 ? dialog.dismiss() : dialog.accept()); });
@@ -47,5 +47,47 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
     await page.getByText(/0 \/ 99 starts/).waitFor();
     assert.equal(board.pickupDailyLimit, 99);
     assert.equal(dialogs, 3, "raising the limit confirms even before a Ready card is polled");
+  } finally { await browser.close(); await server.close(); }
+});
+
+test("with limits off the start limit, budget and diff caps are hidden and never block; one button turns them on", async () => {
+  const server = await createServer({ server: { port: 0, strictPort: false } });
+  await server.listen();
+  const address = server.httpServer!.address();
+  assert.ok(address && typeof address !== "string");
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    // Stored limits that would block if they applied: 6 of 6 starts used and a budget below the spend.
+    let board = { id: "board", repo: "/tmp/bakery", autoPickupEnabled: true, pickupConcurrency: 2,
+      limitsEnabled: false, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: null as string | null, pickupCostBudget: 1, cost24h: 3,
+      autoPickupBudgetReached: false, autoReviewMaxFiles: 40, autoReviewMaxPatchChars: 100000,
+      autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false };
+    const patches: unknown[] = [];
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/boards/board/settings" && route.request().method() === "PATCH") {
+        const patch = route.request().postDataJSON(); patches.push(patch);
+        board = { ...board, ...patch }; await route.fulfill({ json: board }); return;
+      }
+      const data = path === "/api/boards" ? [board]
+        : path === "/api/settings" ? { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" }
+        : [];
+      await route.fulfill({ json: data });
+    });
+    await page.goto(`http://127.0.0.1:${address.port}/board/board`);
+    await page.getByText(/Last 24h:/).waitFor();
+    assert.equal(await page.getByText(/Auto pickup waiting/).count(), 0, "no start-limit banner while limits are off");
+    assert.equal(await page.getByText(/budget/).count(), 0, "the header shows spend without a budget");
+    await page.getByRole("button", { name: "Edit /tmp/bakery" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText(/Off: no daily start limit, cost budget or review diff caps/).waitFor();
+    assert.equal(await dialog.getByRole("combobox", { name: "Auto pickup daily start limit" }).count(), 0);
+    assert.equal(await dialog.getByRole("textbox", { name: "Auto pickup daily cost budget" }).count(), 0);
+    assert.equal(await dialog.getByRole("spinbutton", { name: "Largest diff the agent reviewer takes (files)" }).count(), 0);
+    await dialog.getByRole("button", { name: "Turn limits on" }).click();
+    await dialog.getByRole("combobox", { name: "Auto pickup daily start limit" }).waitFor();
+    await dialog.getByRole("spinbutton", { name: "Largest diff the agent reviewer takes (files)" }).waitFor();
+    assert.deepEqual(patches, [{ limitsEnabled: true }]);
   } finally { await browser.close(); await server.close(); }
 });

@@ -6,6 +6,7 @@ import { sharedCacheEnv } from "./shared-cache-env.js";
 import { validateSharedCaches, type SharedCache } from "./shared-caches.js";
 import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
+import { atRunCapacity, autoStartRefusal, budgetReached, dailyStartsReached, loopGuards, nextStartAt } from "./repo-limits.js";
 import { classifyProviderFailure, isProviderFailureKind, type ProviderFailureKind } from "./provider-failure.js";
 import { summarizeFailure } from "./failure-summary.js";
 import type { ThemeName } from "../src/themes.js";
@@ -15,11 +16,11 @@ import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/rep
 import type { StatsInput } from "./stats.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string };
 /** `integration` is what the build lets Bakery do: github-pr only with the pull requests feature. `integrationConfigured` is what is stored, kept while the feature is off. The stored sync error and warning are kept too but read empty while it is off, so they never hold back pickup. */
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullRequests: boolean): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl,
@@ -29,12 +30,13 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullReque
   autoPullRequestEnabled: row.autoPullRequestEnabled !== 0, autoPullRequestEnabledAt: row.autoPullRequestEnabledAt,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
   autoPickupStarts: starts.length, agentModels: parseAgentModels(row.agentModels), sharedCaches: validateSharedCaches(JSON.parse(row.sharedCaches)),
-  autoPickupNextAt: row.pickupDailyLimit > 0 && starts.length >= row.pickupDailyLimit
-    ? new Date(Date.parse(starts[starts.length - row.pickupDailyLimit]) + 86_400_000).toISOString() : null,
+  autoPickupNextAt: nextStartAt(limitSettings(row), starts),
   pickupCostBudget: row.pickupCostBudget, cost24h, integration: pullRequests ? row.integration : "local", integrationConfigured: row.integration, integrationError: pullRequests ? row.integrationError : "", integrationWarning: pullRequests ? row.integrationWarning : "", integrationSyncedAt: row.integrationSyncedAt,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
-  autoPickupBudgetReached: row.pickupCostBudget !== null && cost24h >= row.pickupCostBudget,
+  autoPickupBudgetReached: budgetReached(limitSettings(row), cost24h),
+  limitsEnabled: row.limitsEnabled !== 0,
 });
+const limitSettings = (row: BoardRow) => ({ ...row, limitsEnabled: row.limitsEnabled !== 0 });
 // Token and cost columns are NULL for attempts recorded before Bakery tracked usage; new attempts start at 0.
 const usageColumns = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "cost"] as const;
 type UsageFields = { [Key in keyof Usage]: number | null };
@@ -142,17 +144,12 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-/** How many runs of one card Bakery pushes to open its pull request without Approve; see `listAutoPullRequestCandidates`. */
-export const maxAutoPullRequestAttempts = 3;
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches";
+const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
 export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
-/**
- * Minutes an automatic run that failed on a `transient` or `rate-limit` provider error waits before auto-pickup retries
- * its card, one entry per retry. Once they are used up the next such failure pauses pickup like any other failure.
- */
-export const autoRetryDelaysMinutes = [1, 5, 15] as const;
+/** Minutes an automatic run that failed on a `transient` or `rate-limit` provider error waits before pickup retries its card. */
+const autoRetryDelaysMinutes = loopGuards.autoRetryDelaysMinutes;
 /** A status change (fromStatus/toStatus set) or a note (both null), with why it happened. */
 export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
@@ -308,6 +305,8 @@ export class Board {
     if (!boardColumns.has("autoReviewMaxFiles")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewMaxFiles INTEGER NOT NULL DEFAULT 40");
     if (!boardColumns.has("autoReviewMaxPatchChars")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewMaxPatchChars INTEGER NOT NULL DEFAULT 100000");
     if (!boardColumns.has("pickupDailyLimit")) this.db.exec("ALTER TABLE boards ADD COLUMN pickupDailyLimit INTEGER NOT NULL DEFAULT 6");
+    // Spend limits (daily starts, cost budget, review diff caps) apply only when this is on; see server/repo-limits.ts.
+    if (!boardColumns.has("limitsEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN limitsEnabled INTEGER NOT NULL DEFAULT 0");
     // Auto-review no longer runs a verification command or merges by itself, so these settings are gone.
     for (const gone of ["verificationCommand", "autoReviewMergeLimit"]) if (boardColumns.has(gone)) this.db.exec(`ALTER TABLE boards DROP COLUMN ${gone}`);
     if (!boardColumns.has("autoPickupResetRunRowid")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0");
@@ -810,7 +809,7 @@ export class Board {
     try {
       const board = this.getBoard(id);
       if (!board) throw new Error("Board not found");
-      if (!board.autoPickupEnabled || board.pickupDailyLimit === 0 || board.autoPickupStarts < board.pickupDailyLimit) throw new Error("Auto-pickup start limit is not currently reached on this enabled board");
+      if (!board.autoPickupEnabled || !dailyStartsReached(board, board.autoPickupStarts)) throw new Error("Auto-pickup start limit is not currently reached on this enabled board");
       // A rowid boundary counts a claim even when it shares the reset's millisecond.
       const last = (this.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS id FROM runs").get() as { id: number }).id;
       this.db.prepare("UPDATE boards SET autoPickupResetRunRowid=? WHERE id=?").run(last, id);
@@ -825,19 +824,24 @@ export class Board {
   runningCount(repo: string): number {
     return (this.db.prepare(`SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running' AND ${notSentinelJob}`).get(repo) as { n: number }).n;
   }
-  autoPickupBudgetReached(repo: string): boolean {
-    return !!this.listBoards().find(item => item.repo === repo)?.autoPickupBudgetReached;
-  }
   autoStartsToday(repo: string): number {
     const row = this.db.prepare(`SELECT ${boardFields} FROM boards WHERE repo=? AND archived=0`).get(repo) as BoardRow | undefined;
     return row ? this.toBoard(row).autoPickupStarts : 0;
   }
+  /** Why pickup may not start another card on this board now (capacity, daily starts or budget), or null. */
+  autoStartRefusal(repoBoard: RepoBoard): ReturnType<typeof autoStartRefusal> {
+    return autoStartRefusal(repoBoard, { running: this.runningCount(repoBoard.repo), starts: repoBoard.autoPickupStarts, cost24h: repoBoard.cost24h });
+  }
+  /** Turns the board's spend limits on or off; the stored values are kept either way. */
+  setLimitsEnabled(id: string, enabled: boolean): RepoBoard {
+    if (!this.getBoard(id)) throw new Error("Board not found");
+    this.db.prepare("UPDATE boards SET limitsEnabled=? WHERE id=?").run(enabled ? 1 : 0, id);
+    return this.getBoard(id)!;
+  }
   listAutoPickupCandidates(): { card: Card; board: RepoBoard }[] {
     const result: { card: Card; board: RepoBoard }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.autoPickupEnabled)) {
-      if (repoBoard.autoPickupBudgetReached || repoBoard.integrationError) continue;
-      const atLimit = this.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency || (repoBoard.pickupDailyLimit > 0 && repoBoard.autoPickupStarts >= repoBoard.pickupDailyLimit);
-      if (atLimit) continue;
+      if (repoBoard.integrationError || this.autoStartRefusal(repoBoard)) continue;
       // A card waiting out its retry backoff is skipped until its time comes.
       const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='ready' AND (autoRetryAt IS NULL OR autoRetryAt<=?) AND ${notSentinelJob} ORDER BY priority DESC, createdAt, rowid`).all(repoBoard.repo, now()) as { id: string }[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
@@ -873,7 +877,7 @@ export class Board {
    * Review cards whose pull request Bakery should open without Approve, oldest finished run first. See
    * `setAutoPullRequest`. With auto-review on, the agent reviewer's approval opens the PR instead, so this stays out.
    * Only a card's first PR is opened this way: updating a pushed PR still takes Approve (CI fixes excepted, which
-   * GitHub sync pushes). Each run is tried once, and a card at most `maxAutoPullRequestAttempts` times, so a pre-push
+   * GitHub sync pushes). Each run is tried once, and a card at most `loopGuards.autoPullRequestPushes` times, so a pre-push
    * hook that keeps refusing the agent's fixes cannot loop forever.
    */
   listAutoPullRequestCandidates(): { card: Card; run: Run }[] {
@@ -890,7 +894,7 @@ export class Board {
   private awaitsAutoPullRequest(repoBoard: RepoBoard, card: Card, run: Run): boolean {
     const attempts = this.db.prepare("SELECT COUNT(*) AS n, SUM(runId=?) AS tried FROM auto_pull_requests WHERE cardId=?").get(run.id, card.id) as { n: number; tried: number | null };
     return run.status === "review" && !!run.finishedAt && !!repoBoard.autoPullRequestEnabledAt && run.finishedAt > repoBoard.autoPullRequestEnabledAt &&
-      !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !attempts.tried && attempts.n < maxAutoPullRequestAttempts &&
+      !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !attempts.tried && attempts.n < loopGuards.autoPullRequestPushes &&
       !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id);
   }
   /** Records that Bakery is opening `runId`'s pull request on its own. False when the run is no longer a candidate. */
@@ -1524,10 +1528,10 @@ export class Board {
       if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
         throw new Error("Agent review is in progress; wait for its result before running Pi again");
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);
-      if (repoBoard?.autoPickupEnabled && !isSentinelJob(card) && this.runningCount(card.repo) >= repoBoard.pickupConcurrency)
+      if (repoBoard?.autoPickupEnabled && !isSentinelJob(card) && atRunCapacity(repoBoard, this.runningCount(card.repo)))
         throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
-        (repoBoard.pickupDailyLimit > 0 && this.autoStartsToday(card.repo) >= repoBoard.pickupDailyLimit) || repoBoard.autoPickupBudgetReached || repoBoard.integrationError || this.autoPickupBlocker(repoBoard) ||
+        this.autoStartRefusal(repoBoard) || repoBoard.integrationError || this.autoPickupBlocker(repoBoard) ||
         (card.autoRetryAt !== null && card.autoRetryAt > now())))
         throw new Error("Automatic pickup is not eligible for this card");
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
@@ -1604,7 +1608,7 @@ export class Board {
       const kind = status === "failed" && isProviderFailureKind(failureKind) ? failureKind : null;
       const card = this.getCard(run.cardId);
       // A temporary provider failure of an automatic run goes back to Ready and waits out a backoff instead of pausing
-      // pickup. Past the last delay, or for any other failure, the card fails and pickup pauses as before.
+      // pickup. Past the last delay, or for any other failure, the card fails and waits in Failed.
       const retry = retryable && card && run.startedBy === "auto" && (kind === "transient" || kind === "rate-limit") && !isSentinelJob(card) && card.autoRetries < autoRetryDelaysMinutes.length;
       this.db.prepare("UPDATE runs SET status=?, error=?, failureKind=?, retryScheduled=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, kind, retry ? 1 : 0, now(), id);
       if (retry) {

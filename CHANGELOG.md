@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Spend limits (the daily start limit, the daily cost budget and the agent reviewer's diff caps) sit behind one **Limits** switch per board, off by default, in the board settings or `bakery-cli limits on|off`. Stored values are kept while it's off. Concurrency and loop guards (send-back, CI-fix and retry caps, the run timeout) always apply. Every limit is decided in `server/repo-limits.ts`. Existing boards start with limits off.
 - A failed automatic run no longer pauses pickup. Its card waits in Failed, pickup never restarts it, and the next Ready card starts. Only an authentication or billing refusal from the provider still pauses pickup, since every card would fail the same way. Boards paused for a failed run resume on startup.
 - Moving a Triage card to Ready checks its text first. A card that asks for something only a person can do (a physical device, screenshots by hand, staging or production) or never says what done looks like shows its flags with **Edit** and **Ready anyway**; nothing is blocked. `bakery-cli ready` prints the flags and needs `--yes` to move a flagged card.
 - `bakery-cli open [CARD_ID]` opens the board, or a card by its short ID, in the browser and prints the URL. `--print` prints without opening.

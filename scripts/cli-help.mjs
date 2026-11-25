@@ -150,9 +150,16 @@ export const COMMANDS = [
     full: "[--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
   },
   {
+    name: "limits", group: "Boards", args: "[on|off]", summary: "spend limits: show, or turn them on or off",
+    full: "[on|off] [--board ID|PATH] [--json]",
+    details: "Spend limits are the daily start limit, the daily cost budget and the agent reviewer's diff caps. They are off by default, and apply only when on; the stored values are kept either way. Concurrency and loop guards (send-back, CI-fix and retry caps) always apply. Set the values with pickup --limit and --budget.",
+    options: [BOARD, JSON_OUT],
+    examples: [["bakery-cli limits on", ""], ["bakery-cli limits off --board ~/code/scratch", ""]],
+  },
+  {
     name: "pickup", group: "Boards", args: "[on|off|reset]", summary: "automatic starts: show or change them",
     full: "[on|off|reset] [--concurrency 1-4] [--limit 0-99|off] [--budget USD|off] [--board ID|PATH] [--yes]",
-    details: "With no argument, prints the pickup state. on, and reset (which clears the 24-hour count), can start paid Pi runs, so they need --yes.",
+    details: "With no argument, prints the pickup state. on, and reset (which clears the 24-hour count), can start paid Pi runs, so they need --yes. --limit and --budget are stored, and apply only while the board's limits are on (see limits).",
     options: [["--concurrency N", "runs at once, 1 to 4"], ["--limit N|off", "most automatic starts per rolling 24 hours; 0 or off means no limit"], ["--budget USD|off", "stop starting once 24 hours of runs cost this much"], BOARD, ["--yes", "confirm"]],
     examples: [["bakery-cli pickup on --concurrency 2 --budget 20 --yes", ""], ["bakery-cli pickup off", ""]],
   },

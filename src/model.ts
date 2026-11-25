@@ -42,6 +42,8 @@ export type Board = {
   autoPullRequestEnabled?: boolean;
   autoReviewEnabled: boolean;
   autoReviewEnabledAt: string | null;
+  /** Spend limits (daily starts, cost budget, review diff caps) apply only when on; off by default. */
+  limitsEnabled?: boolean;
   autoReviewConcurrency?: number;
   autoReviewMaxFiles?: number;
   autoReviewMaxPatchChars?: number;

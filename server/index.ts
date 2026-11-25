@@ -499,6 +499,10 @@ const server = createServer(async (req, res) => {
         if (keys.some(key => key !== "autoReviewMaxFiles" && key !== "autoReviewMaxPatchChars") || [input.autoReviewMaxFiles, input.autoReviewMaxPatchChars].some(value => value !== undefined && !Number.isSafeInteger(value))) throw new Error("Update autoReviewMaxFiles and autoReviewMaxPatchChars as integers (0 for no limit), separately from other board settings");
         send(res, 200, board.setAutoReviewDiffLimits(repoBoard.id, { maxFiles: input.autoReviewMaxFiles as number | undefined, maxPatchChars: input.autoReviewMaxPatchChars as number | undefined })); return;
       }
+      if ("limitsEnabled" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.limitsEnabled !== "boolean") throw new Error("Update limitsEnabled as a boolean, separately from other board settings");
+        send(res, 200, board.setLimitsEnabled(repoBoard.id, input.limitsEnabled)); return;
+      }
       if ("autoReviewConcurrency" in input) {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewConcurrency)) throw new Error("Update autoReviewConcurrency as an integer from 1 to 4, separately from other board settings");
         send(res, 200, board.setAutoReviewConcurrency(repoBoard.id, Number(input.autoReviewConcurrency))); return;

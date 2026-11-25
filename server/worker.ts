@@ -10,6 +10,7 @@ import { classifyProviderFailure, describeProviderFailure, type ProviderFailureK
 import { describeToolCall } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 import { commitIdentityArgs } from "./git-identity.js";
+import { loopGuards } from "./repo-limits.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -57,7 +58,7 @@ export type LiveActivity = { tool: string; turn: number; since: string };
 const MAX_PI_EVENT_BYTES = 500_000_000;
 
 /** Hard limit on one agent run. The separate Worktrunk hook timeout is unaffected. */
-const runTimeoutMinutes = 60;
+const runTimeoutMinutes = loopGuards.runTimeoutMinutes;
 /** How long before the run timeout Bakery asks Pi to stop and report, so a killed run still leaves a report. */
 const wrapUpLeadMinutes = 10;
 /** The Pi extension that steers a running session with Bakery's wrap-up message (JSON mode reads no stdin). */

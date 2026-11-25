@@ -32,9 +32,9 @@ export class AutoPickup {
       }
       const candidates = this.board.listAutoPickupCandidates().filter(item => item.board.id === repoBoard.id);
       for (const { card } of candidates) {
-        const limited = (this.board.runningCount(repoBoard.repo) >= repoBoard.pickupConcurrency ||
-          (repoBoard.pickupDailyLimit > 0 && this.board.autoStartsToday(repoBoard.repo) >= repoBoard.pickupDailyLimit));
-        if (limited || this.board.autoPickupBudgetReached(repoBoard.repo)) { if (limited) continue; break; }
+        // Read fresh each time: every start uses a slot and a daily start, and spend moves.
+        const refusal = this.board.autoStartRefusal(this.board.getBoard(repoBoard.id) ?? repoBoard);
+        if (refusal) break;
         try {
           console.log(`[pickup ${repoBoard.repo}] starting card ${card.id.slice(0, 8)} "${card.title.slice(0, 60)}"`);
           this.worker.start(card, "auto");

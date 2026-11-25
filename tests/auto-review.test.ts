@@ -516,6 +516,7 @@ test("queued agent reviews show their place, and a board runs as many at once as
 test("a board's diff limits send big diffs to a person, and 0 turns a limit off", async () => {
   const item = fixture();
   try {
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxFiles, 40);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxPatchChars, 100000);
     assert.throws(() => item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxFiles: -1 }));

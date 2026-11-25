@@ -141,9 +141,29 @@ test("boards an older version paused for a failed run resume on startup", async 
     finally { check.close(); }
   } finally { reopened?.close(); await item.close(); }
 });
+test("with limits off, a used-up start limit and budget do not stop pickup, and concurrency still does", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoPickup(item.repoBoard.id, true, 1, 1, 0.01);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.limitsEnabled, false, "limits are off by default");
+    const first = item.card("First"), second = item.card("Second");
+    item.pickup.tick();
+    assert.equal(item.board.getCard(first.id)?.status, "running");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(second.id).length, 0, "one run at a time still holds");
+    item.release();
+    await waitFor(() => item.board.getCard(first.id)?.status === "review");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(second.id)[0]?.startedBy, "auto", "the 1-start limit does not apply while limits are off");
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
+    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoPickupNextAt !== null, true, "turning limits on applies the stored limit");
+  } finally { await item.close(); }
+});
+
 test("a rolling six-start limit prevents unbounded model spend and persists after reopening", async () => {
   const item = fixture();
   try {
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
     item.release();
     item.board.setAutoPickup(item.repoBoard.id, true, 2);
     for (let i = 0; i < 7; i++) item.card(`Task ${i}`);
@@ -178,6 +198,7 @@ test("a start in the same millisecond as a reset counts against the new limit", 
   const item = fixture();
   mock.timers.enable({ apis: ["Date"], now: new Date() });
   try {
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
     const first = item.card("Before reset"), second = item.card("After reset"), third = item.card("Blocked");
     item.board.setAutoPickup(item.repoBoard.id, true, 2, 1);
     const before = item.board.claim(first.id, "auto");
@@ -194,6 +215,7 @@ test("a start in the same millisecond as a reset counts against the new limit", 
 test("an explicit reset clears the rolling count but retains run history and permits another start", async () => {
   const item = fixture();
   try {
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
     item.release();
     item.board.setAutoPickup(item.repoBoard.id, true, 2, 1);
     const first = item.card("First"), second = item.card("After reset");
@@ -236,6 +258,7 @@ test("a second Board connection does not interrupt live runs; explicit server re
 test("a reached daily cost budget makes pickup wait with a reason while manual starts still run", async () => {
   const item = fixture();
   try {
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
     const usage = { input: 1000, output: 200, cacheRead: 50, cacheWrite: 10, totalTokens: 1260, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.6 } };
     writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage } })}' '{"type":"agent_settled","aborted":false}'\n`);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.pickupCostBudget, null, "budget is off by default");

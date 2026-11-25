@@ -8,7 +8,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
-const board = { id: "board-one", repo: "/tmp/bakery-project", autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
+const board = { id: "board-one", repo: "/tmp/bakery-project", limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 const cards = [
   { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 50, attempts: 3, reviewRounds: 2 },
@@ -245,6 +245,20 @@ test("open prints and opens the board or a card by its short ID, through $BROWSE
     rmSync(dir, { recursive: true, force: true });
     await f.close();
   }
+});
+
+test("limits shows the spend limits and turns them on or off for one board", async () => {
+  const f = await fixture();
+  try {
+    const shown = await f.run("limits");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /^Limits on: 6 starts per 24h; no budget; .*loop guards always apply\.\n$/);
+    const off = await f.run("limits", "off");
+    assert.equal(off.code, 0, off.stderr);
+    assert.match(off.stdout, /^Limits off \(stored, not applied\)/);
+    assert.notEqual((await f.run("limits", "maybe")).code, 0);
+    assert.deepEqual(f.requests.filter(r => r.method === "PATCH").map(r => r.input), [{ limitsEnabled: false }]);
+  } finally { await f.close(); }
 });
 
 test("board shows the auto-review state, and the removed --merge-limit is refused", async () => {

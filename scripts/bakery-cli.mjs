@@ -126,7 +126,7 @@ const priorityValue = value => Object.hasOwn(priorities, value) ? priorities[val
 const priorityName = value => Object.keys(priorities).find(key => priorities[key] === (value ?? 0)) ?? String(value ?? 0);
 const money = cost => typeof cost !== "number" ? "—" : cost > 0 && cost < 0.01 ? "<$0.01" : `$${cost.toFixed(2)}`;
 const lanes = ["triage", "ready", "running", "review", "failed", "interrupted", "done", "archived"];
-const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${item.pickupDailyLimit === 0 ? `${item.autoPickupStarts ?? 0} starts in 24h (no limit)` : `${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h`}${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
+const pickupSummary = item => `Pickup ${item.autoPickupEnabled ? "on" : "off"}; concurrency ${item.pickupConcurrency}; ${!item.limitsEnabled ? `limits off; ${item.autoPickupStarts ?? 0} starts in 24h` : item.pickupDailyLimit === 0 ? `${item.autoPickupStarts ?? 0} starts in 24h (no limit)` : `${item.autoPickupStarts ?? 0}/${item.pickupDailyLimit ?? 6} starts in 24h`}${item.autoPickupNextAt ? `; next slot ${item.autoPickupNextAt}` : ""}; ${money(item.cost24h ?? 0)} spent in 24h${item.limitsEnabled && typeof item.pickupCostBudget === "number" ? ` of ${money(item.pickupCostBudget)} budget${item.autoPickupBudgetReached ? " (waiting: budget reached)" : ""}` : ""}${item.autoPickupError ? `; paused: ${item.autoPickupError}` : ""}`;
 const cardLine = card => `${card.id}\t${card.status}\t${card.title ?? ""}`;
 
 // The API has no single-card GET, so find the card in its board's list.
@@ -203,11 +203,11 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { doctor: 0, open: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { doctor: 0, open: 0, limits: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw new Error(unknown(command));
   if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
-  if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
+  if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "limits" ? args.length > 1 || (args.length === 1 && !["on", "off"].includes(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined)) throw new Error("--key and --priority are only valid with create or add");
@@ -423,6 +423,12 @@ async function main() {
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));
+  } else if (command === "limits") {
+    const updated = args.length ? await request(origin, `${path}/settings`, "PATCH", { limitsEnabled: args[0] === "on" }) : board;
+    const daily = updated.pickupDailyLimit === 0 ? "no daily start limit" : `${updated.pickupDailyLimit} starts per 24h`;
+    const budget = typeof updated.pickupCostBudget === "number" ? `${money(updated.pickupCostBudget)} daily budget` : "no budget";
+    const diff = updated.autoReviewMaxFiles || updated.autoReviewMaxPatchChars ? `review diffs up to ${updated.autoReviewMaxFiles || "any"} files / ${updated.autoReviewMaxPatchChars || "any"} characters` : "no review diff caps";
+    print(updated, opts.json, [`Limits ${updated.limitsEnabled ? "on" : "off"}${updated.limitsEnabled ? "" : " (stored, not applied)"}: ${daily}; ${budget}; ${diff}. Concurrency ${updated.pickupConcurrency} runs, ${updated.autoReviewConcurrency ?? 1} reviews; loop guards always apply.`]);
   } else if (command === "pickup") {
     const summary = pickupSummary;
     if (!args.length) { print(board, opts.json, [summary(board)]); return; }

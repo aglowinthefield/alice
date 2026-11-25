@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { addAgent, type Usage } from "./agent.js";
 import type { CacheUsage } from "./turbo-summary.js";
 import { sharedCacheEnv } from "./shared-cache-env.js";
-import { validateSharedCaches, type SharedCache } from "./shared-caches.js";
-import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "./agent-models.js";
+import { validateSharedCaches, type SharedCache } from "../shared/shared-caches.js";
+import { defaultChatModel, parseAgentModels, resolveAgentModel, validateAgentModel, validateAgentModels, type AgentModel, type AgentModels, type AgentPhase } from "../shared/agent-models.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import { atRunCapacity, autoStartRefusal, budgetReached, dailyStartsReached, loopGuards, nextStartAt } from "./repo-limits.js";
 import { classifyProviderFailure, isProviderFailureKind, type ProviderFailureKind } from "./provider-failure.js";
@@ -14,8 +14,8 @@ import { featureOffMessage, readFeatures, type Features } from "../src/features.
 import { parsePlan } from "../src/plan.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 import type { StatsInput } from "./stats.js";
-
-export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
+import type { Card, CardPriority, CardPullRequest, CardStatus, ReviewAction, ReviewWait, Run, UsageFields } from "../shared/wire.js";
+export type { Card, CardPriority, CardPullRequest, CardStatus, ReviewAction, ReviewWait, Run, UsageFields };
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: AgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
@@ -39,7 +39,6 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullReque
 const limitSettings = (row: BoardRow) => ({ ...row, limitsEnabled: row.limitsEnabled !== 0 });
 // Token and cost columns are NULL for attempts recorded before Bakery tracked usage; new attempts start at 0.
 const usageColumns = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "cost"] as const;
-type UsageFields = { [Key in keyof Usage]: number | null };
 const usageDefinitions = "inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheWriteTokens INTEGER, cost REAL";
 const usageUpdate = usageColumns.map(column => `${column}=COALESCE(${column}, 0)+?`).join(", ");
 const usageValues = (usage: Usage) => usageColumns.map(column => usage[column]);
@@ -48,32 +47,14 @@ const usageValues = (usage: Usage) => usageColumns.map(column => usage[column]);
 // A whole number from -100 to 100 (default 0). The names are shorthands for the CLI and API.
 export const cardPriorities = { low: -10, normal: 0, high: 50, urgent: 100 } as const;
 export type CardPriorityName = keyof typeof cardPriorities;
-export type CardPriority = number;
 export const PRIORITY_MIN = -100, PRIORITY_MAX = 100;
 export function parsePriority(value: unknown): CardPriority {
   if (typeof value === "string" && Object.hasOwn(cardPriorities, value)) return cardPriorities[value as CardPriorityName];
   if (typeof value === "number" && Number.isInteger(value) && value >= PRIORITY_MIN && value <= PRIORITY_MAX) return value;
   throw new Error("Priority must be a whole number from -100 to 100, or low, normal, high, or urgent");
 }
-/** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
 /** Why a card has feedback waiting for its next run: failed CI, a refused push, a merge conflict, or a request made on the PR. */
 export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment";
-/**
- * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
- * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
- */
-export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number; conflictRepairs: number; conflictRepairKey: string | null; prCommentsSeen: string | null };
-/**
- * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
- * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
- */
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
-/**
- * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
- * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
- * something else (an approval in progress, a merge failure, a closed PR or failing checks) has to be dealt with first.
- */
-export type ReviewAction = "pr_ready" | "accept_findings";
 /**
  * Sentinel jobs are the cards a sentinel makes for the work it finds: a fix for a broken PR or a `/bakery` comment on
  * a PR. They carry provenance (`sentinelId`, `sentinelRunId`, `findingKey`) and the sentinel starts them itself, so they
@@ -86,31 +67,6 @@ export const isSentinelJob = (card: { sentinelId?: string | null; idempotencyKey
 const notSentinelJob = "(cards.sentinelId IS NULL AND (cards.idempotencyKey IS NULL OR (cards.idempotencyKey NOT LIKE 'sentinel:%' AND cards.idempotencyKey NOT LIKE 'request:%')))";
 /** Where a job card came from: the sentinel, the run that found it and the finding's stable key. */
 export type CardProvenance = { sentinelId: string; sentinelRunId: string; findingKey: string };
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null;
-  /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
-  sentinelId: string | null; sentinelRunId: string | null; findingKey: string | null;
-  /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
-  createdCardIds: string[] | null; createdAt: string; updatedAt: string; turns: number; turnsIncomplete: number; attempts: number; reviewRounds: number; runAgent: string; reviewAgent: string; usageIncomplete: number; dependsOn: string[]; blocked: boolean; locallyMerged: boolean; planOnly: boolean;
-  /** Last time the latest run's agent reported anything; null before the first run. */
-  lastActivityAt: string | null;
-  /** Automatic retries spent after temporary provider failures since the card's last successful run; see `autoRetryDelaysMinutes`. */
-  autoRetries: number;
-  /** When auto-pickup may retry this Ready card after a temporary provider failure; null when no retry is waiting. */
-  autoRetryAt: string | null;
-  /** Set only for Review cards that are not your turn; null means a person is needed (or the card is not in Review). */
-  reviewWait: ReviewWait | null;
-  /** Where the card waits for an agent review to start on its board (1 is next); null when it is not queued. */
-  reviewQueue: { position: number; of: number } | null;
-  /** See `ReviewAction`. */
-  reviewAction: ReviewAction | null;
-  /** A start was asked for during a restart drain and runs after the restart. */
-  startQueued: boolean;
-  /** Files attached to the card, including those sent with discussion messages. */
-  attachmentCount: number;
-  /** A Failed card's reason in a few words (see `summarizeFailure`); null on other cards. */
-  failureSummary: string | null;
-  /** Done cards on a local board with a GitHub remote: is the merge on origin/main (last fetch)? */
-  originMain?: "pushed" | "local" } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
 export type CardRef = { id: string; title: string; status: CardStatus };
 // A dependency is finished once it is Done or archived. Until then the dependent card is blocked.
@@ -131,15 +87,6 @@ export type Chat = { id: string; boardId: string; title: string; topic: string; 
 /** What an agent turn did, in order: reply text and the tools it ran. */
 export type ChatPart = { type: "text"; text: string } | { type: "tool"; id: string; name: string; input: string; output: string; status: "running" | "done" | "error" };
 export type ChatMessage = { id: string; chatId: string; role: "user" | "agent" | "error"; body: string; parts: ChatPart[]; createdAt: string };
-export type Run = { id: string; cardId: string; attempt: number; status: "running" | "review" | "failed" | "interrupted"; pid: number | null; worktree: string | null; sessionId: string; output: string; error: string | null; startedAt: string; finishedAt: string | null; turns: number; turnsIncomplete: number; startedBy: "manual" | "auto"; agent: string; lastActivityAt: string | null; ciFix: number; report: string | null;
-  /** Why a failed run's provider call failed, when the error text names one; null for other failures and successes. */
-  failureKind: ProviderFailureKind | null;
-  /** Id of the failed run whose rejected session this run replaced with a fresh one; null for ordinary runs. */
-  recoveryOf: string | null;
-  /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
-  retryScheduled: number;
-  /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
-  changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
@@ -735,7 +682,7 @@ export class Board {
     this.db.prepare("UPDATE boards SET autoCollapseEmptySwimlanes=? WHERE id=?").run(enabled ? 1 : 0, id);
     return this.getBoard(id)!;
   }
-  /** Build caches card worktrees of this board share with the main checkout; see server/shared-caches.ts. */
+  /** Build caches card worktrees of this board share with the main checkout; see shared/shared-caches.ts. */
   setSharedCaches(id: string, sharedCaches: unknown): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
     this.db.prepare("UPDATE boards SET sharedCaches=? WHERE id=?").run(JSON.stringify(validateSharedCaches(sharedCaches)), id);

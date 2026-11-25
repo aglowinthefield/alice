@@ -13,7 +13,7 @@ import {
   thinkingLevels,
   type AgentModel,
   type ThinkingLevel,
-} from "../server/agent-models.js";
+} from "../shared/agent-models.js";
 import { Button } from "./components/ui/button";
 import { CardLinks, Markdown } from "./markdown-view.js";
 import { formatRoute } from "./route.js";

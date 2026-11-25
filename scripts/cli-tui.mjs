@@ -1,7 +1,7 @@
 // `bakery-cli tui`: the board in the terminal, driven by keys. `createTui` holds the state and answers keys without
 // touching the terminal, so tests drive it with a fake API; `runTui` wires it to a raw-mode TTY.
 import { spawn } from "node:child_process";
-import { needsYourReview } from "../src/model.ts";
+import { needsYourReview } from "../shared/card-state.ts";
 import { badges, boardRows } from "./cli-board.mjs";
 import { c, wrap } from "./cli-style.mjs";
 

@@ -1,6 +1,13 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc", "react", "import", "node"],
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "react",
+    "import",
+    "node"
+  ],
   "categories": {
     "correctness": "error"
   },
@@ -15,5 +22,58 @@
   "env": {
     "builtin": true
   },
-  "ignorePatterns": ["dist/**", "src-tauri/target/**", ".worktrees/**"]
+  "ignorePatterns": [
+    "dist/**",
+    "src-tauri/target/**",
+    ".worktrees/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "src/**",
+        "scripts/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/server/*",
+                  "**/server"
+                ],
+                "message": "The browser bundle and the CLI must not pull in server code. Move what both sides need into shared/."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "shared/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/server/*",
+                  "**/server"
+                ],
+                "message": "The browser bundle and the CLI must not pull in server code. Move what both sides need into shared/."
+              },
+              {
+                "regex": "^node:",
+                "message": "shared/ runs in the browser too, so it cannot use Node built-ins."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

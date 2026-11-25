@@ -3,7 +3,7 @@ import { command } from "./platform.js";
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentLabel, messageUsage } from "./agent.js";
-import { piModelArgs, type AgentPhase } from "./agent-models.js";
+import { piModelArgs, type AgentPhase } from "../shared/agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
 import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from "./board.js";
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
@@ -51,8 +51,8 @@ export class PoisonedSessionError extends Error {
 
 const RECOVERY = "The earlier Pi session for this card was rejected by the model provider (invalid message history), so this is a fresh session that has none of its conversation. The card's worktree, branch and uncommitted edits are untouched and may hold that session's partial work: check `git status` and `git diff` first and build on them rather than starting over. Do not discard or reset existing changes. ";
 
-/** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
-export type LiveActivity = { tool: string; turn: number; since: string };
+import type { LiveActivity } from "../shared/wire.js";
+export type { LiveActivity };
 
 // Screenshots read back into a session make single events several MB; the cap only guards against a runaway line.
 const MAX_PI_EVENT_BYTES = 500_000_000;

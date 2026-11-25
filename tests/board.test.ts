@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, reportFromOutput } from "../server/board.js";
-import { emptyAgentModels, validateAgentModels } from "../server/agent-models.js";
+import { emptyAgentModels, validateAgentModels } from "../shared/agent-models.js";
 import { DatabaseSync } from "node:sqlite";
 
 test("manual cards persist and only one active attempt may be claimed", () => {

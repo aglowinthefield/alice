@@ -1,23 +1,11 @@
 // Aggregates what Bakery already records per card (runs, agent reviews, usage) for the Statistics page.
+import type { DayPoint, GroupRow, Stats } from "../shared/wire.js";
+export type { DayPoint, GroupRow, Stats };
 export type StatsRun = { repo: string; cardId: string; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };
 export type StatsReview = { repo: string; state: string; agent: string; startedAt: string; finishedAt: string | null; cost: number | null };
 export type StatsCard = { repo: string; status: string; createdAt: string; updatedAt: string; attempts: number; reviewRounds: number; ciReworks: number };
 export type StatsInput = { runs: StatsRun[]; reviews: StatsReview[]; cards: StatsCard[] };
 export type StatsOptions = { days: number | null; repo: string | null; now?: number };
-
-export type DayPoint = { date: string; succeeded: number; failed: number; interrupted: number; cost: number; created: number; done: number; reviewCost: number };
-export type GroupRow = { name: string; runs: number; failed: number; cost: number; tokens: number; avgMinutes: number | null };
-export type Stats = {
-  days: number | null;
-  summary: { cardsCreated: number; cardsDone: number; runs: number; successRate: number | null; cost: number; tokens: number; avgRunMinutes: number | null; avgLeadHours: number | null; autoShare: number | null; reviewRounds: number; ciReworks: number; agentReviews: number; agentReviewsMerged: number };
-  /** Turbo cache across runs in range; hitRate is null when no run used turbo. */
-  buildCache: { tasks: number; hits: number; hitRate: number | null; savedMinutes: number };
-  daily: DayPoint[];
-  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  byAgent: GroupRow[];
-  byRepo: GroupRow[];
-  cardStatus: { status: string; count: number }[];
-};
 
 // SQLite's datetime('now') has no zone; read it as UTC like the ISO strings.
 export const parseTime = (value: string | null): number | null => {

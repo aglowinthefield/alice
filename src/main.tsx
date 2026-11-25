@@ -1,5 +1,5 @@
 import { BrandIcon } from "./brand-icon";
-import { sharedCaches } from "../server/shared-caches.js";
+import { sharedCaches } from "../shared/shared-caches.js";
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
@@ -60,7 +60,7 @@ import {
   type AgentModels,
   type AgentPhase,
   type ThinkingLevel,
-} from "../server/agent-models.js";
+} from "../shared/agent-models.js";
 import { AgentBadge, reworkSummary } from "./attempts.js";
 import { formatCost } from "./usage.js";
 import { CardDetails } from "./card-details.js";

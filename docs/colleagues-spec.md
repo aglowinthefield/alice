@@ -135,7 +135,7 @@ Inspected local Bakery commit `fa38120` and local Impression commit `3509cd0`. T
 | `server/board.ts`, `Chat`, `ChatMessage` | Chats have a board ID and model settings. Messages have user/agent/error roles, without colleague attribution. Rooms need explicit participant and speaker identities. |
 | `server/chat.ts`, `ChatRunner.send` | One Pi session per chat; a concurrent send throws `The agent is still answering the previous message`. Room rounds and durable queued messages need new behavior. |
 | `server/chat.ts`, `chatSystemPrompt` | Prompts assume a single board and the repository's main checkout. Do not extend that assumption into unrestricted multi-project execution. |
-| `server/agent-models.ts` | Work/conflict/review/draft model settings already exist, with repository/global inheritance and per-chat choices. Colleague defaults must integrate with these rather than replace them silently. |
+| `shared/agent-models.ts` | Work/conflict/review/draft model settings already exist, with repository/global inheritance and per-chat choices. Colleague defaults must integrate with these rather than replace them silently. |
 | `server/worker.ts` | Card implementation already has dedicated worktrees and sessions. Reuse that execution lifecycle rather than turning a room into an implementation workspace. |
 | Impression `packages/mcp/src/server.ts` | Search and add tools exist. Both infer project from cwd; search accepts query/limit, and add accepts content and project/user scope. Multi-project selection is not an MCP parameter today. |
 | Impression `packages/shared/src/project.ts` | Project identity normalizes git remotes and falls back to paths. Map Bakery boards to this identity rather than inventing another memory namespace. |

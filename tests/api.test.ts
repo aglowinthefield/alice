@@ -7,7 +7,7 @@ import { request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emptyAgentModels } from "../server/agent-models.js";
+import { emptyAgentModels } from "../shared/agent-models.js";
 
 async function freePort(): Promise<number> {
   const listener = createServer();

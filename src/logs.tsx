@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import type { LogEntry } from "../server/logs.js";
+import type { LogEntry } from "../shared/wire.js";
 
 const levels = [
   { value: "debug", label: "Debug and up" },

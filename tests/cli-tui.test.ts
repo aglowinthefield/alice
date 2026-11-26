@@ -196,6 +196,48 @@ test("enter opens the card as a dialog with its latest attempt; tab shows every 
   assert.match(f.screen(), /┃ ✗ f card/);
 });
 
+test("/ finds a card by title or id, opens it, and leaves the board on it", async () => {
+  const cards = [card("a", "ready", { title: "Fix the login page" }), card("b", "review", { title: "Add a login audit" }), card("c", "archived", { title: "Old login spike" }), card("d", "triage", { title: "Unrelated" })];
+  const f = fixture(cards, { columns: 120, rows: 20 });
+  await f.tui.refresh();
+  await f.tui.key("/");
+  assert.match(f.screen(), /Type to find a card on this board/);
+  for (const name of "login qx") await f.tui.key(name);
+  assert.match(f.screen(), /No cards match/);
+  for (let i = 0; i < 3; i++) await f.tui.key("backspace");
+  const found = f.screen();
+  assert.match(found, /3 cards/);
+  assert.match(found, /◎ Fix the login page +Ready/);
+  assert.match(found, /· Old login spike +Archive/, "Archive is searched even while its lane is hidden");
+  assert.doesNotMatch(found, /Unrelated card/);
+  await f.tui.key("down");
+  await f.tui.key("down");
+  await f.tui.key("enter");
+  assert.match(f.screen(), /Archive {3}/, "enter opens the card");
+  await f.tui.key("escape");
+  assert.match(f.screen(), /┃ · Old login spike/, "the board shows the Archive lane with the found card selected");
+
+  await f.tui.key("/");
+  for (const name of "b-00") await f.tui.key(name);
+  assert.match(f.screen(), /1 card\b/, "ids match too");
+  await f.tui.key("escape");
+  assert.equal(f.tui.state.mode, "board");
+  assert.equal(f.posts().length, 0);
+});
+
+test("/ on Today finds cards on every board, and keys in the dialog act on the found card", async () => {
+  const boards = [board, { id: "b2", repo: "/code/other", integration: "local" }];
+  const all = [card("mine", "review", { repo: "/repo", updatedAt: "2026-11-24T09:00:00Z" }), card("far", "ready", { repo: "/code/other", title: "Faraway ready card", attempts: 0 })];
+  const f = fixture(all, { boards, today: true, columns: 120, rows: 20 });
+  await f.tui.refresh();
+  await f.tui.key("/");
+  for (const name of "faraway") await f.tui.key(name);
+  assert.match(f.screen(), /Faraway ready card +Ready · other/);
+  await f.tui.key("enter");
+  await f.tui.key("t");
+  assert.deepEqual(f.posts(), [["POST", "/api/boards/b2/cards/far-0000/status", { status: "triage" }]], "t acts on the found card, not Today's selection");
+});
+
 test("a long question wraps instead of losing its y/N", async () => {
   const f = fixture([card("f", "failed", { title: "A card title long enough that the paid-run question runs past the edge of a narrow terminal" })], { columns: 60 });
   await f.tui.refresh();

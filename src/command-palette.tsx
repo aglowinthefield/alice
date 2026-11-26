@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Search, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { cn } from "./lib/utils";
+import { searchRank } from "./model.js";
 
 /** The modifier for Cmd+K and friends: ⌘ on Apple platforms, Ctrl elsewhere. */
 export const modKey =
@@ -34,19 +35,6 @@ export type PaletteGroup = {
   whenSearching?: boolean;
 };
 
-const matches = (item: PaletteItem, terms: string[]) => {
-  const text = `${item.label} ${item.keywords ?? ""}`.toLowerCase();
-  return terms.every((term) => text.includes(term));
-};
-// Labels that start with the query come first; the rest keep their order.
-const rank = (items: PaletteItem[], query: string) => {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return items;
-  const found = items.filter((item) => matches(item, terms));
-  const lead = (item: PaletteItem) =>
-    item.label.toLowerCase().startsWith(terms[0]) ? 0 : 1;
-  return found.sort((a, b) => lead(a) - lead(b));
-};
 const MAX_CARDS = 50;
 
 export function CommandPalette({
@@ -78,12 +66,12 @@ export function CommandPalette({
   }
   const page = pages.at(-1);
   const shown = useMemo(() => {
-    if (page) return [{ heading: "", items: rank(page.items, query) }];
+    if (page) return [{ heading: "", items: searchRank(page.items, query) }];
     return groups
       .filter((group) => !group.whenSearching || query.trim())
       .map((group) => ({
         heading: group.heading,
-        items: rank(group.items, query).slice(
+        items: searchRank(group.items, query).slice(
           0,
           group.whenSearching ? MAX_CARDS : undefined,
         ),

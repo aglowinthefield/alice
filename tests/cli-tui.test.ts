@@ -78,16 +78,12 @@ test("Ready on a flagged card lists the flags and moves only on y", async () => 
   assert.deepEqual(f.posts(), [["POST", "/api/boards/b1/cards/t-0000/status", { status: "ready" }]]);
 });
 
-test("Ready asks only when pickup could start it; Triage and stop go through", async () => {
-  const quiet = fixture([card("t", "triage", { attempts: 0 })]);
-  await quiet.tui.refresh();
-  await quiet.tui.key("r");
-  assert.deepEqual(quiet.posts(), [["POST", "/api/boards/b1/cards/t-0000/status", { status: "ready" }]]);
+test("Ready goes straight through, even with pickup on; stop asks", async () => {
   const pickup = fixture([card("t", "triage", { attempts: 0 })], { board: { autoPickupEnabled: true } });
   await pickup.tui.refresh();
   await pickup.tui.key("r");
-  assert.equal(pickup.posts().length, 0);
-  assert.match(pickup.screen(), /Pickup is on/);
+  assert.deepEqual(pickup.posts(), [["POST", "/api/boards/b1/cards/t-0000/status", { status: "ready" }]]);
+  assert.doesNotMatch(pickup.screen(), /y\/N/);
   const running = fixture([card("run", "running")]);
   await running.tui.refresh();
   await running.tui.key("x");

@@ -195,6 +195,11 @@ test("the server refuses a disabled feature in every combination and keeps its s
             label,
           );
 
+          const sentinelOff = {
+            code: "feature_off",
+            feature: "sentinels",
+            error: "Sentinels are turned off in this Bakery build. Build and start Bakery with BAKERY_FEATURE_SENTINELS=1 to use them.",
+          };
           // Sentinels: the routes exist only with the feature, and the stored sentinels survive being off.
           const sentinelList = await api(`/boards/${boardId}/sentinels`);
           if (sentinels) {
@@ -206,25 +211,20 @@ test("the server refuses a disabled feature in every combination and keeps its s
             );
           } else {
             assert.equal(sentinelList.status, 404, label);
-            assert.equal(sentinelList.data.code, "feature_off", label);
-            assert.match(
-              sentinelList.data.error,
-              /BAKERY_FEATURE_SENTINELS=1/,
-              label,
+            assert.deepEqual(sentinelList.data, sentinelOff, label);
+          }
+          for (const [path, method, error] of [
+            ["/sentinels/missing", "GET", "Sentinel not found"],
+            ["/sentinels/missing/runs", "GET", "Sentinel not found"],
+            ["/sentinels/missing/run", "POST", "Sentinel not found"],
+            [`/boards/${boardId}/sentinels?view=list`, "PUT", "Not found"],
+          ]) {
+            assert.deepEqual(
+              await api(path, method),
+              { status: 404, data: sentinels ? { error } : sentinelOff },
+              `${label}: ${method} ${path}`,
             );
           }
-          assert.equal(
-            [200, 404].includes((await api("/sentinels/missing/runs")).status),
-            true,
-            label,
-          );
-          const sentinelRun = await api("/sentinels/anything/run", "POST");
-          assert.equal(sentinelRun.status, sentinels ? 404 : 404, label);
-          assert.equal(
-            sentinelRun.data.code === "feature_off",
-            !sentinels,
-            label,
-          );
 
           // Pull requests: the board reads as local while off, but still remembers what was stored.
           const board = (await api("/boards")).data[0];
@@ -260,6 +260,23 @@ test("the server refuses a disabled feature in every combination and keeps its s
               response.status === 404 && response.data.code === "feature_off",
               !pullRequests,
               `${label}: ${path} -> ${response.status} ${JSON.stringify(response.data)}`,
+            );
+          }
+          const pullRequestsOff = {
+            code: "feature_off",
+            feature: "pullRequests",
+            error: "GitHub pull requests are turned off in this Bakery build. Build and start Bakery with BAKERY_FEATURE_PULL_REQUESTS=1 to use them.",
+          };
+          // Missing records keep the supported requests from attempting a merge or changing a card.
+          for (const [path, method, error] of [
+            ["/boards/missing/pull-requests/123456789/merge", "POST", "Board not found"],
+            [`/boards/${boardId}/cards/missing/pull-request`, "PUT", "Card not found on this board"],
+            [`/boards/${boardId}/cards/${cardId}/pr-draft?view=status`, "PUT", "Not found"],
+          ]) {
+            assert.deepEqual(
+              await api(path, method),
+              { status: 404, data: pullRequests ? { error } : pullRequestsOff },
+              `${label}: ${method} ${path}`,
             );
           }
           if (!pullRequests) {

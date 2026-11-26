@@ -167,11 +167,6 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_
 const features = board.features;
 /** The machine-wide agent limit in force and how many agents run now, for Settings and the CLI. */
 const agentSlots = () => { const { limit, active } = board.machineCapacity(); return { activeAgentsLimit: limit, activeAgents: active }; };
-/** Routes that belong to one optional feature; with it off they are refused before any handler runs. */
-const featureRoutes: [Feature, RegExp][] = [
-  ["sentinels", /^\/api\/(boards\/[\w-]+\/sentinels|sentinels\/[\w-]+(\/(runs|run))?)$/],
-  ["pullRequests", /^\/api\/boards\/[\w-]+\/(pull-requests(\/\d{1,9}\/merge)?|sync|local-merges|main\/reset|cards\/[\w-]+\/(pull-request|publish|pr-draft))$/],
-];
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
 // BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
 const sentinelsOn = board.features.sentinels && process.env.BAKERY_SENTINEL !== "0";
@@ -281,8 +276,20 @@ const server = createServer(async (req, res) => {
       // The dev proxy preserves the public Host, which can differ from the internal listening port.
       if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
-    const disabled = featureRoutes.find(([feature, pattern]) => !features[feature] && pattern.test(path));
-    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled[0], error: featureOffMessage(disabled[0]) }); return; }
+    // Match gated paths before checking methods, then reuse these captures in the handlers.
+    const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);
+    const sentinelRoute = path.match(/^\/api\/sentinels\/([\w-]+)(?:\/(runs|run))?$/);
+    const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
+    const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
+    const syncRoute = path.match(/^\/api\/boards\/([\w-]+)\/sync$/);
+    const localMergesRoute = path.match(/^\/api\/boards\/([\w-]+)\/local-merges$/);
+    const mainResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/main\/reset$/);
+    const cardRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|(?<pullRequestAction>pull-request|publish|pr-draft)|accept-findings|create-plan|close|discussion|history|ready-check))?)?$/);
+    const disabled: Feature | undefined =
+      !features.sentinels && (sentinelsRoute || sentinelRoute) ? "sentinels" :
+      !features.pullRequests && (pullMergeRoute || pullsRoute || syncRoute || localMergesRoute || mainResetRoute || cardRoute?.groups?.pullRequestAction) ? "pullRequests" :
+      undefined;
+    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled, error: featureOffMessage(disabled) }); return; }
     // Prometheus metrics for the operator's own monitoring; off unless BAKERY_METRICS=1. See docs/metrics.md.
     if (path === "/metrics" && req.method === "GET") {
       if (process.env.BAKERY_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set BAKERY_METRICS=1 to serve them." }); return; }
@@ -409,7 +416,6 @@ const server = createServer(async (req, res) => {
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
-    const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
     if (pullMergeRoute && req.method === "POST") {
       const repoBoard = board.getBoard(pullMergeRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -417,7 +423,6 @@ const server = createServer(async (req, res) => {
       await github.comment(boardGithubRepo(repoBoard), Number(pullMergeRoute[2]), "/trunk merge");
       send(res, 200, { ok: true }); return;
     }
-    const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
     if (pullsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(pullsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -439,7 +444,6 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.resetAutoPickupLimit(repoBoard.id)); return;
     }
-    const syncRoute = path.match(/^\/api\/boards\/([\w-]+)\/sync$/);
     if (syncRoute && req.method === "POST") {
       const repoBoard = board.getBoard(syncRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -520,13 +524,11 @@ const server = createServer(async (req, res) => {
       send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;
     }
     // Done cards Bakery merged into local main whose work is not on origin/main, offered as "Publish as PR".
-    const localMergesRoute = path.match(/^\/api\/boards\/([\w-]+)\/local-merges$/);
     if (localMergesRoute && req.method === "GET") {
       const repoBoard = board.getBoard(localMergesRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, await integration.localMerges(repoBoard.repo)); return;
     }
-    const mainResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/main\/reset$/);
     if (mainResetRoute && req.method === "POST") {
       const repoBoard = board.getBoard(mainResetRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -679,13 +681,11 @@ const server = createServer(async (req, res) => {
       }
     }
     // Sentinels are monitors, not cards: they have their own list, runs, pause/resume and run-now.
-    const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);
     if (sentinelsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(sentinelsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, sentinel.describe(repoBoard.id)); return;
     }
-    const sentinelRoute = path.match(/^\/api\/sentinels\/([\w-]+)(?:\/(runs|run))?$/);
     if (sentinelRoute) {
       const record = sentinelStore.getSentinel(sentinelRoute[1]), action = sentinelRoute[2];
       if (!record) { send(res, 404, { error: "Sentinel not found" }); return; }
@@ -705,9 +705,8 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "GET" && !action) { send(res, 200, record); return; }
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history|ready-check))?)?$/);
-    if (route) {
-      const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
+    if (cardRoute) {
+      const repoBoard = board.getBoard(cardRoute[1]), id = cardRoute[2], action = cardRoute[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!id) {
         if (req.method === "GET") { send(res, 200, worker.withLive(originMain.annotate(repoBoard, board.listCards(repoBoard.repo)))); return; }

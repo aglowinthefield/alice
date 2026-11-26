@@ -112,8 +112,10 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   reviewQueue: { position: number; of: number } | null;
   /** See `ReviewAction`. */
   reviewAction: ReviewAction | null;
-  /** A start was asked for during a restart drain and runs after the restart. */
+  /** A start is queued: asked for during a restart drain, or refused by the run limit (see `startQueuedForSlot`). */
   startQueued: boolean;
+  /** The queued start waits for a free run slot on the card's board, not for a restart. */
+  startQueuedForSlot: boolean;
   /** Files attached to the card, including those sent with discussion messages. */
   attachmentCount: number;
   /** A Failed card's reason in a few words (see `summarizeFailure`); null on other cards. */
@@ -126,7 +128,7 @@ export type CardRef = { id: string; title: string; status: CardStatus };
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds" | "failureSummary"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number; failedError: string | null; failedKind: string | null };
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "startQueuedForSlot" | "locallyMerged" | "planOnly" | "createdCardIds" | "failureSummary"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number; failedError: string | null; failedKind: string | null };
 /** A file on a card. `messageId` is set when it was sent with a discussion message. */
 export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
@@ -270,6 +272,9 @@ export class Board {
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
     // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push, 'commit' for a commit hook that refused the commit.
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
+    // A start the run limit refused waits for a free slot (untilSlot=1) with the reason its history line gives.
+    const queuedColumns = new Set((this.db.prepare("PRAGMA table_info(queued_starts)").all() as { name: string }[]).map(column => column.name));
+    for (const column of ["untilSlot INTEGER NOT NULL DEFAULT 0", "why TEXT NOT NULL DEFAULT ''"]) if (!queuedColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE queued_starts ADD COLUMN ${column}`);
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     const chatColumns = new Set((this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).map(column => column.name));
@@ -446,20 +451,29 @@ export class Board {
       details=CASE WHEN interruptions=0 THEN 'Server restarted during agent review; it will be reviewed again'
         ELSE 'Server restarted during agent review twice; inspect manually' END WHERE state='running'`).run(now());
   }
-  /** Remember a run start asked for during a restart drain; the next server process replays it. */
-  queueStart(cardId: string) {
+  /**
+   * Remember a run start asked for during a restart drain; the next server process replays it. With `untilSlot`, the
+   * start was refused by the board's run limit instead: `AutoPickup` starts it once a run finishes, and `why`
+   * finishes its "Attempt N started …" history line.
+   */
+  queueStart(cardId: string, untilSlot?: { why: string }) {
     const card = this.getCard(cardId);
     if (!card) throw new Error("Card not found");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
-    this.db.prepare("INSERT OR IGNORE INTO queued_starts(cardId, queuedAt) VALUES (?, ?)").run(cardId, now());
+    this.db.prepare("INSERT OR IGNORE INTO queued_starts(cardId, queuedAt, untilSlot, why) VALUES (?, ?, ?, ?)").run(cardId, now(), untilSlot ? 1 : 0, untilSlot?.why ?? "");
+  }
+  /** Starts waiting for a free run slot, oldest first, with the reason each was queued for. */
+  listSlotQueuedStarts(): { card: Card; why: string }[] {
+    const rows = this.db.prepare("SELECT cardId, why FROM queued_starts WHERE untilSlot=1 ORDER BY queuedAt, rowid").all() as { cardId: string; why: string }[];
+    return rows.flatMap(row => { const card = this.getCard(row.cardId); return card ? [{ card, why: row.why }] : []; });
   }
   /** Drops a start queued during a restart drain. Returns whether one was queued. */
   cancelQueuedStart(cardId: string): boolean { return this.db.prepare("DELETE FROM queued_starts WHERE cardId=?").run(cardId).changes > 0; }
   isStartQueued(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM queued_starts WHERE cardId=?").get(cardId); }
-  /** Returns queued card ids oldest first and empties the queue. */
+  /** Returns the card ids queued during a restart drain, oldest first, and empties that queue. Starts waiting for a run slot stay. */
   takeQueuedStarts(): string[] {
-    const ids = (this.db.prepare("SELECT cardId FROM queued_starts ORDER BY queuedAt, rowid").all() as { cardId: string }[]).map(row => row.cardId);
-    this.db.exec("DELETE FROM queued_starts");
+    const ids = (this.db.prepare("SELECT cardId FROM queued_starts WHERE untilSlot=0 ORDER BY queuedAt, rowid").all() as { cardId: string }[]).map(row => row.cardId);
+    this.db.exec("DELETE FROM queued_starts WHERE untilSlot=0");
     return ids;
   }
   close() { if (this.db.isOpen) this.db.close(); }
@@ -966,7 +980,7 @@ export class Board {
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
   }
   /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
-  private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued">, repoBoard: RepoBoard | undefined, run = this.listRuns(card.id)[0]): ReviewWait | null {
+  private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "startQueuedForSlot">, repoBoard: RepoBoard | undefined, run = this.listRuns(card.id)[0]): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
     if (run?.status !== "review") return null;
     if (repoBoard.integration === "github-pr") {
@@ -983,7 +997,7 @@ export class Board {
     return null;
   }
   /** See `ReviewAction`. Mirrors when card details offer Approve or Accept findings. */
-  private reviewAction(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued">, wait: ReviewWait | null, run: Run | undefined): ReviewAction | null {
+  private reviewAction(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "startQueuedForSlot">, wait: ReviewWait | null, run: Run | undefined): ReviewAction | null {
     if (card.status !== "review" || wait || run?.status !== "review" || run.changedFiles === null) return null;
     if (this.getApproval(card.id) || this.getMergeFailure(card.id)) return null;
     if (run.changedFiles === 0) return "accept_findings";
@@ -1017,14 +1031,14 @@ export class Board {
       const queue = reviewQueues.get(card.repo)!, index = queue.findIndex(item => item.cardId === card.id);
       return index < 0 ? null : { position: index + 1, of: queue.length };
     };
-    const queued = new Set((this.db.prepare("SELECT cardId FROM queued_starts").all() as { cardId: string }[]).map(item => item.cardId));
+    const queued = new Map((this.db.prepare("SELECT cardId, untilSlot FROM queued_starts").all() as { cardId: string; untilSlot: number }[]).map(item => [item.cardId, item.untilSlot === 1]));
     return rows.map(row => {
       const { failedError, failedKind, ...fields } = row;
       const failureSummary = row.status === "failed" ? summarizeFailure({ error: failedError, failureKind: failedKind, prState: row.prState }) : null;
       const card = { ...fields, failureSummary, createdCardIds: row.createdCardIds === null ? null : JSON.parse(row.createdCardIds) as string[], dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0, planOnly: row.planOnly !== 0 };
       const run = card.status === "review" ? this.listRuns(card.id)[0] : undefined;
       const reviewWait = card.status === "review" ? this.reviewWait(card, boards.get(card.repo), run) : null;
-      return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), reviewAction: this.reviewAction(card, reviewWait, run), startQueued: queued.has(card.id) };
+      return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), reviewAction: this.reviewAction(card, reviewWait, run), startQueued: queued.has(card.id), startQueuedForSlot: queued.get(card.id) ?? false };
     });
   }
   getAutoReviewJob(runId: string): AutoReviewJob | undefined {
@@ -1596,6 +1610,8 @@ export class Board {
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, recoveryOf, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy, recoveryOf);
       // Any start, manual or automatic, uses up a waiting retry; the retry count stays until a run succeeds.
       this.db.prepare("UPDATE cards SET status='running', autoRetryAt=NULL, updatedAt=? WHERE id=?").run(now(), cardId);
+      // Any run, however started, is the attempt a start waiting for a slot asked for; it must not start another later.
+      this.db.prepare("DELETE FROM queued_starts WHERE cardId=? AND untilSlot=1").run(cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
       this.db.exec("COMMIT");
       const started = this.getRun(id)!;

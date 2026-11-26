@@ -2,12 +2,14 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
+import { Integration } from "../server/integration.js";
 import { Worker } from "../server/worker.js";
 import { AutoPickup } from "../server/auto-pickup.js";
+import { AutoReview, sendBackReason } from "../server/auto-review.js";
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "bakery-pickup-")), repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "fake-pi");
@@ -15,7 +17,8 @@ function fixture() {
   writeFileSync(join(repo, "README.md"), "fixture\n");
   execFileSync("git", ["-C", repo, "add", "."]);
   execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-  writeFileSync(fakePi, `#!/bin/sh\nwhile [ ! -f '${join(dir, "release")}' ]; do sleep 0.05; done\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`); chmodSync(fakePi, 0o755);
+  // Each run appends its prompt (the last argument) to `prompts`, then waits for `release`.
+  writeFileSync(fakePi, `#!/bin/sh\nfor prompt; do :; done\nprintf '%s\\n' "$prompt" >> '${join(dir, "prompts")}'\nwhile [ ! -f '${join(dir, "release")}' ]; do sleep 0.05; done\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`); chmodSync(fakePi, 0o755);
   const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
   const worker = new Worker(board, data, fakePi), pickup = new AutoPickup(board, worker);
   const card = (title: string) => board.setStatus(board.createCard({ title, body: "Small change", repo }).id, "ready");
@@ -349,6 +352,81 @@ test("a refused push at the run limit keeps the hook output and goes to the agen
     assert.equal(item.board.listRuns(refused.id)[0]?.status, "running");
     assert.equal(item.board.listRuns(refused.id)[0]?.startedBy, "manual", "an operator's Approve asked for it, so it does not count as auto-pickup");
     assert.equal(item.board.getCiFeedback(refused.id), undefined, "the run took the hook output");
+  } finally { await item.close(); }
+});
+
+test("a reviewer send-back at the run limit is queued and starts with the requested changes when a run finishes", async () => {
+  const item = fixture();
+  try {
+    const reviewerPi = join(item.dir, "fake-reviewer");
+    const verdict = '{"verdict":"request_changes","reason":"Missing a test","changes":[{"path":"README.md","comment":"Cover the empty case"}]}';
+    writeFileSync(reviewerPi, `#!/bin/sh\ncat <<'EVENTS'\n${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: verdict }] } })}\n{"type":"agent_settled","aborted":false}\nEVENTS\n`); chmodSync(reviewerPi, 0o755);
+    const review = new AutoReview(item.board, new Integration(item.board, item.data), reviewerPi, card => item.worker.start(card, "manual", sendBackReason));
+    item.board.setAutoReview(item.repoBoard.id, true);
+    // Auto-review takes only runs that finish after it was enabled.
+    const enabledAt = item.board.getBoard(item.repoBoard.id)!.autoReviewEnabledAt!;
+    await waitFor(() => new Date().toISOString() > enabledAt);
+    const sent = item.card("Sent back"), busy = item.card("Busy");
+    const first = item.worker.start(sent);
+    writeFileSync(join(first.worktree!, "README.md"), "changed\n");
+    item.release();
+    await waitFor(() => item.board.getCard(sent.id)?.status === "review");
+    rmSync(join(item.dir, "release"));
+    item.worker.start(busy);
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    await review.tick();
+    const queued = item.board.getCard(sent.id)!;
+    assert.equal(queued.status, "review");
+    assert.equal(item.board.listRuns(sent.id).length, 1, "the run limit kept the new attempt from starting");
+    assert.equal(queued.startQueued, true);
+    assert.equal(queued.startQueuedForSlot, true, "it waits for a run to finish, not for a restart");
+    assert.match(item.board.listCardEvents(sent.id).at(-1)!.reason, /run limit.*starts when a run finishes/);
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(sent.id).length, 1, "still no slot");
+    item.release();
+    await waitFor(() => item.board.getCard(busy.id)?.status === "review");
+    item.pickup.tick();
+    const second = item.board.listRuns(sent.id)[0];
+    assert.equal(second.attempt, 2);
+    assert.equal(second.startedBy, "manual", "the reviewer asked for it, so it does not count as auto-pickup");
+    assert.equal(item.board.getCard(sent.id)!.startQueued, false, "the queue entry is used up");
+    assert.ok(item.board.listCardEvents(sent.id).some(event => event.reason === `Attempt 2 started ${sendBackReason}`));
+    await waitFor(() => item.board.getRun(second.id)?.status === "review");
+    const prompts = readFileSync(join(item.dir, "prompts"), "utf8");
+    assert.match(prompts.slice(prompts.lastIndexOf(`Task from Bakery card ${sent.id}`)), /agent reviewer.*Cover the empty case/);
+  } finally { await item.close(); }
+});
+
+test("a send-back waiting for a slot outlives a restart replay and is dropped once the card no longer needs it", async () => {
+  const item = fixture();
+  try {
+    const card = item.card("Approved meanwhile");
+    item.board.queueStart(card.id, { why: sendBackReason });
+    assert.deepEqual(item.board.takeQueuedStarts(), [], "the restart replay never takes a start that waits for a slot");
+    assert.equal(item.board.isStartQueued(card.id), true);
+    item.board.setStatus(card.id, "done");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(card.id).length, 0);
+    assert.equal(item.board.isStartQueued(card.id), false);
+  } finally { await item.close(); }
+});
+
+test("any run that claims the card uses up its queued send-back, so pickup never starts a second one", async () => {
+  const item = fixture();
+  try {
+    const card = item.card("Started by hand");
+    item.board.queueStart(card.id, { why: sendBackReason });
+    const manual = item.worker.start(item.board.getCard(card.id)!);
+    assert.equal(item.board.isStartQueued(card.id), false, "the claim consumed the queued start");
+    item.release();
+    await waitFor(() => item.board.getRun(manual.id)?.status === "review");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(card.id).length, 1, "pickup started nothing further");
+    item.board.queueStart(card.id, { why: sendBackReason });
+    item.board.finish(item.board.claim(card.id).id, "failed", "Rebase conflicted");
+    item.pickup.tick();
+    assert.equal(item.board.listRuns(card.id).length, 2, "a failed attempt used it up too");
+    assert.equal(item.board.isStartQueued(card.id), false);
   } finally { await item.close(); }
 });
 

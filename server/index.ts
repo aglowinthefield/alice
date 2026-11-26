@@ -16,7 +16,7 @@ import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
 import { CommitHookError, Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
-import { AutoReview } from "./auto-review.js";
+import { AutoReview, sendBackReason } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { AutoPullRequest } from "./auto-pull-request.js";
 import { discuss, discussionPrompt } from "./discuss.js";
@@ -119,7 +119,7 @@ async function pushDrafted(card: Card, fingerprint: string, draft: { title: stri
   return opened;
 }
 // On a github-pr board an agent approval opens the PR (drafted like the Approve dialog's), and the card waits on GitHub.
-const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", "to apply the agent reviewer's requested changes"),
+const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", sendBackReason),
   async (card, fingerprint) => {
     const draft = await draftForPullRequest(card, fingerprint, "Agent approved, but the pull request draft needs a person");
     // Drafting can take minutes; turning auto-review off meanwhile still stops the push, and a link to an external PR does too.

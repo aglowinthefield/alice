@@ -1,8 +1,9 @@
-import type { Board } from "./board.js";
+import { RunLimitError, type Board } from "./board.js";
+import { atRunCapacity } from "./repo-limits.js";
 import type { Worker } from "./worker.js";
 
 // The database claim is the final concurrency/cap guard. This timer only chooses eligible Ready cards, and Review
-// cards whose refused push waits for a slot; it never resumes interrupted runs or restarts failed ones, which wait in their lanes without holding up other cards. Like the start
+// cards whose refused push or reviewer send-back waits for a slot; it never resumes interrupted runs or restarts failed ones, which wait in their lanes without holding up other cards. Like the start
 // limit, a reached cost budget only makes pickup wait; spend already running is never stopped.
 export class AutoPickup {
   private timer?: ReturnType<typeof setInterval>;
@@ -21,6 +22,20 @@ export class AutoPickup {
         this.worker.startHookFix(card);
       } catch (error) {
         this.board.noteCard(card.id, `Could not send the refused push's hook output to the agent: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    // So does a reviewer send-back the run limit refused: the card is mid-review, and the reviewer's changes wait on its run.
+    for (const { card, why } of this.board.listSlotQueuedStarts()) {
+      // Approved or rejected meanwhile: nothing is left to start. Any claimed run already consumed the entry.
+      if (!["ready", "failed", "review"].includes(card.status)) { this.board.cancelQueuedStart(card.id); continue; }
+      const repoBoard = this.board.boardForRepo(card.repo);
+      if ((repoBoard?.autoPickupEnabled && atRunCapacity(repoBoard, this.board.runningCount(card.repo))) || this.board.atMachineCapacity()) continue;
+      try {
+        this.worker.start(card, "manual", why);
+      } catch (error) {
+        if (error instanceof RunLimitError) continue;
+        this.board.cancelQueuedStart(card.id);
+        this.board.noteCard(card.id, `Bakery could not start the queued attempt: ${error instanceof Error ? error.message : String(error)}. Run it again, or review it yourself.`);
       }
     }
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {

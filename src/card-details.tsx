@@ -1060,7 +1060,9 @@ export function CardDetails({
                   className="rounded border border-status-interrupted/50 px-2 py-1 text-xs text-status-interrupted"
                   data-testid="start-queued-badge"
                 >
-                  Queued, starts after restart
+                  {card.startQueuedForSlot
+                    ? "Queued, starts when a run finishes"
+                    : "Queued, starts after restart"}
                 </span>
                 <Button
                   variant="outline"

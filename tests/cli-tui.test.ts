@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // @ts-expect-error plain .mjs module without types
-import { cardActions, clipAnsi, createTui, keyNames } from "../scripts/cli-tui.mjs";
+import { cardActions, createTui, keyNames } from "../scripts/cli-tui.mjs";
+// @ts-expect-error plain .mjs module without types
+import { width } from "../scripts/cli-screen.mjs";
 
 type Call = [string, string, unknown?];
 const board = { id: "b1", repo: "/repo", integration: "local", autoPickupEnabled: false };
 const card = (id: string, status: string, extra: object = {}) => ({ id: `${id}-0000`, title: `${id} card`, status, attempts: 1, ...extra });
 
-function fixture(cards: object[], options: { board?: object; review?: object; fail?: string; flags?: object[] } = {}) {
+function fixture(cards: object[], options: { board?: object; review?: object; fail?: string; flags?: object[]; columns?: number; rows?: number } = {}) {
   const calls: Call[] = [];
   const opened: string[] = [];
   const api = async (method: string, path: string, input?: unknown) => {
@@ -19,7 +21,7 @@ function fixture(cards: object[], options: { board?: object; review?: object; fa
     if (path.endsWith("/runs")) return [{ attempt: 2, status: "failed", agent: "pi", error: "Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout", report: null }];
     return {};
   };
-  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: 100, rows: 12 }), open: (url: string) => opened.push(url), webUrl: (id: string) => `http://bakery/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
+  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: options.columns ?? 100, rows: options.rows ?? 12 }), open: (url: string) => opened.push(url), webUrl: (id: string) => `http://bakery/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
   const posts = () => calls.filter(([method]) => method === "POST");
   const screen = () => tui.render().map((line: string) => line.replace(/\x1b\[[\d;?]*[a-zA-Z]/g, "")).join("\n");
   return { tui, calls, posts, opened, screen };
@@ -30,7 +32,7 @@ test("keys split out of one chunk of terminal input", () => {
   assert.deepEqual(keyNames("\x1b[A\x1b[Bq"), ["up", "down", "q"]);
   assert.deepEqual(keyNames("\x1b"), ["escape"]);
   assert.deepEqual(keyNames("\x03"), ["interrupt"]);
-  assert.equal(clipAnsi("\x1b[31mabcdef\x1b[0m", 3), "\x1b[31mabc\x1b[0m");
+  assert.deepEqual(keyNames("\t]"), ["tab", "]"]);
 });
 
 test("a card offers the web card's actions for its state", () => {
@@ -133,23 +135,69 @@ test("a refused action shows the server's reason", async () => {
   assert.match(f.screen(), /Bakery 409: Card is already running/);
 });
 
-test("the selection scrolls into view, lanes jump, and details show the latest attempt", async () => {
-  const cards = [...Array.from({ length: 15 }, (_, i) => card(`r${String(i).padStart(2, "0")}`, "ready")), card("f", "failed")];
-  const f = fixture(cards);
+test("lanes sit side by side; j and k move within a lane, h and l between lanes", async () => {
+  const cards = [...Array.from({ length: 6 }, (_, i) => card(`r0${i}`, "ready")), card("m", "review"), card("f", "failed")];
+  const f = fixture(cards, { columns: 120, rows: 16 });
   await f.tui.refresh();
-  assert.equal(f.tui.render().length, 12, "the screen fills the terminal exactly");
-  assert.match(f.screen(), /▸ r00-0000/);
-  await f.tui.key("l");
-  assert.match(f.screen(), /▸ f-0000 {2}f card/, "the selected card scrolled into view");
-  await f.tui.key("h");
-  assert.match(f.screen(), /▸ r00-0000/);
+  const lines = f.tui.render();
+  assert.equal(lines.length, 16, "the screen fills the terminal exactly");
+  assert.match(f.screen(), /Ready +6 .*Review +1 .*Failed +1/, "the lanes share one header row");
+  assert.match(f.screen(), /┃ ◎ r00 card/, "the first card is selected");
+  await f.tui.key("j");
+  assert.match(f.screen(), /┃ ◎ r01 card/);
   await f.tui.key("G");
-  await f.tui.key("enter");
-  const details = f.screen();
-  assert.match(details, /f card\nf-0000 · failed/);
-  assert.match(details, /Attempt 2 · failed · pi\nPi exited \(143\); Bakery sent SIGTERM: 60-minute run timeout/);
-  await f.tui.key("escape");
-  assert.match(f.screen(), /▸ f-0000/);
+  assert.match(f.screen(), /↑ \d more[\s\S]*┃ ◎ r05 card/, "the lane scrolls to keep the selected card on screen");
+  await f.tui.key("l");
+  assert.match(f.screen(), /┃ ◉ m card/);
+  await f.tui.key("l");
+  assert.match(f.screen(), /┃ ✗ f card/);
+  await f.tui.key("h");
+  await f.tui.key("h");
+  assert.match(f.screen(), /┃ ◎ r05 card/, "a lane reopens on the card you last had there");
   await f.tui.key("q");
   assert.equal(f.tui.state.quit, true);
+});
+
+test("a tile shows its card's one live fact, and wide titles keep the grid aligned", async () => {
+  const now = Date.parse("2026-11-24T10:00:00Z");
+  const f = fixture([
+    card("run", "running", { live: { tool: "bash", turn: 3, since: new Date(now).toISOString() }, lastActivityAt: new Date(now).toISOString() }),
+    card("w", "ready", { title: "🍰 emoji 🍰 title 漢字", blocked: true, dependsOn: ["run-0000"] }),
+    card("x", "failed", { failureSummary: "Timed out" }),
+  ], { columns: 140 });
+  await f.tui.refresh();
+  assert.match(f.screen(), /bash · turn 3/);
+  assert.match(f.screen(), /waiting on 1/);
+  assert.match(f.screen(), /Timed out/);
+  assert.equal(f.tui.animating(), true, "a running card animates its spinner");
+  for (const line of f.tui.render()) assert.equal(width(line.replace(/\x1b\[[\d;]*m/g, "")), 140, line);
+});
+
+test("a pull request board splits Review like the web board", async () => {
+  const f = fixture([card("a", "review", { reviewWait: "agent_review" }), card("g", "review", { reviewWait: "github" }), card("y", "review")], { board: { integration: "github-pr" }, columns: 160 });
+  await f.tui.refresh();
+  assert.match(f.screen(), /Review +1 .*Agent reviewing +1 .*Waiting on GitHub +1/);
+});
+
+test("enter opens the card as a dialog with its latest attempt; tab shows every attempt", async () => {
+  const f = fixture([card("f", "failed", { body: "Goal: fix it.\n- run `npm test`", attachmentCount: 2 })], { rows: 24 });
+  await f.tui.refresh();
+  await f.tui.key("enter");
+  const overview = f.screen();
+  assert.match(overview, /✗ f card/);
+  assert.match(overview, /• run npm test/, "the body's markdown keeps its bullets");
+  assert.match(overview, /⇩ 2 attachments/);
+  assert.match(overview, /Latest attempt +2 · failed/);
+  assert.match(overview, /Pi exited \(143\); Bakery sent SIGTERM: 60-minute run timeout/);
+  await f.tui.key("tab");
+  assert.match(f.screen(), /Attempt 2 · failed · pi/);
+  await f.tui.key("escape");
+  assert.match(f.screen(), /┃ ✗ f card/);
+});
+
+test("a long question wraps instead of losing its y/N", async () => {
+  const f = fixture([card("f", "failed", { title: "A card title long enough that the paid-run question runs past the edge of a narrow terminal" })], { columns: 60 });
+  await f.tui.refresh();
+  await f.tui.key("s");
+  assert.match(f.screen(), /y\/N/);
 });

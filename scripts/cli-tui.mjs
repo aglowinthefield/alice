@@ -133,11 +133,10 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
     const done = message => async () => { await refresh(); say(message); };
     if (action === "ready") {
       const move = async () => { await api("POST", `${base}/status`, { status: "ready" }); await done(`Moved ${quoted} to Ready`)(); };
-      // Same check as the web board's dialog: y is Ready anyway; n leaves it in Triage, and o opens it to edit.
+      // r moves the card straight to Ready. Only a card the web board's text check flags asks first: y is Ready
+      // anyway; n leaves it in Triage, and o opens it to edit.
       const flags = await readyFlags(base);
-      const pickup = board.autoPickupEnabled ? " Pickup is on, so it can start a paid Pi run soon." : "";
-      if (flags.length) ask(`${quoted} may need another pass: ${flags.map(flag => flag.message).join("; ")}.${pickup} Move it to Ready anyway?`, move);
-      else if (pickup) ask(`Pickup is on, so Ready can start a paid Pi run soon. Move ${quoted} to Ready?`, move);
+      if (flags.length) ask(`${quoted} may need another pass: ${flags.map(flag => flag.message).join("; ")}. Move it to Ready anyway?`, move);
       else await move();
     } else if (action === "triage") {
       await api("POST", `${base}/status`, { status: "triage" }); await done(`Moved ${quoted} back to Triage`)();

@@ -1,8 +1,9 @@
-// `bakery-cli tui`: the web board in the terminal, driven by keys. Lanes sit side by side with a tile per card, and
-// Enter opens the card as a dialog over the board. `createTui` holds the state and answers keys without touching the
-// terminal, so tests drive it with a fake API; `runTui` wires it to a raw-mode TTY.
+// `bakery-cli tui`: the web app in the terminal, driven by keys. A sidebar lists the boards, a board's lanes sit side
+// by side with a tile per card, Today gathers what needs you on every board, and Enter opens a card as a dialog.
+// `createTui` holds the state and answers keys without touching the terminal, so tests drive it with a fake API;
+// `runTui` wires it to a raw-mode TTY.
 import { spawn } from "node:child_process";
-import { cardActivity, needsYourReview, reviewWaitText, waitingOn } from "../src/model.ts";
+import { cardActivity, needsYouStatuses, needsYourReview, reviewWaitText, todaySections, waitingOn } from "../src/model.ts";
 import { Screen, clip, width, wrap } from "./cli-screen.mjs";
 import { useColor } from "./cli-style.mjs";
 
@@ -41,6 +42,8 @@ export function cardActions(card, board) {
 
 // SGR styles: the terminal's 16 colours, so the person's theme picks the shades. Yellow is Bakery's accent.
 const DIM = "2", ACCENT = "1;33";
+// Pills with a background, as on the web: a failure reason, and Needs you.
+const PILL_BAD = "41;97", PILL_YOU = "42;30";
 /**
  * The web board's lanes. On a pull request board, Review holds only cards that need you; cards an agent still has
  * and cards waiting on GitHub get lanes of their own, as on the web.
@@ -61,18 +64,23 @@ const laneOf = (card, split) =>
   card.status === "interrupted" ? "failed"
     : split && card.status === "review" && card.reviewWait ? (card.reviewWait === "github" ? "waiting" : "agent")
     : card.status;
+const isPullRequestBoard = board => board.integration === "github-pr";
+const nameOf = board => board.repo.split(/[\\/]/).pop();
 
-/** The one thing worth reading on a tile; everything else is in the card dialog. */
-function tilePill(card, cards, now) {
+/**
+ * The one thing worth reading on a tile; everything else is in the card dialog. On a pull request board an agent's
+ * review has its own lane, so the pill only adds the card's place in the queue.
+ */
+function tilePill(card, cards, now, split = false) {
   if (card.status === "running") {
     if (cardActivity(card, now) === "quiet") return [`quiet ${Math.round((now - Date.parse(card.lastActivityAt)) / 60_000)}m`, "33"];
     return [card.live ? `${card.live.tool} · turn ${card.live.turn}` : "starting", "33"];
   }
   if (card.status === "interrupted") return ["interrupted", "33"];
-  if (card.status === "failed") return card.failureSummary ? [card.failureSummary, "31"] : null;
+  if (card.status === "failed") return card.failureSummary ? [` ${card.failureSummary} `, PILL_BAD] : null;
   if (card.status === "review") {
     if (card.prChecks === "failing") return [`PR #${card.prNumber} failing`, "31"];
-    return card.reviewWait ? [reviewWaitText(card), DIM] : null;
+    return card.reviewWait && (!split || card.reviewQueue) ? [reviewWaitText(card), DIM] : null;
   }
   if (card.blocked) return [`waiting on ${waitingOn(card, cards).length}`, DIM];
   if (card.startQueued) return ["queued", "36"];
@@ -81,43 +89,83 @@ function tilePill(card, cards, now) {
 }
 
 const HELP = [
-  ["← →  h l", "previous or next lane"], ["↑ ↓  j k", "move within a lane"], ["g  G", "first or last card in the lane"],
-  ["enter", "open the card (esc closes, tab or [ ] switch tabs)"], ["o", "open the card in the browser"], ["A", "show or hide the Archive lane"],
+  ["0", "Today: what needs you on every board"], ["1–9", "the board with that number in the sidebar"], ["b", "show or hide the sidebar"],
+  ["← →  h l", "previous or next lane"], ["↑ ↓  j k", "move within a lane, or down Today"], ["g  G", "first or last card"],
+  ["enter", "open the card (esc closes, tab switches to its attempts)"], ["o", "open the card in the browser"], ["A", "show or hide the Archive lane"],
   ["r  t", "move to Ready or back to Triage"], ["s", "start or run again (asks first: paid)"], ["x", "stop a running agent"],
   ["a", "approve, accept findings, or update the PR"], ["R", "recover a Failed card in a fresh session"], ["q", "quit"],
 ];
 
-export function createTui({ api, board, title = "", size = () => ({ columns: 80, rows: 24 }), open = () => {}, webUrl = id => id, now = () => Date.now(), color = false }) {
-  const path = `/api/boards/${encodeURIComponent(board.id)}`;
-  const split = board.integration === "github-pr";
-  const state = { cards: [], selected: null, all: false, mode: "board", confirm: null, message: "", error: false, details: null, tab: 0, scroll: 0, laneStart: 0, laneScroll: {}, lastInLane: {}, quit: false };
+export function createTui({ api, board, today = false, size = () => ({ columns: 80, rows: 24 }), open = () => {}, webUrl = cardId => cardId, now = () => Date.now(), color = false }) {
+  const state = {
+    board, boards: [board], view: today ? "today" : "board", cards: [], today: [], todayAt: 0, conflicts: 0, slowAt: -Infinity, sidebar: null,
+    selected: null, all: false, mode: "board", confirm: null, message: "", error: false, details: null, tab: 0, scroll: 0,
+    laneStart: 0, laneScroll: {}, lastInLane: {}, quit: false,
+  };
   const say = (message, error = false) => { state.message = message; state.error = error; };
-  const lanes = () => LANES.filter(lane => (split || !lane.split) && (state.all || lane.id !== "archived"));
+  const pathOf = item => `/api/boards/${encodeURIComponent(item.id)}`;
+  const boardOf = card => state.boards.find(item => item.repo === card.repo) ?? state.board;
+  const split = () => isPullRequestBoard(state.board);
+  const lanes = () => LANES.filter(lane => (split() || !lane.split) && (state.all || lane.id !== "archived"));
   const cardsIn = id => {
-    const list = state.cards.filter(card => laneOf(card, split) === id);
+    const list = state.cards.filter(card => laneOf(card, split()) === id);
     return id === "done" || id === "archived" ? list.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")) : list;
   };
-  const current = () => state.cards.find(card => card.id === state.selected);
-  const laneOfSelected = () => { const card = current(); return card && laneOf(card, split); };
+  const since = () => new Date(now() - 86_400_000).toISOString();
+  /** Today's rows: a heading per section, then its cards, in the web page's order. */
+  function todayRows() {
+    const { running, attention, approved } = todaySections(state.today, since());
+    return [["Running", "33", running], ["Needs you", "1;34", attention], ["Approved, only your Approve is left", "32", approved]]
+      .flatMap(([label, style, cards]) => cards.length ? [{ label, style }, ...cards.map(card => ({ card }))] : []);
+  }
+  const todayCards = () => todayRows().filter(row => row.card).map(row => row.card);
+  const selectedOnBoard = () => state.cards.find(card => card.id === state.selected);
+  const current = () => state.view === "today" ? todayCards()[state.todayAt] : selectedOnBoard();
+  const laneOfSelected = () => { const card = selectedOnBoard(); return card && laneOf(card, split()); };
   const filled = () => lanes().filter(lane => cardsIn(lane.id).length);
+  const showSidebar = () => state.sidebar ?? size().columns >= 140;
 
   function select(card) {
     if (!card) return;
     state.selected = card.id;
-    state.lastInLane[laneOf(card, split)] = card.id;
+    state.lastInLane[laneOf(card, split())] = card.id;
   }
 
   async function refresh() {
-    state.cards = await api("GET", `${path}/cards`);
-    const card = current();
-    if (!card || !lanes().some(lane => lane.id === laneOf(card, split))) select(cardsIn(filled()[0]?.id)[0]);
+    // The sidebar, spend and conflicts change slowly: they refresh every 30 seconds and keep their last value when a
+    // fetch fails. Cards refresh every time.
+    if (now() - state.slowAt >= 30_000) {
+      state.slowAt = now();
+      const [boards, conflicts] = await Promise.allSettled([api("GET", "/api/boards"), api("GET", `${pathOf(state.board)}/conflicts`)]);
+      if (Array.isArray(boards.value) && boards.value.length) {
+        state.boards = boards.value;
+        state.board = boards.value.find(item => item.id === state.board.id) ?? state.board;
+      }
+      if (Array.isArray(conflicts.value)) state.conflicts = conflicts.value.length;
+    }
+    if (state.view === "today") {
+      state.today = await api("GET", "/api/cards");
+      state.todayAt = Math.max(0, Math.min(state.todayAt, todayCards().length - 1));
+      return;
+    }
+    state.cards = await api("GET", `${pathOf(state.board)}/cards`);
+    const card = selectedOnBoard();
+    if (!card || !lanes().some(lane => lane.id === laneOf(card, split()))) select(cardsIn(filled()[0]?.id)[0]);
+  }
+
+  /** Switches to Today or to a board, starting that board fresh. */
+  async function show(view, item = state.board) {
+    if (item.id !== state.board.id)
+      Object.assign(state, { board: item, cards: [], selected: null, laneStart: 0, laneScroll: {}, lastInLane: {}, conflicts: 0, slowAt: -Infinity });
+    state.view = view;
+    await refresh();
   }
 
   async function openDetails() {
     const card = current();
     if (!card) return;
     state.mode = "details"; state.tab = 0; state.scroll = 0; state.details = { card, runs: null };
-    try { state.details.runs = await api("GET", `${path}/cards/${card.id}/runs`); }
+    try { state.details.runs = await api("GET", `${pathOf(boardOf(card))}/cards/${card.id}/runs`); }
     catch (error) { say(error.message, true); }
   }
 
@@ -128,7 +176,7 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
     catch (error) { if (/^Bakery 404: Not found$/.test(error.message)) return []; throw error; }
   }
   async function act(action, card) {
-    const base = `${path}/cards/${card.id}`;
+    const home = boardOf(card), base = `${pathOf(home)}/cards/${card.id}`;
     const quoted = `“${card.title.length > 50 ? `${card.title.slice(0, 49)}…` : card.title}”`;
     const done = message => async () => { await refresh(); say(message); };
     if (action === "ready") {
@@ -153,9 +201,9 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
       say("");
       if (!review.files?.length)
         ask(`Accept the findings on ${quoted}? The run changed no files, so the card moves to Done.`, async () => { await api("POST", `${base}/accept-findings`, { fingerprint }); await done(`Accepted the findings on ${quoted}`)(); });
-      else if (board.integration === "github-pr" && card.prState !== "OPEN")
+      else if (isPullRequestBoard(home) && card.prState !== "OPEN")
         say("A new pull request needs its title and body reviewed. Press o to finish it in the browser.");
-      else if (board.integration === "github-pr")
+      else if (isPullRequestBoard(home))
         ask(`Approve ${review.files.length} changed file(s) and push them to PR #${card.prNumber}? The card is Done once the PR merges.`, async () => { await api("POST", `${base}/approve`, { fingerprint }); await done(`Pushed ${quoted} to PR #${card.prNumber}`)(); });
       else
         ask(`Approve ${review.files.length} changed file(s) and merge ${quoted} into local main? Bakery does not run tests or push.`, async () => { await api("POST", `${base}/approve`, { fingerprint }); await done(`Merged ${quoted} into local main`)(); });
@@ -163,11 +211,13 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
   }
 
   function move(delta) {
+    if (state.view === "today") { state.todayAt = Math.max(0, Math.min(todayCards().length - 1, state.todayAt + delta)); return; }
     const list = cardsIn(laneOfSelected()), at = list.findIndex(card => card.id === state.selected);
     select(list[Math.max(0, Math.min(list.length - 1, at + delta))]);
   }
   /** The next lane with cards; it opens on the card you last had there. */
   function jumpLane(delta) {
+    if (state.view === "today") return;
     const list = filled(), lane = list[list.findIndex(item => item.id === laneOfSelected()) + delta];
     if (!lane) return;
     const cards = cardsIn(lane.id);
@@ -196,6 +246,13 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
     say("");
     const card = current();
     if (name === "q") { state.quit = true; return; }
+    if (name === "0") return show(state.view === "today" ? "board" : "today");
+    if (/^[1-9]$/.test(name)) {
+      const item = state.boards[Number(name) - 1];
+      return item ? show("board", item) : say(`${name}: no board with that number`);
+    }
+    if (name === "escape" && state.view === "today") return show("board");
+    if (name === "b") { state.sidebar = !showSidebar(); return; }
     if (name === "down" || name === "j") return move(1);
     if (name === "up" || name === "k") return move(-1);
     if (name === "pagedown") return move(5);
@@ -208,11 +265,11 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
     if (name === "?") { state.mode = "help"; return; }
     if (name === "A") {
       state.all = !state.all;
-      if (!state.all && card?.status === "archived") select(cardsIn(filled()[0]?.id)[0]);
+      if (!state.all && selectedOnBoard()?.status === "archived") select(cardsIn(filled()[0]?.id)[0]);
       return;
     }
-    if (name === "o" && card) { open(webUrl(card.id)); say("Opened the card in the browser"); return; }
-    const action = cardActions(card, board).find(item => item.key === name);
+    if (name === "o" && card) { open(webUrl(card.id, boardOf(card).id)); say("Opened the card in the browser"); return; }
+    const action = card && cardActions(card, boardOf(card)).find(item => item.key === name);
     if (action) {
       try { await act(action.act, card); } catch (error) { say(error.message, true); }
     } else if (card && "rtsxaR".includes(name) && name.length === 1) say(`${name}: not available for this card`);
@@ -224,14 +281,39 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
       : lane.id === "ready" && card.blocked ? ["◌", DIM]
       : card.status === "interrupted" ? ["✗", "33"]
       : [lane.glyph, lane.style];
+  const ago = iso => {
+    const minutes = Math.max(0, (now() - Date.parse(iso)) / 60_000);
+    return minutes < 60 ? `${Math.round(minutes)}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`;
+  };
 
-  function header(screen, columns) {
-    let x = screen.parts(1, 0, [[title || "bakery", "1"], ["    ", ""]]);
+  /** The boards, numbered for their keys, with Today above them. Counts come from `/api/boards`, as on the web. */
+  function drawSidebar(screen, w, rows) {
+    for (let y = 0; y < rows - 2; y++) screen.put(w, y, "│", DIM);
+    screen.put(1, 0, "bakery.", ACCENT);
+    const needsYou = state.boards.reduce((sum, item) => sum + needsYouStatuses.reduce((n, status) => n + (item.cardCounts?.[status] ?? 0), 0), 0);
+    const today = state.view === "today";
+    screen.parts(1, 2, [["0 ", DIM], ["Today", today ? ACCENT : ""]]);
+    if (needsYou) screen.put(w - 1 - String(needsYou).length, 2, String(needsYou), "34");
+    state.boards.slice(0, Math.max(0, rows - 7)).forEach((item, i) => {
+      const y = 4 + i, here = !today && item.id === state.board.id, counts = item.cardCounts ?? {};
+      screen.parts(1, y, [[i < 9 ? `${i + 1} ` : "  ", DIM], [clip(nameOf(item), w - 9), here ? ACCENT : ""]]);
+      if (counts.running) screen.put(w - 6, y, spinner(), "33");
+      if (counts.review) screen.put(w - 1 - String(counts.review).length, y, String(counts.review), "34");
+    });
+  }
+
+  function header(screen, left, columns) {
+    let x = screen.parts(left + 1, 0, [[nameOf(state.board), "1"], ["    ", ""]]);
     for (const id of ["triage", "ready", "running", "review"]) {
       const count = state.cards.filter(card => card.status === id).length;
       x = screen.parts(x, 0, [[String(count), `1;${LANES.find(lane => lane.id === id).style}`], [` ${id}   `, DIM]]);
     }
-    screen.put(0, 1, "─".repeat(columns), DIM);
+    const right = [];
+    if (state.conflicts) right.push([`✗ ${state.conflicts} merge conflict${state.conflicts === 1 ? "" : "s"}`, "31"], ["    ", ""]);
+    if (typeof state.board.cost24h === "number") right.push([`$${state.board.cost24h.toFixed(2)}`, ""], [" in 24h", DIM]);
+    const used = right.reduce((sum, [text]) => sum + width(text), 0);
+    if (x + used < columns) screen.parts(columns - 1 - used, 0, right);
+    screen.put(left, 1, "─".repeat(columns - left), DIM);
   }
 
   /**
@@ -240,7 +322,7 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
    */
   function laneLayout(columns) {
     const strip = 4, edge = 6, list = lanes().map(lane => ({ ...lane, count: cardsIn(lane.id).length }));
-    for (const lane of list) lane.collapsed = !lane.count && (board.autoCollapseEmptySwimlanes ?? true);
+    for (const lane of list) lane.collapsed = !lane.count && (state.board.autoCollapseEmptySwimlanes ?? true);
     const open = list.filter(lane => !lane.collapsed);
     const min = Math.max(12, Math.min(30, columns - 2 * edge - 1)), max = 44;
     const room = from => columns - 1 - (from > 0 ? edge : 0) - edge;
@@ -269,25 +351,25 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
     return { shown, left, right };
   }
 
-  function tile(card, w, now_) {
-    const inner = Math.max(1, w - 6), pill = tilePill(card, state.cards, now_);
+  function tile(card, w, at) {
+    const inner = Math.max(1, w - 6), pill = tilePill(card, state.cards, at, split());
     const lines = wrap(card.title, inner, 2);
     return { lines, pill: pill && [clip(pill[0], inner), pill[1]], h: lines.length + (pill ? 1 : 0) + 2 };
   }
 
-  function drawBoard(screen, columns, bottom) {
-    header(screen, columns);
-    if (!state.cards.length) { screen.put(1, 3, "No cards on this board yet.", DIM); return; }
+  function drawBoard(screen, left, columns, bottom) {
+    header(screen, left, columns);
+    if (!state.cards.length) { screen.put(left + 1, 3, "No cards on this board yet.", DIM); return; }
     const top = 2, at = now();
-    const { shown, left, right } = laneLayout(columns);
+    const { shown, left: before, right: after } = laneLayout(columns - left);
     const edgeStrip = (x, list, arrow) => {
       screen.box(x, top, 5, bottom - top, DIM);
       screen.put(x + 2, top + 1, arrow, ACCENT);
       list.forEach((lane, i) => { screen.put(x + 1, top + 3 + i * 3, "●", lane.style); screen.put(x + 1, top + 4 + i * 3, String(lane.count).padStart(3), DIM); });
     };
-    let x = 0;
-    if (left.length) { edgeStrip(0, left, "‹"); x = 6; }
-    if (right.length) edgeStrip(columns - 6, right, "›");
+    let x = left;
+    if (before.length) { edgeStrip(left, before, "‹"); x = left + 6; }
+    if (after.length) edgeStrip(columns - 6, after, "›");
     for (const lane of shown) {
       if (lane.collapsed) {
         screen.box(x, top, lane.w, bottom - top, DIM);
@@ -323,6 +405,33 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
       if (i < cards.length) screen.put(x + 2, y, `↓ ${cards.length - i} more`, DIM);
       x += lane.w + 1;
     }
+  }
+
+  /** Today, as on the web: the day's counts, then what's running, what needs you and what's approved, a row a card. */
+  function drawToday(screen, left, columns, bottom) {
+    const w = Math.min(110, columns - left - 4), x = left + Math.floor((columns - left - w) / 2);
+    const { attention, finished } = todaySections(state.today, since());
+    const spent = state.boards.reduce((sum, item) => sum + (item.cost24h ?? 0), 0);
+    screen.parts(x, 0, [["Today", "1"], [`   ${new Date(now()).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}`, DIM]]);
+    screen.parts(x, 1, [[String(finished.length), "1;32"], [" merged   ", DIM], [String(attention.length), "1;34"], [" need you   ", DIM], [`$${spent.toFixed(2)}`, ""], [" in 24h", DIM]]);
+    const rows = todayRows(), top = 3, room = bottom - top;
+    if (!rows.length) { screen.put(x, top, "Nothing needs you right now.", DIM); return; }
+    // Keep the selected card in the middle of the screen once the list is longer than it.
+    const selectedRow = rows.findIndex(row => row.card === todayCards()[state.todayAt]);
+    const off = Math.max(0, Math.min(selectedRow - Math.floor(room / 2), rows.length - room));
+    rows.slice(off, off + room).forEach((row, i) => {
+      const y = top + i;
+      if (!row.card) { screen.put(x, y, row.label, row.style); return; }
+      const card = row.card, selected = off + i === selectedRow, home = boardOf(card);
+      const lane = LANES.find(item => item.id === laneOf(card, isPullRequestBoard(home))) ?? LANES[0];
+      const age = ago(card.updatedAt), pill = needsYourReview(card) ? null : tilePill(card, state.today, now(), isPullRequestBoard(home));
+      const pillText = pill && clip(pill[0], 30), titleRoom = w - 24 - (pill ? width(pillText) + 2 : 0);
+      if (selected) screen.put(x - 2, y, "▸", ACCENT);
+      const end = screen.parts(x, y, [glyph(card, lane), [` ${clip(card.title, titleRoom)}`, selected ? "1" : ""]]);
+      if (pill) screen.put(end + 2, y, pillText, pill[1]);
+      screen.put(x + w - 20, y, clip(nameOf(home), 14), DIM);
+      screen.put(x + w - width(age), y, age, DIM);
+    });
   }
 
   /** Card markdown as styled lines: bullets and numbered steps hang, `code` is cyan, **bold** is bold. */
@@ -388,15 +497,17 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
 
   function drawDetails(screen, columns, bottom) {
     screen.dim();
-    const card = state.cards.find(item => item.id === state.details.card.id) ?? state.details.card;
+    const known = [...state.cards, ...state.today], card = known.find(item => item.id === state.details.card.id) ?? state.details.card;
     const w = Math.min(104, columns - 2), h = bottom - 1, x = Math.floor((columns - w) / 2), y = 1, inner = w - 6;
     screen.clear(x, y, w, h);
     screen.box(x, y, w, h, DIM);
-    const lane = LANES.find(item => item.id === laneOf(card, split)) ?? LANES[0], pill = tilePill(card, state.cards, now());
+    const lane = LANES.find(item => item.id === laneOf(card, isPullRequestBoard(boardOf(card)))) ?? LANES[0];
+    const pill = needsYourReview(card) ? [" Needs you ", PILL_YOU] : tilePill(card, known, now(), isPullRequestBoard(boardOf(card)));
     screen.parts(x + 3, y + 1, [glyph(card, lane), [` ${clip(card.title, inner - 2)}`, "1"]]);
     let at = screen.parts(x + 5, y + 2, [[lane.label, lane.style], ["   ", ""]]);
     if (pill) at = screen.parts(at, y + 2, [[clip(pill[0], 40), pill[1]], ["   ", ""]]);
-    if (card.attempts > 1) screen.put(at, y + 2, `↻ ${card.attempts} attempts`, DIM);
+    if (card.attempts > 1) at = screen.parts(at, y + 2, [[`↻ ${card.attempts} attempts   `, DIM]]);
+    if (state.view === "today") screen.put(at, y + 2, nameOf(boardOf(card)), DIM);
     screen.parts(x + 3, y + 4, [["Overview", state.tab === 0 ? "1;4;33" : DIM], ["    ", ""], [`Attempts ${card.attempts ?? 0}`, state.tab === 1 ? "1;4;33" : DIM]]);
     const lines = detailLines(card, inner), top = y + 6, room = Math.max(1, y + h - 1 - top);
     state.scroll = Math.max(0, Math.min(state.scroll, lines.length - room));
@@ -414,9 +525,10 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
     screen.clear(0, rows - 1 - lines.length, columns, lines.length);
     lines.forEach((line, i) => screen.put(1, rows - 1 - lines.length + i, line, style));
     if (state.mode === "help") return;
-    const keys = state.mode === "details"
-      ? [["esc", "close"], ["tab", "attempts"], ["j k", "scroll"], ...cardActions(current(), board).map(item => [item.key, item.label]), ["o", "browser"]]
-      : [["← →", "lanes"], ["↑ ↓", "cards"], ["⏎", "open"], ...cardActions(current(), board).map(item => [item.key, item.label]), ["o", "browser"], ["?", "keys"], ["q", "quit"]];
+    const card = current(), actions = card ? cardActions(card, boardOf(card)).map(item => [item.key, item.label]) : [];
+    const keys = state.mode === "details" ? [["esc", "close"], ["tab", "attempts"], ["j k", "scroll"], ...actions, ["o", "browser"]]
+      : state.view === "today" ? [["↑ ↓", "cards"], ["⏎", "open"], ...actions, ["0", "board"], ["1–9", "boards"], ["?", "keys"], ["q", "quit"]]
+      : [["← →", "lanes"], ["↑ ↓", "cards"], ["⏎", "open"], ...actions, ["0", "today"], ["1–9", "boards"], ["?", "keys"], ["q", "quit"]];
     let x = 1;
     for (const [name, label] of keys) {
       if (x + width(name) + width(label) + 1 > columns) break;
@@ -433,7 +545,10 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
       HELP.forEach(([keys, text], i) => screen.parts(2, 2 + i, [[keys.padEnd(10), "1"], [`  ${text}`, ""]]));
       screen.put(1, HELP.length + 3, "Any key to go back.", DIM);
     } else {
-      drawBoard(screen, columns, bottom);
+      const left = showSidebar() ? 23 : 0;
+      if (left) drawSidebar(screen, left - 1, rows);
+      if (state.view === "today") drawToday(screen, left, columns, bottom);
+      else drawBoard(screen, left, columns, bottom);
       if (state.mode === "details") drawDetails(screen, columns, bottom);
     }
     footer(screen, columns, rows);
@@ -441,7 +556,7 @@ export function createTui({ api, board, title = "", size = () => ({ columns: 80,
   }
 
   /** A running card shows a spinner, so the screen needs redrawing between refreshes. */
-  const animating = () => state.mode !== "help" && state.cards.some(card => card.status === "running");
+  const animating = () => state.mode !== "help" && (state.view === "today" ? state.today : state.cards).some(card => card.status === "running");
 
   return { state, refresh, key, render, animating };
 }
@@ -464,10 +579,10 @@ export function openUrl(url) {
   return true;
 }
 
-/** Runs the TUI on this terminal until q or Ctrl-C, refreshing the board every 2 seconds. */
-export async function runTui({ api, board, title, webUrl }) {
+/** Runs the TUI on this terminal until q or Ctrl-C, refreshing every 2 seconds. */
+export async function runTui({ api, board, today, webUrl }) {
   const input = process.stdin, out = process.stdout;
-  const tui = createTui({ api, board, title, webUrl, open: openUrl, color: useColor(out), size: () => ({ columns: out.columns || 80, rows: out.rows || 24 }) });
+  const tui = createTui({ api, board, today, webUrl, open: openUrl, color: useColor(out), size: () => ({ columns: out.columns || 80, rows: out.rows || 24 }) });
   // Only rows that changed are written, inside a synchronized update, so a spinner frame costs a few bytes and the
   // terminal never shows half a frame.
   let drawn = [];
@@ -497,7 +612,7 @@ export async function runTui({ api, board, title, webUrl }) {
   input.on("data", data => {
     queue = queue.then(async () => {
       for (const name of keyNames(data)) {
-        await tui.key(name);
+        try { await tui.key(name); } catch (error) { tui.state.message = error.message; tui.state.error = true; }
         if (tui.state.quit) finish();
       }
       draw();

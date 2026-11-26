@@ -81,7 +81,7 @@ import { featureOffMessage } from "./features.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
-import { needsYouStatuses, reviewOrder, Today } from "./today.js";
+import { Today } from "./today.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
@@ -113,8 +113,10 @@ import {
   sharedDropTargets,
   readyCompanions,
   needsYourReview,
+  needsYouStatuses,
   agentApproved,
   reviewActionText,
+  reviewOrder,
   reviewWaitText,
   type BakerySettings,
   type Board,

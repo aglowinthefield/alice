@@ -297,15 +297,18 @@ async function main() {
     print({ url, opened }, opts.json, [opened || opts.print ? url : `${url}\t(no browser here; open it yourself)`]);
     return;
   }
-  const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
-  const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "tui") {
+    // With several boards and none chosen (by --board or the current directory), the TUI opens on Today.
+    const here = boards.some(item => process.cwd() === item.repo || process.cwd().startsWith(item.repo + sep));
+    const today = !opts.board && !here && boards.length > 1;
     return runTui({
       api: (method, route, input) => request(origin, route, method, input, 30_000),
-      board, title: board.repo.replace(homedir(), "~"),
-      webUrl: id => new URL(`/board/${encodeURIComponent(board.id)}/card/${encodeURIComponent(id)}`, origin).href,
+      board: today ? boards[0] : selectBoard(boards, opts.board), today,
+      webUrl: (id, boardId) => new URL(`/board/${encodeURIComponent(boardId)}/card/${encodeURIComponent(id)}`, origin).href,
     });
   }
+  const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
+  const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "cards") {
     const draw = cards => renderBoard(cards, { width: columns(), all: opts.all, title: board.repo.replace(homedir(), "~") });
     if (opts.watch) return watch(() => request(origin, `${path}/cards`).then(draw));

@@ -9,19 +9,24 @@ type Call = [string, string, unknown?];
 const board = { id: "b1", repo: "/repo", integration: "local", autoPickupEnabled: false };
 const card = (id: string, status: string, extra: object = {}) => ({ id: `${id}-0000`, title: `${id} card`, status, attempts: 1, ...extra });
 
-function fixture(cards: object[], options: { board?: object; review?: object; fail?: string; flags?: object[]; columns?: number; rows?: number } = {}) {
+type Options = { board?: object; review?: object; fail?: string; flags?: object[]; columns?: number; rows?: number; boards?: object[]; conflicts?: object[]; byBoard?: Record<string, object[]>; today?: boolean };
+function fixture(cards: object[], options: Options = {}) {
   const calls: Call[] = [];
   const opened: string[] = [];
   const api = async (method: string, path: string, input?: unknown) => {
     calls.push([method, path, input]);
     if (options.fail && path.endsWith(options.fail)) throw new Error("Bakery 409: Card is already running");
-    if (path.endsWith("/cards")) return cards;
+    if (path === "/api/boards") return options.boards ?? {};
+    if (path.endsWith("/conflicts")) return path.startsWith("/api/boards/b1/") ? options.conflicts ?? [] : [];
+    const boardCards = /^\/api\/boards\/([\w-]+)\/cards$/.exec(path);
+    if (boardCards) return options.byBoard?.[boardCards[1]] ?? cards;
+    if (path === "/api/cards") return cards;
     if (path.endsWith("/ready-check") && options.flags) return { flags: options.flags };
     if (path.endsWith("/review")) return options.review ?? { files: [{ path: "a.ts" }], fingerprint: "f".repeat(64) };
     if (path.endsWith("/runs")) return [{ attempt: 2, status: "failed", agent: "pi", error: "Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout", report: null }];
     return {};
   };
-  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: options.columns ?? 100, rows: options.rows ?? 12 }), open: (url: string) => opened.push(url), webUrl: (id: string) => `http://bakery/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
+  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: options.columns ?? 100, rows: options.rows ?? 12 }), open: (url: string) => opened.push(url), today: options.today, webUrl: (id: string, boardId: string) => `http://bakery/board/${boardId}/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
   const posts = () => calls.filter(([method]) => method === "POST");
   const screen = () => tui.render().map((line: string) => line.replace(/\x1b\[[\d;?]*[a-zA-Z]/g, "")).join("\n");
   return { tui, calls, posts, opened, screen };
@@ -106,7 +111,7 @@ test("approve reads the review: findings, a new PR in the browser, an open PR, o
   assert.equal(newPr.posts().length, 0);
   assert.match(newPr.screen(), /Press o to finish it in the browser/);
   await newPr.tui.key("o");
-  assert.deepEqual(newPr.opened, ["http://bakery/card/m-0000"]);
+  assert.deepEqual(newPr.opened, ["http://bakery/board/b1/card/m-0000"]);
 
   const openPr = fixture([card("m", "review", { prState: "OPEN", prNumber: 9 })], { board: { integration: "github-pr" } });
   await openPr.tui.refresh();
@@ -196,4 +201,53 @@ test("a long question wraps instead of losing its y/N", async () => {
   await f.tui.refresh();
   await f.tui.key("s");
   assert.match(f.screen(), /y\/N/);
+});
+
+test("the sidebar lists the boards; a number opens one, and the header shows its spend and conflicts", async () => {
+  const boards = [
+    { ...board, cost24h: 1.5, cardCounts: { review: 2, failed: 1 } },
+    { id: "b2", repo: "/code/other", integration: "local", cost24h: 0.25, cardCounts: { running: 1 } },
+  ];
+  const f = fixture([card("a", "ready")], { boards, conflicts: [{ cardId: "x" }, { cardId: "y" }], byBoard: { b2: [card("z", "triage", { repo: "/code/other" })] }, columns: 150, rows: 14 });
+  await f.tui.refresh();
+  assert.match(f.screen(), /0 Today +3 /, "Today counts what needs you on every board");
+  assert.match(f.screen(), /1 repo +2 /);
+  assert.match(f.screen(), /2 other/);
+  assert.match(f.screen(), /✗ 2 merge conflicts +\$1\.50 in 24h/);
+  await f.tui.key("2");
+  assert.match(f.screen(), /┃ ○ z card/);
+  assert.match(f.screen(), /\$0\.25 in 24h/);
+  assert.doesNotMatch(f.screen(), /merge conflict/, "the conflicts are the board's own");
+  await f.tui.key("b");
+  assert.doesNotMatch(f.screen(), /0 Today/, "b hides the sidebar");
+});
+
+test("Today lists what is running, what needs you and what is approved across boards, and acts on each card's board", async () => {
+  const boards = [board, { id: "b2", repo: "/code/other", integration: "local" }];
+  const all = [
+    card("old", "review", { updatedAt: "2026-11-20T10:00:00Z" }),
+    card("new", "review", { updatedAt: "2026-11-24T09:00:00Z", repo: "/code/other" }),
+    card("burnt", "failed", { updatedAt: "2026-11-19T10:00:00Z", failureSummary: "Timed out" }),
+    card("ok", "review", { reviewAction: "agent_approved", updatedAt: "2026-11-23T10:00:00Z" }),
+    card("run", "running", { updatedAt: "2026-11-24T09:59:00Z" }),
+    card("t", "triage", { updatedAt: "2026-11-24T09:00:00Z" }),
+  ].map(item => ({ repo: "/repo", ...item }));
+  const f = fixture(all, { boards, today: true, columns: 120, rows: 20 });
+  await f.tui.refresh();
+  const lines = f.screen().split("\n").map((line: string) => line.trim());
+  const order = ["Running", "◐ run card", "Needs you", "◉ old card", "◉ new card", "✗ burnt card", "Approved, only your Approve is left", "◉ ok card"];
+  assert.deepEqual(order.map(text => lines.findIndex((line: string) => line.startsWith(text) || line.startsWith(`▸ ${text}`))).every((at, i, list) => at >= 0 && (!i || at > list[i - 1])), true, f.screen());
+  assert.doesNotMatch(f.screen(), /\bt card/, "Triage stays on its board");
+  assert.match(f.screen(), /3 need you/);
+  await f.tui.key("j");
+  await f.tui.key("j");
+  assert.match(f.screen(), /▸ ◉ new card/);
+  await f.tui.key("enter");
+  assert.deepEqual(f.calls.at(-1), ["GET", "/api/boards/b2/cards/new-0000/runs", undefined], "the dialog reads the card's own board");
+  await f.tui.key("escape");
+  await f.tui.key("s");
+  await f.tui.key("y");
+  assert.deepEqual(f.posts(), [["POST", "/api/boards/b2/cards/new-0000/start", undefined]]);
+  await f.tui.key("0");
+  assert.match(f.screen(), /repo +1 triage/, "0 goes back to the board");
 });

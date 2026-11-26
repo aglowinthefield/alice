@@ -559,3 +559,50 @@ export type SentinelOverview = {
   runs: SentinelRun[];
   jobs: Card[];
 };
+
+// What each status asks of you on Today. Statuses not listed (Triage, Ready, Archived) stay on their boards.
+export const needsYouLabels: Partial<Record<Status, string>> = {
+  review: "Review",
+  failed: "Failed",
+  interrupted: "Interrupted",
+};
+export const needsYouStatuses = Object.keys(needsYouLabels) as Status[];
+const oldestFirst = (a: Card, b: Card) =>
+  a.updatedAt.localeCompare(b.updatedAt);
+
+/**
+ * Review cards in the order the queue walks them: the longest-waiting first. Cards an agent, CI or GitHub
+ * still has are left out until they need you.
+ */
+export const reviewOrder = (cards: Card[]) =>
+  cards.filter(needsYourReview).sort(oldestFirst);
+
+/**
+ * Today's lists across every board, for the web page and the terminal alike. `attention` needs you (Review, then
+ * Failed and Interrupted, oldest first); `approved` waits only for your Approve, so it stays out of attention;
+ * `running` is in flight, an agent's review included; `finished` is Done since `since`, newest first.
+ */
+export function todaySections(cards: Card[], since: string) {
+  const attention = cards
+    .filter(
+      (card) =>
+        card.status in needsYouLabels &&
+        (card.status !== "review" ||
+          (needsYourReview(card) && !agentApproved(card))),
+    )
+    .sort(
+      (a, b) =>
+        needsYouStatuses.indexOf(a.status) -
+          needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
+    );
+  const approved = cards.filter(agentApproved).sort(oldestFirst);
+  const running = cards.filter(
+    (card) =>
+      card.status === "running" ||
+      (card.status === "review" && card.reviewWait),
+  );
+  const finished = cards
+    .filter((card) => card.status === "done" && card.updatedAt > since)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { attention, approved, running, finished };
+}

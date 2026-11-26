@@ -33,7 +33,7 @@ export const COMMANDS = [
   {
     name: "tui", group: "Cards", summary: "the board in the terminal, driven by keys",
     full: "[--board ID|PATH]", options: [BOARD],
-    details: "The web board across the whole terminal. h/l or the arrows move between lanes and j/k within one, enter opens a card, o opens it in the browser and ? lists every key. s starts a run, x stops one, a approves, r and t move between Ready and Triage. Paid runs and merges ask first. Refreshes every 2 seconds; q quits.",
+    details: "The web app across the whole terminal. 0 opens Today and 1-9 the numbered boards in the sidebar. h/l or the arrows move between lanes and j/k within one, enter opens a card, o opens it in the browser and ? lists every key. s starts a run, x stops one, a approves, r and t move between Ready and Triage. Paid runs and merges ask first. Refreshes every 2 seconds; q quits.",
   },
   {
     name: "open", group: "Cards", args: "[CARD_ID]", summary: "open the board, or a card, in the browser",

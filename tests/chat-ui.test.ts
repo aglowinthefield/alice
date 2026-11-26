@@ -778,7 +778,7 @@ test("shortening or deleting the longest label lowers the maximum and clamps a w
   try {
     const page = await (await browser.newContext({ viewport: { width: 1400, height: 800 } })).newPage();
     const list = [
-      { id: "c1", topic: "Short", unread: 0 },
+      { id: "c1", topic: "Hi", unread: 0 },
       { id: "c2", topic: "Why is card B still waiting on A", unread: 0 },
     ];
     await page.addInitScript(() => localStorage.setItem("bakery-chat-sidebar-width", "900"));

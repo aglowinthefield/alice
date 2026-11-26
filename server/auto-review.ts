@@ -150,6 +150,12 @@ export class AutoReview {
    */
   async tick(): Promise<void> {
     if (this.draining) return;
+    // A card whose parent merged during its review is brought up to date first, so the review it gets next sees
+    // current main. Rare, and only checked when something waits.
+    if (this.board.listDeferredDependentUpdates().length) {
+      try { await this.integration.retryDeferredDependents(); }
+      catch (error) { console.error(`Could not retry dependent updates: ${String(error)}`); }
+    }
     // This is the server's unconditional periodic tick, not an auto-review opt-in.
     // Async Git: reviews start meanwhile, and the tick resolves once both are done.
     const reconciling = this.integration.reconcileExternallyMerged();
@@ -221,6 +227,12 @@ export class AutoReview {
       // cannot push, the agent's approval is advice and the card waits in Review for Approve.
       if (!pullRequests || !this.openPullRequest) {
         this.board.finishAutoReview(run.id, "approved", verdict.reason, fingerprint);
+        return;
+      }
+      // A card it depends on merged during this review, so the approved tree is on an old main. The next tick brings
+      // the card up to date and reviews it again, and that review opens the pull request.
+      if (this.board.hasDeferredDependentUpdate(card.id)) {
+        this.board.finishAutoReview(run.id, "approved", `${verdict.reason}\n\nA card this one depends on merged during the review, so Bakery brings it up to date with main and reviews it again before opening the pull request.`, fingerprint);
         return;
       }
       const current = this.board.getBoard(repoBoard.id);

@@ -220,6 +220,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS dependent_updates (cardId TEXT PRIMARY KEY, parentId TEXT NOT NULL, deferredAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','approved','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pr_readiness (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, data TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -972,6 +973,16 @@ export class Board {
     }
     return waiting.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
   }
+  /**
+   * Bakery changed a Review card's work itself (brought it up to date with main), so a finished agent review of the
+   * old work no longer counts and the card goes back in the queue. Returns whether an agent review is now waiting.
+   */
+  requeueAutoReview(cardId: string, runId: string): boolean {
+    const card = this.getCard(cardId), run = this.getRun(runId), repoBoard = card && this.boardForRepo(card.repo);
+    if (!repoBoard?.autoReviewEnabled || !run) return false;
+    this.db.prepare("UPDATE auto_review_jobs SET requeued=1 WHERE runId=? AND state!='running'").run(runId);
+    return this.awaitsAutoReview(repoBoard, cardId, run);
+  }
   /** The run finished after auto-review was enabled and nothing (a person, an earlier job) has handled it yet. */
   private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
     return repoBoard.autoReviewEnabled &&
@@ -1503,6 +1514,20 @@ export class Board {
       .run(cardId, JSON.stringify(files), details);
   }
   clearMergeFailure(cardId: string): void { this.db.prepare("DELETE FROM merge_failures WHERE cardId=?").run(cardId); }
+  /**
+   * A card whose parent merged while Bakery could not touch its worktree (an agent review or approval in progress)
+   * waits here to be brought up to date with main later. Returns whether the card was not already waiting.
+   */
+  deferDependentUpdate(cardId: string, parentId: string): boolean {
+    const waiting = !!this.db.prepare("SELECT 1 FROM dependent_updates WHERE cardId=?").get(cardId);
+    this.db.prepare("INSERT INTO dependent_updates(cardId, parentId, deferredAt) VALUES (?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET parentId=excluded.parentId").run(cardId, parentId, now());
+    return !waiting;
+  }
+  listDeferredDependentUpdates(): { cardId: string; parentId: string }[] {
+    return this.db.prepare("SELECT cardId, parentId FROM dependent_updates ORDER BY deferredAt, rowid").all() as { cardId: string; parentId: string }[];
+  }
+  hasDeferredDependentUpdate(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM dependent_updates WHERE cardId=?").get(cardId); }
+  clearDeferredDependentUpdate(cardId: string): void { this.db.prepare("DELETE FROM dependent_updates WHERE cardId=?").run(cardId); }
   getApproval(cardId: string): Approval | undefined {
     return this.db.prepare("SELECT * FROM approvals WHERE cardId=? AND merged=0").get(cardId) as Approval | undefined;
   }

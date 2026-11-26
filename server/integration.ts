@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Board, type Card } from "./board.js";
@@ -28,9 +28,9 @@ function git(repo: string, ...args: string[]): string { return gitCommand(repo, 
  * `gitCommand` without blocking the event loop, for work that runs on a timer. Under load one git call can take
  * seconds, and a synchronous one stalls every request the server is handling meanwhile.
  */
-function gitCommandAsync(repo: string, args: string[], raw = false): Promise<string> {
+function gitCommandAsync(repo: string, args: string[], raw = false, index?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, env: index ? { ...process.env, GIT_INDEX_FILE: index } : process.env }, (error, stdout, stderr) => {
       if (!error) return resolve(raw ? stdout : stdout.trim());
       const detail = (stderr || stdout || "Git command failed").trim();
       reject(Object.assign(new Error(`${args[0]} failed: ${detail.slice(0, 4000)}`), { status: typeof error.code === "number" ? error.code : undefined }));
@@ -42,6 +42,38 @@ async function isAncestorAsync(repo: string, ancestor: string, descendant: strin
   try { await readGit(repo, "merge-base", "--is-ancestor", ancestor, descendant); return true; }
   catch (error) { if ((error as { status?: number }).status === 1) return false; throw error; }
 }
+/**
+ * A three-way merge done on objects only (`git merge-tree`), so nothing in any worktree or ref changes. Returns the
+ * merged tree, or the paths that conflict. `sides` are the two commits or trees to merge, optionally preceded by
+ * `--merge-base=<tree-ish>`.
+ */
+function mergeTreeAsync(repo: string, sides: string[]): Promise<{ tree: string; conflicts: string[] }> {
+  return new Promise((resolve, reject) => {
+    execFile("git", ["-C", repo, "merge-tree", "--write-tree", "--name-only", "-z", ...sides], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      // Exit 1 is a merge with conflicts; anything else is Git failing.
+      if (error && error.code !== 1) return reject(new Error(`merge-tree failed: ${(stderr || stdout || error.message).trim().slice(0, 4000)}`));
+      const [tree, ...rest] = stdout.split("\0");
+      const end = rest.indexOf("");
+      resolve({ tree: tree.trim(), conflicts: error ? [...new Set(rest.slice(0, end < 0 ? rest.length : end))] : [] });
+    });
+  });
+}
+/**
+ * Paths an update from tree `from` to tree `to` would create in `worktree` where a local file already sits that Git
+ * does not track, such as an ignored `.env` that main starts tracking. `from` holds every file Git sees (`add -A`),
+ * so anything already on disk at an added path, or a file where an added path needs a directory, is ignored.
+ * `read-tree -u` would overwrite those without asking.
+ */
+async function ignoredCollisions(worktree: string, from: string, to: string): Promise<string[]> {
+  const added = (await gitCommandAsync(worktree, ["diff", "--no-renames", "--name-only", "-z", "--diff-filter=A", from, to], true)).split("\0").filter(Boolean);
+  const kind = (path: string) => { try { return lstatSync(join(worktree, path)).isDirectory() ? "dir" : "file"; } catch { return ""; } };
+  return added.filter(path => {
+    const parts = path.split("/");
+    return !!kind(path) || parts.slice(0, -1).some((_, i) => kind(parts.slice(0, i + 1).join("/")) === "file");
+  });
+}
+/** What happened to one card that depends on a card that just merged; see `Integration.updateDependents`. */
+export type DependentUpdate = { cardId: string; outcome: "updated" | "current" | "conflict" | "deferred" | "skipped"; detail: string };
 /** What `location` reads from Git to confirm a card worktree is the card's, on its branch, with no conflicts. */
 type WorktreeFacts = { repoTop: string; worktreeTop: string; repoCommon: string; worktreeCommon: string; branch: string; unmerged: string };
 const worktreeArgs = {
@@ -442,6 +474,7 @@ export class Integration {
         if (!this.board.listExternalMergeCandidates().some(item => item.card.id === card.id)) continue;
         this.board.recordExternalIntegration(card.id, run.id, candidate, merged[0]);
         this.reconciliationErrors.delete(card.id);
+        this.afterMerge(card.id);
         console.log(`Reconciled externally merged card ${card.id} at ${merged[0]}`);
       } catch (error) {
         // Git worktrees can disappear independently of Bakery. Leave ambiguous cards unchanged.
@@ -451,6 +484,146 @@ export class Integration {
     }
   }
 
+
+  private dependentUpdates: Promise<unknown> = Promise.resolve();
+  /**
+   * After `parentId` merges (Approve, its pull request, or by hand), brings every Review card that depends on it up to
+   * date with main, so it does not conflict later. Updates run one at a time, queued behind earlier ones.
+   */
+  updateDependents(parentId: string): Promise<DependentUpdate[]> { return this.queueDependentWork(() => this.updateDependentsNow(parentId)); }
+  /**
+   * Retries the updates deferred because the card was busy when its parent merged (see `updateDependent`), for cards
+   * that are back in Review and free. The auto-review tick calls it before starting reviews, so a card's next review
+   * sees current main.
+   */
+  retryDeferredDependents(): Promise<DependentUpdate[]> { return this.queueDependentWork(() => this.retryDeferredNow()); }
+  private queueDependentWork(work: () => Promise<DependentUpdate[]>): Promise<DependentUpdate[]> {
+    const next = this.dependentUpdates.then(work);
+    this.dependentUpdates = next.catch(() => {});
+    return next;
+  }
+  /** Resolves once every dependent update queued so far has finished. */
+  async dependentUpdatesSettled(): Promise<void> { await this.dependentUpdates; }
+  /** Starts `updateDependents` without waiting for it; a merge never fails because a dependent could not follow. */
+  private afterMerge(parentId: string) {
+    if (!this.board.listDependencies(parentId).dependents.some(card => card.status === "review")) return;
+    this.updateDependents(parentId).catch(error => console.error(`Could not update the cards that depend on ${parentId}: ${String(error)}`));
+  }
+  private async updateDependentsNow(parentId: string): Promise<DependentUpdate[]> {
+    const parent = this.board.getCard(parentId);
+    if (!parent) return [];
+    const results: DependentUpdate[] = [];
+    for (const ref of this.board.listDependencies(parentId).dependents) {
+      const card = this.board.getCard(ref.id);
+      if (card?.status === "review") results.push(await this.updateDependentNoted(card, parent));
+    }
+    return results;
+  }
+  private async retryDeferredNow(): Promise<DependentUpdate[]> {
+    const results: DependentUpdate[] = [];
+    for (const { cardId, parentId } of this.board.listDeferredDependentUpdates()) {
+      const card = this.board.getCard(cardId), parent = this.board.getCard(parentId);
+      // A card that was sent back keeps waiting until its next run reaches Review.
+      if (!card || !parent || card.status === "done" || card.status === "archived") this.board.clearDeferredDependentUpdate(cardId);
+      else if (card.status === "review") results.push(await this.updateDependentNoted(card, parent));
+    }
+    return results;
+  }
+  /** `updateDependent`, with what happened noted on the card. Anything but a deferral settles a waiting update. */
+  private async updateDependentNoted(card: Card, parent: Card): Promise<DependentUpdate> {
+    let result: DependentUpdate;
+    try { result = await this.updateDependent(card, parent); }
+    catch (error) { result = { cardId: card.id, outcome: "skipped", detail: `Bakery could not bring this card up to date after "${parent.title}" merged: ${error instanceof Error ? error.message : String(error)}` }; }
+    if (result.outcome !== "deferred") this.board.clearDeferredDependentUpdate(card.id);
+    if (result.outcome !== "current" && result.detail) this.board.noteCard(card.id, result.detail);
+    return result;
+  }
+  /**
+   * Merges current main into one dependent card's worktree, keeping its uncommitted work uncommitted. Review
+   * worktrees usually hold the agent's work as uncommitted changes, which a plain rebase or merge would refuse, so
+   * the merge is first worked out on Git objects alone (`merge-tree`): the branch with main, then the uncommitted
+   * work on top of that. A conflict in either records the usual merge failure and changes nothing. A clean result
+   * moves the branch (a fast-forward, or a merge commit when the branch has commits of its own) and updates the files
+   * with `read-tree -m -u`, which refuses rather than overwrite a file edited after the snapshot. Staged changes are
+   * merged the same way on their own and stay staged. Everything that could stop the update (a conflict in the work or
+   * in what is staged, an ignored local file in the way) is found before anything changes, and changes nothing.
+   */
+  private async updateDependent(card: Card, parent: Card): Promise<DependentUpdate> {
+    const result = (outcome: DependentUpdate["outcome"], detail: string): DependentUpdate => ({ cardId: card.id, outcome, detail });
+    const after = `after "${parent.title}" merged`;
+    const run = this.board.listRuns(card.id)[0];
+    if (run?.status !== "review") return result("current", "");
+    // GitHub already tests an open pull request against main, and Bakery sends its conflicts back from there.
+    if (card.prState === "OPEN" || card.prOverrideUrl) return result("current", "");
+    const busy = () => this.board.getApproval(card.id) ? "an approval is in progress" : this.board.getAutoReviewJob(run.id)?.state === "running" ? "an agent review is in progress" : "";
+    // Its worktree is in use. It is brought up to date once that finishes; see `retryDeferredDependents`.
+    const defer = () => {
+      const why = busy();
+      return result("deferred", this.board.deferDependentUpdate(card.id, parent.id) ? `Not brought up to date with main ${after} yet: ${why}. Bakery updates it once that finishes` : "");
+    };
+    if (busy()) return defer();
+    const { repo, worktree } = await this.locationAsync(card);
+    for (const name of ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD"])
+      if (existsSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", name)))) return result("skipped", `Not brought up to date with main ${after}: the card worktree is in the middle of a Git operation (${name})`);
+    const prMode = this.board.integrationFor(card.repo) === "github-pr";
+    const mainName = prMode ? "origin/main" : "main";
+    const main = await readGit(repo, "rev-parse", "--verify", prMode ? "refs/remotes/origin/main" : "refs/heads/main");
+    const head = await readGit(worktree, "rev-parse", "HEAD");
+    if (await isAncestorAsync(worktree, main, head)) return result("current", "");
+    const temp = mkdtempSync(join(tmpdir(), "bakery-dependent-"));
+    try {
+      // The worktree as it stands, uncommitted and untracked files included, as a tree. See `snapshot`.
+      const index = join(temp, "index");
+      try { copyFileSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", "index")), index); }
+      catch { await gitCommandAsync(worktree, ["read-tree", "HEAD"], false, index); }
+      await gitCommandAsync(worktree, ["add", "-A"], false, index);
+      const work = await gitCommandAsync(worktree, ["write-tree"], false, index);
+      // What is staged, from a copy of the real index so it is only read. Usually the same as HEAD.
+      const stagedIndex = join(temp, "staged");
+      copyFileSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", "index")), stagedIndex);
+      const staged = await gitCommandAsync(worktree, ["write-tree"], false, stagedIndex);
+      const headTree = await readGit(worktree, "rev-parse", `${head}^{tree}`);
+      const conflict = (files: string[], what = "conflicts in") => {
+        const details = `Bringing the card up to date with ${mainName} (${main.slice(0, 12)}) ${after} ${what} ${files.join(", ")}. Bakery changed nothing in the card worktree.`;
+        this.board.recordMergeFailure(card.id, files, details);
+        return result("conflict", `${details} Choose Fix conflict with Pi, or resolve it yourself`);
+      };
+      // The branch's own commits with main: a fast-forward when it has none.
+      const ownCommits = !await isAncestorAsync(worktree, head, main);
+      const branch = ownCommits ? await mergeTreeAsync(worktree, [head, main]) : { tree: await readGit(worktree, "rev-parse", `${main}^{tree}`), conflicts: [] };
+      if (branch.conflicts.length) return conflict(branch.conflicts);
+      const merged = await mergeTreeAsync(worktree, [`--merge-base=${head}`, branch.tree, work]);
+      if (merged.conflicts.length) return conflict(merged.conflicts);
+      const stagedMerge = staged === headTree ? { tree: branch.tree, conflicts: [] } : await mergeTreeAsync(worktree, [`--merge-base=${head}`, branch.tree, staged]);
+      if (stagedMerge.conflicts.length) return conflict(stagedMerge.conflicts, "conflicts with changes staged in");
+      const collisions = await ignoredCollisions(worktree, work, merged.tree);
+      if (collisions.length) return conflict(collisions, "would overwrite local files Git ignores:");
+      // From here on nothing awaits, so no request can approve or start the card halfway through.
+      const current = this.board.getCard(card.id);
+      if (current?.status !== "review" || this.board.listRuns(card.id)[0]?.id !== run.id) return result("skipped", `Not brought up to date with main ${after}: the card changed while Bakery was checking it`);
+      if (busy()) return defer();
+      const ref = `refs/heads/bakery/${card.id}`;
+      const newHead = ownCommits
+        ? git(worktree, ...commitIdentityArgs(worktree), "commit-tree", branch.tree, "-p", head, "-p", main, "-m", `Merge ${mainName} into bakery/${card.id}`, "-m", `${parent.title} (${parent.id}) merged; Bakery brought this card up to date.`)
+        : main;
+      git(worktree, "update-ref", "-m", `bakery: update onto ${mainName} ${after}`, ref, newHead, head);
+      try { gitCommand(worktree, ["read-tree", "-m", "-u", work, merged.tree], index); }
+      catch (error) {
+        git(worktree, "update-ref", ref, head, newHead);
+        throw error;
+      }
+      // The branch moved under the real index. Point it at the new commit, so the card's work stays unstaged as before,
+      // or at the merged staged changes when some were staged. A refresh after `read-tree` only updates file stats.
+      if (staged === headTree) git(worktree, "reset", "-q");
+      else {
+        git(worktree, "read-tree", stagedMerge.tree);
+        try { git(worktree, "update-index", "-q", "--refresh"); } catch { /* Exit 1 only lists files that differ from the index. */ }
+      }
+      this.board.clearMergeFailure(card.id);
+      const requeued = this.board.requeueAutoReview(card.id, run.id);
+      return result("updated", `Brought up to date with ${mainName} (${main.slice(0, 12)}) ${after}${ownCommits ? ", with a merge commit on the card branch" : ""}.${requeued ? " Agent review runs again on the result." : " Refresh the diff to review it against the new main."}`);
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  }
 
   withdraw(card: Card): Card {
     const approval = this.board.getApproval(card.id);
@@ -759,6 +932,7 @@ export class Integration {
   }
   private completeAndPush(card: Card, runId: string, candidate: string, repo: string): Card {
     const done = this.board.completeApproval(card.id, runId, candidate);
+    this.afterMerge(card.id);
     if (!this.board.boardForRepo(card.repo)?.pushMainAfterMerge) return done;
     try {
       execFileSync("git", ["-C", repo, "push", "origin", "main"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });

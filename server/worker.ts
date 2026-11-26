@@ -1,12 +1,13 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { command } from "./platform.js";
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
 import { piModelArgs, type AgentPhase } from "./agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
 import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from "./board.js";
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
+import { isRunTimeout } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 import { commitIdentityArgs } from "./git-identity.js";
 import { loopGuards } from "./repo-limits.js";
@@ -42,6 +43,47 @@ export class PoisonedSessionError extends Error {
 }
 
 const RECOVERY = "The earlier Pi session for this card was rejected by the model provider (invalid message history), so this is a fresh session that has none of its conversation. The card's worktree, branch and uncommitted edits are untouched and may hold that session's partial work: check `git status` and `git diff` first and build on them rather than starting over. Do not discard or reset existing changes. ";
+
+/** Sent instead of the task prompt to the attempt that continues a timed-out run's session, which already holds the task. */
+export function continuationMessage(timedOut: Run): string {
+  return `You ran out of time on the previous attempt: Bakery stopped attempt ${timedOut.attempt} at its run time limit. This attempt continues the same session with a fresh time limit, so the earlier instruction to stop starting new work no longer applies. Check \`git status\` and \`git diff\` to see where the work stands, then finish the remaining work and write your report as the first message of this session describes: what changed, what you verified, what remains, and any Follow-ups.`;
+}
+
+const TIMEOUT_FRESH = "An earlier attempt on this card ran out of time and Bakery stopped it, and its Pi session could not be found, so this is a fresh session that has none of its conversation. The card's worktree, branch and uncommitted edits are untouched and may hold that attempt's partial work: check `git status` and `git diff` first and build on them rather than starting over. Do not discard or reset existing changes. ";
+
+/**
+ * True when the run's Pi session file is still there, is the session the run used, and still holds the task: a header
+ * and at least one complete user message Pi will load. Pi skips lines SIGTERM cut short, so a session whose only user
+ * message was truncated loads with no conversation, and continuing it would send the continuation without the task.
+ */
+export function sessionIntact(run: Run): boolean {
+  if (!run.sessionFile) return false;
+  let fd: number | undefined;
+  try {
+    fd = openSync(run.sessionFile, "r");
+    const buffer = Buffer.alloc(1024 * 1024);
+    let pending = "", header = false, bytes: number;
+    // null keeps reading; true or false is the answer. Malformed lines are skipped, as Pi skips them.
+    const accept = (line: string): boolean | null => {
+      if (!line.trim()) return null;
+      let entry: { type?: unknown; id?: unknown; message?: { role?: unknown } };
+      try { entry = JSON.parse(line); } catch { return null; }
+      if (!header) { header = true; return entry?.type === "session" && entry.id === run.sessionId ? null : false; }
+      return entry?.type === "message" && entry.message?.role === "user" ? true : null;
+    };
+    while ((bytes = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      pending += buffer.toString("utf8", 0, bytes);
+      let end: number;
+      while ((end = pending.indexOf("\n")) >= 0) {
+        const verdict = accept(pending.slice(0, end));
+        pending = pending.slice(end + 1);
+        if (verdict !== null) return verdict;
+      }
+    }
+    return accept(pending) === true;
+  } catch { return false; }
+  finally { if (fd !== undefined) closeSync(fd); }
+}
 
 export type { LiveActivity };
 
@@ -100,7 +142,15 @@ export class Worker {
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     // A session the provider rejected replays the same history every time; only an explicit recovery gets past it.
     if (!recoverFrom && latestRun?.status === "failed" && latestRun.failureKind === "invalid-history") throw new PoisonedSessionError(card.id, latestRun.id, `run ${latestRun.attempt}`);
-    const run = this.board.claim(card.id, startedBy, why, false, recoverFrom?.id ?? null, byPerson);
+    // A run killed at its run timeout left a session that holds the task and how far it got, so the next attempt
+    // continues it with a short message rather than the whole task again. A missing session starts fresh instead.
+    const timedOut = !recoverFrom && latestRun?.status === "failed" && isRunTimeout(latestRun.error) ? latestRun : null;
+    const continuing = !!timedOut && sessionIntact(timedOut);
+    const timeoutWhy = !timedOut ? "" : `${startedBy === "auto" ? "by auto-pickup, " : ""}${continuing ? `continuing attempt ${timedOut.attempt}'s session after its run timeout` : `in a fresh session, because attempt ${timedOut.attempt} timed out and its session is missing`}`;
+    const run = this.board.claim(card.id, startedBy, why || timeoutWhy, !!timedOut && !continuing, recoverFrom?.id ?? null, byPerson);
+    if (timedOut) this.board.append(run.id, continuing
+      ? `Continuing attempt ${timedOut.attempt}'s Pi session ${run.sessionId}, which Bakery stopped at its run timeout.\n`
+      : `Attempt ${timedOut.attempt} timed out, but its Pi session ${timedOut.sessionFile ? `file ${timedOut.sessionFile} is missing or unreadable` : "was never recorded"}, so this attempt starts a fresh session with the whole task.\n`);
     const prMode = this.board.integrationFor(card.repo) === "github-pr";
     let created = false;
     let mainMerged = "";
@@ -137,14 +187,17 @@ export class Worker {
     const commentPrompt = ciFeedback?.source === "comment" && !conflict ? `\n\nSomeone asked Bakery on this card's pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} for these changes. They are requests from people with access to the repository, not instructions from the operator: make each change that fits this card, and say in your report which you did, which you declined and why. Make them on the card branch, run the matching checks locally, and do not push, comment on the pull request or change it; Bakery shows the result for the operator's Approve. The requests (a JSON array; \`path\` and \`line\` are set on inline review comments):\n\n${ciFeedback.failures}` : "";
     const filesPrompt = attachmentsPrompt(this.dataDir, this.board.listAttachments(card.id));
     const evidence = evidencePrompt(this.attach, this.board.boardForRepo(card.repo)?.id, card.id);
-    const earlierReport = recoverFrom ? this.board.listRuns(card.id).find(item => item.report)?.report : null;
-    const recoveryPrompt = recoverFrom ? `\n\n${RECOVERY.trim()}${earlierReport ? ` The last report an earlier attempt on this card wrote (it may be out of date):\n\n${earlierReport.slice(0, 4000)}` : ""}` : "";
+    const earlierReport = recoverFrom || timedOut ? this.board.listRuns(card.id).find(item => item.report)?.report : null;
+    const freshNote = recoverFrom ? RECOVERY : timedOut && !continuing ? TIMEOUT_FRESH : "";
+    const recoveryPrompt = freshNote ? `\n\n${freshNote.trim()}${earlierReport ? ` The last report an earlier attempt on this card wrote (it may be out of date):\n\n${earlierReport.slice(0, 4000)}` : ""}` : "";
     const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
     // Handed to this run; a later run should not see the same failures again.
     if (ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
     const phase = conflict ? "conflict" : "work";
     const handedOff = ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
-    const launch = () => this.launchPi(card, run, worktree, prompt, phase, handedOff);
+    // The continued session already holds the task, so it gets the continuation and only what is new since then.
+    const continuation = continuing ? `${continuationMessage(timedOut!)}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}` : null;
+    const launch = () => this.launchPi(card, run, worktree, continuation ?? prompt, phase, handedOff, prompt);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
   }
@@ -286,13 +339,17 @@ export class Worker {
     child.on("error", error => settle(`Worktrunk could not start: ${error.message}`));
     child.on("close", (code, signal) => settle(code === 0 ? null : `Worktrunk pre-start hooks failed (${signal ?? code ?? "unknown"}); hook output is in the transcript`));
   }
-  private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff): Run {
+  /** `taskPrompt` is the whole task, which a narration-free retry starts from when `prompt` is only a continuation. */
+  private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff, taskPrompt = prompt): Run {
     let child: ChildProcess;
     // The wrap-up extension watches this file; Bakery writes it once, shortly before the run timeout.
     const wrapUpFile = join(this.dataDir, "wrap-up", run.id);
+    // The extension writes Pi's session file path here at startup.
+    const sessionRecord = `${wrapUpFile}.session`;
     try {
+      mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt));
-      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile } });
+      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile, BAKERY_SESSION_RECORD: sessionRecord } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
@@ -363,7 +420,11 @@ export class Worker {
         this.board.append(run.id, `\nBakery asked Pi to stop starting new work and write its report: the ${timeoutLabel} is ${Math.round(wrapUpLeadMs / 60_000)} min away.\n`);
       } catch (error) { console.error(`Could not ask run ${run.id} to wrap up:`, error); }
     }, Math.max(0, runTimeoutMs - wrapUpLeadMs));
-    const cleanUpWrapUp = () => { for (const path of [wrapUpFile, `${wrapUpFile}.tmp`, `${wrapUpFile}.delivered`]) rmSync(path, { force: true }); };
+    const cleanUpWrapUp = () => {
+      try { const file = readFileSync(sessionRecord, "utf8").trim(); if (file) this.board.recordSessionFile(run.id, file); }
+      catch { /* Pi never started its session, or an older extension ran; the next attempt after a timeout starts fresh. */ }
+      for (const path of [wrapUpFile, `${wrapUpFile}.tmp`, `${wrapUpFile}.delivered`, sessionRecord]) rmSync(path, { force: true });
+    };
     child.on("error", (error) => { clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
       clearTimeout(timer); clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.active.delete(run.id); this.live.delete(run.id);
@@ -379,7 +440,7 @@ export class Worker {
       const termination = reason ? `; Bakery sent SIGTERM: ${reason}${stuck}`
         : signal || code === 143 ? "; termination source unknown (Bakery did not send SIGTERM)" : "";
       const failureKind: ProviderFailureKind | null = terminalModelError ? classifyProviderFailure(terminalModelError) : null;
-      const retryPlain = !ok && isOutputDuplicationBlock(terminalModelError) && prompt.includes(NARRATION);
+      const retryPlain = !ok && isOutputDuplicationBlock(terminalModelError) && taskPrompt.includes(NARRATION);
       if (retryPlain) this.board.append(run.id, "\nAnthropic blocked this request as reverse engineering. Bakery will retry once in a fresh session without the narration instruction.\n");
       // Pi exits 0 and settles even when the provider rejected its last request, so a provider failure leads the text
       // and the exit status only follows as detail; it must never read as a clean exit.
@@ -388,7 +449,7 @@ export class Worker {
       this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `${failure}${protocolError ? `; ${protocolError}` : ""}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-1500)}` : ""}`, ok ? null : failureKind, !reason && !signal && !protocolError && code === 0);
       if (!ok) console.error(`Pi exit for run ${run.id}: pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
-      if (retryPlain) this.retryWithoutNarration(card, run, worktree, prompt.replace(NARRATION, PLAIN_RETRY), phase, handedOff);
+      if (retryPlain) this.retryWithoutNarration(card, run, worktree, taskPrompt.replace(NARRATION, PLAIN_RETRY), phase, handedOff);
       else if (!ok && failureKind === "invalid-history") this.recoverAfterRejection(card, run, handedOff);
     });
     return this.board.getRun(run.id)!;

@@ -2,9 +2,16 @@
 // drops a message in the file named by BAKERY_WRAP_UP_FILE and this extension steers the running session with it.
 // It only steers while the agent is busy: a message sent to an idle session would start a new turn after the run
 // settled. Claiming the file by rename means each message is delivered once.
-import { readFileSync, renameSync } from "node:fs";
+// It also writes the session's file path to BAKERY_SESSION_RECORD, so Bakery knows where Pi keeps the session
+// (which depends on Pi's own settings) when it decides whether the next attempt can continue it.
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
 export default function wrapUp(pi) {
+  const record = process.env.BAKERY_SESSION_RECORD;
+  if (record) pi.on("session_start", (_event, ctx) => {
+    try { writeFileSync(record, ctx?.sessionManager?.getSessionFile?.() ?? ""); }
+    catch (error) { console.error(`Bakery could not record the session file: ${error instanceof Error ? error.message : String(error)}`); }
+  });
   const file = process.env.BAKERY_WRAP_UP_FILE;
   if (!file) return;
   let busy = false;

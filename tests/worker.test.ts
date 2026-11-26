@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
-import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker } from "../server/worker.js";
+import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker, continuationMessage, sessionIntact } from "../server/worker.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
@@ -850,6 +850,8 @@ for (const [name, message, kind] of [
       await waitFor(() => f.board.getRun(retry.id)!.status !== "running");
       assert.equal(f.board.getRun(retry.id)!.status, "review");
       assert.equal(f.board.getRun(retry.id)!.recoveryOf, null);
+      assert.match(f.fake.calls()[1].prompt, /Add the flag/, "only a timeout gets the short continuation");
+      assert.doesNotMatch(f.fake.calls()[1].prompt, /ran out of time/);
     } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
   });
 }
@@ -1030,4 +1032,164 @@ test("the wrap-up extension steers only a busy session, once per message, so it 
     if (previous === undefined) delete process.env.BAKERY_WRAP_UP_FILE; else process.env.BAKERY_WRAP_UP_FILE = previous;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// A fake Pi that loads the real Bakery extension, keeps its session in a file the way Pi does (header line, then
+// conversation), and per call either hangs until Bakery kills it, settles cleanly, or has its history rejected.
+function timeoutFixture(script: ("hang" | "ok" | "reject")[]) {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  const repo = join(dir, "repo"), sessions = join(dir, "sessions"), fakePi = join(dir, "pi-fake"), source = join(dir, "pi-fake.mjs"), calls = join(dir, "calls.jsonl");
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  writeFileSync(source, `import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+const args = process.argv.slice(2), handlers = {};
+const session = args[args.indexOf("--session-id") + 1], prompt = args[args.length - 1];
+const file = join(${JSON.stringify(sessions)}, session + ".jsonl");
+const resumed = existsSync(file);
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ session, prompt, resumed }) + "\\n");
+const n = readFileSync(${JSON.stringify(calls)}, "utf8").split("\\n").filter(Boolean).length;
+const behaviour = ${JSON.stringify(script)}[n - 1];
+mkdirSync(${JSON.stringify(sessions)}, { recursive: true });
+if (!resumed) writeFileSync(file, JSON.stringify({ type: "session", version: 3, id: session, cwd: process.cwd() }) + "\\n");
+appendFileSync(file, JSON.stringify({ type: "message", message: { role: "user", content: prompt } }) + "\\n");
+(await import(pathToFileURL(args[args.indexOf("-e") + 1]).href)).default({ on: (name, handler) => { handlers[name] = handler; }, sendUserMessage: () => {} });
+handlers.session_start?.({ reason: "startup" }, { sessionManager: { getSessionFile: () => file } });
+const emit = event => process.stdout.write(JSON.stringify(event) + "\\n");
+if (behaviour === "hang") setInterval(() => { emit({ type: "turn_start" }); emit({ type: "turn_end" }); }, 200);
+else {
+  emit({ type: "message_end", message: behaviour === "ok" ? { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Finished." }] }
+    : { role: "assistant", stopReason: "error", errorMessage: ${rejectedHistory} } });
+  emit({ type: "agent_settled", aborted: false });
+}
+`);
+  writeFileSync(fakePi, `#!/bin/sh\nexec "${process.execPath}" "${source}" "$@"\n`);
+  chmodSync(fakePi, 0o755);
+  const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+  worker.timing = { runTimeoutMs: 1500, wrapUpLeadMs: 500 };
+  const card = board.createCard({ title: "Long work", body: "Add the flag", repo });
+  board.setStatus(card.id, "ready");
+  const settled = () => board.listRuns(card.id).every(run => run.status !== "running");
+  const called = (): { session: string; prompt: string; resumed: boolean }[] => readFileSync(calls, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
+  const timeOut = async () => {
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status !== "running", 10_000);
+    const finished = board.getRun(run.id)!;
+    assert.equal(finished.status, "failed");
+    assert.match(finished.error ?? "", /Bakery sent SIGTERM: \d+-minute run timeout/);
+    return finished;
+  };
+  return { dir, board, worker, card, settled, called, timeOut, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("the attempt after a run timeout continues the same Pi session with a continuation message, not the whole task", async () => {
+  const f = timeoutFixture(["hang", "ok"]);
+  try {
+    const first = await f.timeOut();
+    assert.equal(first.sessionFile, join(f.dir, "sessions", `${first.sessionId}.jsonl`), "Bakery keeps the session file Pi reported");
+    assert.deepEqual(readdirSync(join(f.dir, "data", "wrap-up")), [], "the session record is removed with the mailbox");
+    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    assert.equal(next.sessionId, first.sessionId);
+    await waitFor(() => f.settled());
+    assert.equal(f.board.getRun(next.id)!.status, "review");
+    const [, resumed] = f.called();
+    assert.equal(resumed.session, first.sessionId);
+    assert.equal(resumed.resumed, true);
+    assert.equal(resumed.prompt, continuationMessage(first));
+    assert.match(resumed.prompt, /^You ran out of time on the previous attempt\b.*finish the remaining work and write your report/s);
+    assert.doesNotMatch(resumed.prompt, /Add the flag|Task from Bakery card/, "the session already holds the task");
+    assert.match(f.board.getRun(next.id)!.output, /Continuing attempt 1's Pi session/);
+    assert.ok(f.board.listCardEvents(f.card.id).some(event => /Attempt 2 started continuing attempt 1's session after its run timeout/.test(event.reason)));
+  } finally { f.cleanup(); }
+});
+
+test("after a run timeout whose session file is gone, the next attempt starts a fresh session with the whole task", async () => {
+  const f = timeoutFixture(["hang", "ok"]);
+  try {
+    const first = await f.timeOut();
+    rmSync(first.sessionFile!);
+    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    assert.equal(next.sessionId, `bakery-${f.card.id}-2`);
+    await waitFor(() => f.settled());
+    assert.equal(f.board.getRun(next.id)!.status, "review");
+    const [, fresh] = f.called();
+    assert.equal(fresh.resumed, false);
+    assert.match(fresh.prompt, /Add the flag/);
+    assert.match(fresh.prompt, /ran out of time and Bakery stopped it, and its Pi session could not be found/);
+    assert.doesNotMatch(fresh.prompt, /^You ran out of time/);
+    assert.match(f.board.getRun(next.id)!.output, /starts a fresh session with the whole task/);
+  } finally { f.cleanup(); }
+});
+
+test("a continued session the provider rejects falls back to the fresh-session recovery", async () => {
+  const f = timeoutFixture(["hang", "reject", "ok"]);
+  try {
+    const first = await f.timeOut();
+    const continued = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
+    const [recovery, rejected] = f.board.listRuns(f.card.id);
+    assert.equal(rejected.id, continued.id);
+    assert.equal(rejected.failureKind, "invalid-history");
+    assert.equal(recovery.status, "review");
+    assert.equal(recovery.recoveryOf, continued.id);
+    assert.notEqual(recovery.sessionId, first.sessionId);
+    const calls = f.called();
+    assert.equal(calls[1].prompt, continuationMessage(first));
+    assert.match(calls[2].prompt, /Add the flag/);
+    assert.match(calls[2].prompt, /rejected by the model provider \(invalid message history\)/);
+  } finally { f.cleanup(); }
+});
+
+test("a run that failed some other way (a manual stop) is retried as before: same session, whole task", async () => {
+  const f = timeoutFixture(["hang", "ok"]);
+  try {
+    f.worker.timing = { runTimeoutMs: 60_000, wrapUpLeadMs: 1000 };
+    const first = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => existsSync(join(f.dir, "calls.jsonl")));
+    f.worker.stop(first.id);
+    await waitFor(() => f.settled());
+    assert.match(f.board.getRun(first.id)!.error!, /manual stop/);
+    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    assert.equal(next.sessionId, first.sessionId);
+    await waitFor(() => f.settled());
+    const [, retry] = f.called();
+    assert.match(retry.prompt, /^Task from Bakery card .*Add the flag/s);
+    assert.doesNotMatch(retry.prompt, /ran out of time/);
+  } finally { f.cleanup(); }
+});
+
+test("a timed-out session whose only user message was cut short starts fresh, since Pi would load no conversation", async () => {
+  const f = timeoutFixture(["hang", "ok"]);
+  try {
+    const first = await f.timeOut();
+    const header = JSON.stringify({ type: "session", version: 3, id: first.sessionId, cwd: f.dir });
+    const metadata = JSON.stringify({ type: "model_change", provider: "anthropic", modelId: "claude" });
+    const task = JSON.stringify({ type: "message", message: { role: "user", content: "Task from Bakery card: Add the flag" } });
+    writeFileSync(first.sessionFile!, `${header}\n${metadata}\n${task.slice(0, 30)}`);
+    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    assert.equal(next.sessionId, `bakery-${f.card.id}-2`);
+    await waitFor(() => f.settled());
+    const [, fresh] = f.called();
+    assert.match(fresh.prompt, /Add the flag/);
+    assert.doesNotMatch(fresh.prompt, /^You ran out of time/);
+    // Metadata alone after the header is no conversation either.
+    writeFileSync(first.sessionFile!, `${header}\n${metadata}\n`);
+    assert.equal(sessionIntact(first), false);
+  } finally { f.cleanup(); }
+});
+
+test("a timed-out session with its task intact and a final entry cut short by SIGTERM is still continued", async () => {
+  const f = timeoutFixture(["hang", "ok"]);
+  try {
+    const first = await f.timeOut();
+    writeFileSync(first.sessionFile!, readFileSync(first.sessionFile!, "utf8") + JSON.stringify({ type: "message", message: { role: "assistant", content: "Half a thought" } }).slice(0, 25));
+    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    assert.equal(next.sessionId, first.sessionId);
+    await waitFor(() => f.settled());
+    const [, resumed] = f.called();
+    assert.equal(resumed.prompt, continuationMessage(first));
+  } finally { f.cleanup(); }
 });

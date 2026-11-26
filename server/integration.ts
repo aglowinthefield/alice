@@ -86,8 +86,11 @@ function worktreeProblem(facts: WorktreeFacts, repo: string, worktree: string, c
   if (facts.unmerged) return "Resolve conflicts in the card worktree before review";
   return null;
 }
-/** What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies. */
-/** `work` names the reviewed run and its tree. Unlike `fingerprint`, it ignores where local main is. */
+/**
+ * What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies.
+ * `work` names the reviewed run and its tree. `git add -A` leaves out untracked files Git ignores, so build output does not
+ * change it; every tracked file counts, ignored or not. Unlike `fingerprint`, it ignores where local main is.
+ */
 export type ReviewSummary = { fingerprint: string; work: string; paths: string[]; patchChars: number | null; unsupported: boolean };
 export type ReviewDiff = { fingerprint: string; files: { path: string; patch: string }[] };
 export class IntegrationConflictError extends Error {
@@ -423,6 +426,14 @@ export class Integration {
   reviewState(card: Card): { fingerprint: string; work: string } {
     const { fingerprint, work } = this.snapshot(card, false);
     return { fingerprint, work };
+  }
+
+  /** The paths that differ between two `work` values, to say what changed. Empty when the run changed or Git cannot tell. */
+  workChanges(card: Card, before: string, after: string): string[] {
+    const [run, from] = before.split(":"), [nextRun, to] = after.split(":");
+    if (run !== nextRun || !from || !to) return [];
+    try { return gitCommand(this.location(card).worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", from, to], undefined, true).split("\0").filter(Boolean); }
+    catch { return []; }
   }
 
   /** Changed paths, and the patch size when `measureChars`, without the diff viewer's 200-file and 2 MB caps. */

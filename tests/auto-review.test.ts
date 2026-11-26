@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
@@ -340,13 +340,49 @@ test("a reviewer that changes the work is left for a person, and restarting does
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     await item.auto.tick();
-    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /Work changed during agent review/);
+    assert.equal(item.board.getAutoReviewJob(current.run.id)!.details, "Work changed during agent review: README.md");
     assert.equal(item.board.getCard(current.card.id)?.status, "review");
     const reopened = new Board(join(item.dir, "board.sqlite"));
     assert.equal(reopened.getAutoReviewJob(current.run.id)?.state, "needs_human");
     assert.equal(reopened.listAutoReviewCandidates().length, 0);
     reopened.close();
   } finally { item.close(); }
+});
+test("a reviewer that adds an untracked file Git does not ignore is left for a person", async () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.repo, ".gitignore"), "dist/\n"); git(item.repo, "add", ".gitignore");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "ignore dist");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf notes > review-notes.md\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"Looks fine"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getAutoReviewJob(current.run.id)!.details, "Work changed during agent review: review-notes.md");
+  } finally { item.close(); }
+});
+test("untracked build output Git ignores leaves the verdict standing, but a rewritten tracked file in it does not", async () => {
+  // dist/ is ignored, but the repository commits one generated file in it anyway, as some monorepos do.
+  const cases = [
+    { build: "mkdir -p dist && printf built > dist/app.js && printf '{}' > tsconfig.tsbuildinfo", details: "Build and tests pass" },
+    { build: "printf rebuilt > dist/tokens.js", details: "Work changed during agent review: dist/tokens.js" },
+  ];
+  for (const { build, details } of cases) {
+    const item = fixture();
+    try {
+      mkdirSync(join(item.repo, "dist"));
+      writeFileSync(join(item.repo, ".gitignore"), "dist/\n*.tsbuildinfo\n"); writeFileSync(join(item.repo, "dist", "tokens.js"), "old\n");
+      git(item.repo, "add", ".gitignore"); git(item.repo, "add", "-f", "dist/tokens.js");
+      git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "ignore build output");
+      writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\n${build}\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"Build and tests pass"}')}EVENTS\n`);
+      item.board.setAutoReview(item.repoBoard.id, true);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const current = item.reviewedCard();
+      await item.auto.tick();
+      assert.ok(existsSync(join(current.worktree, build.includes("app.js") ? "dist/app.js" : "dist/tokens.js")), "the fake reviewer ran its build");
+      assert.equal(item.board.getAutoReviewJob(current.run.id)?.details, details);
+    } finally { item.close(); }
+  }
 });
 test("main moving during review is not the work changing: the verdict stands", async () => {
   const item = fixture();

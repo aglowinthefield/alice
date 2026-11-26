@@ -180,7 +180,12 @@ export class AutoReview {
     // carry on with the fingerprint for the current main.
     const stillSameWork = (latest: Card, during: string) => {
       const now = this.integration.reviewState(latest);
-      if (now.work !== work) throw new Error(`Work changed during ${during}`);
+      if (now.work !== work) {
+        // Name what changed, so a reviewer's stray build output can be told apart from a real edit.
+        const paths = this.integration.workChanges(latest, work, now.work);
+        const named = paths.length ? `: ${paths.slice(0, 10).join(", ")}${paths.length > 10 ? ` and ${paths.length - 10} more` : ""}` : "";
+        throw new Error(`Work changed during ${during}${named}`);
+      }
       fingerprint = now.fingerprint;
     };
     try {

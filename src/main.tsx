@@ -39,6 +39,10 @@ import {
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  Play,
+  Palette,
+  FolderGit2,
+  Keyboard,
   Coins,
   type LucideIcon,
 } from "lucide-react";
@@ -132,6 +136,13 @@ import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
 import { UpdateNotice } from "./update-notice.js";
 import { ConfirmHost, confirmAction } from "./confirm.js";
+import {
+  CommandPalette,
+  modKey,
+  type PaletteGroup,
+  type PaletteItem,
+} from "./command-palette.js";
+import { themeNames, themes } from "./themes.js";
 import { ReadyCheckHost, checkBeforeReady } from "./ready-check.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
@@ -829,6 +840,32 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  // The palette opens over anything, inputs and dialogs included. It remembers the card tile that had focus so
+  // Move to Ready and Start act on it.
+  const [palette, setPalette] = useState<{ open: boolean; cardId?: string }>({
+    open: false,
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "k" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      )
+        return;
+      event.preventDefault();
+      const tile = (
+        document.activeElement as HTMLElement | null
+      )?.closest<HTMLElement>("[data-card-id]");
+      setPalette((current) => ({
+        open: !current.open,
+        cardId: tile?.dataset.cardId,
+      }));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const shortcutState = useRef({
     canCreate: false,
     open: (_view: RouteView) => {},
@@ -1546,14 +1583,19 @@ export function App() {
     });
   };
   // Each drop calls the same endpoint as the matching button in the card's details.
-  const moveCard = async (card: Card, to: Status, along: Card[] = []) => {
-    if (!boardId || !dropTargets(card).includes(to)) return;
-    const path = `/boards/${boardId}/cards`;
+  const moveCard = async (
+    card: Card,
+    to: Status,
+    along: Card[] = [],
+    board = boardId,
+  ) => {
+    if (!board || !dropTargets(card).includes(to)) return;
+    const path = `/boards/${board}/cards`;
     if (to === "ready" && !(await readyAfterCheck([card, ...along]))) return;
     if (to === "ready" && along.length > 0) {
       const total = along.length + 1;
       if (
-        currentBoard?.autoPickupEnabled &&
+        boards.find((item) => item.id === board)?.autoPickupEnabled &&
         settings?.confirmRunStart &&
         !(await confirmAction(
           `Move ${total} cards to Ready ("${card.title}" and the ${along.length} ${along.length === 1 ? "card" : "cards"} it waits on)? Auto pickup is on, so they may start and use paid model tokens. Cards that wait on others start after them.`,
@@ -1610,6 +1652,201 @@ export function App() {
       [boardId]: { ...previous[boardId], [lane]: !collapsed },
     }));
   };
+  // Commands for the palette. Card actions use the same moves as dragging, on the focused or open card when
+  // there is one, otherwise through a list of the cards that can make that move.
+  const paletteGroups = ((): PaletteGroup[] => {
+    if (!palette.open) return [];
+    const ownBoard = (item: Card) =>
+      view === "today"
+        ? boards.find((board) => board.repo === item.repo)?.id
+        : boardId;
+    const target =
+      scopeCards.find((item) => item.id === palette.cardId) ?? card;
+    const lane = (item: Card) =>
+      columns.find((column) => column.status === item.status)?.label ?? "";
+    const cardMove = (
+      id: string,
+      label: string,
+      icon: LucideIcon,
+      to: Status,
+      placeholder: string,
+    ): PaletteItem[] => {
+      const run = (item: Card) =>
+        void moveCard(
+          item,
+          to,
+          to === "ready" ? readyCompanions(item, scopeCards) : [],
+          ownBoard(item),
+        );
+      if (target && dropTargets(target).includes(to))
+        return [
+          { id, label, icon, detail: target.title, run: () => run(target) },
+        ];
+      const eligible = scopeCards.filter((item) =>
+        dropTargets(item).includes(to),
+      );
+      if (!eligible.length) return [];
+      return [
+        {
+          id,
+          label: `${label}…`,
+          icon,
+          page: {
+            placeholder,
+            items: eligible.map((item) => ({
+              id: `${id}-${item.id}`,
+              label: item.title,
+              detail: lane(item),
+              keywords: item.id,
+              run: () => run(item),
+            })),
+          },
+        },
+      ];
+    };
+    const goTo: PaletteItem[] = [
+      {
+        id: "go-today",
+        label: "Go to Today",
+        icon: Sun,
+        keys: ["g", "t"],
+        run: openToday,
+      },
+      ...(boardId
+        ? [
+            {
+              id: "go-board",
+              label: "Go to Board",
+              icon: Kanban,
+              keys: ["g", "b"],
+              run: () => openBoard(boardId),
+            },
+          ]
+        : []),
+      ...(boardId && currentBoard && supportsPullRequests(currentBoard)
+        ? [
+            {
+              id: "go-pulls",
+              label: "Go to Pull requests",
+              icon: GitPullRequest,
+              keys: ["g", "p"],
+              run: () => openPulls(boardId),
+            },
+          ]
+        : []),
+      {
+        id: "go-stats",
+        label: "Go to Statistics",
+        icon: BarChart3,
+        keys: ["g", "s"],
+        run: () => openPage("stats"),
+      },
+      {
+        id: "go-logs",
+        label: "Go to Logs",
+        icon: ScrollText,
+        keys: ["g", "l"],
+        run: () => openPage("logs"),
+      },
+    ];
+    const commands: PaletteItem[] = [
+      ...(boardId
+        ? [
+            {
+              id: "new-card",
+              label: "New card",
+              icon: Plus,
+              keys: ["n"],
+              run: () => {
+                if (view !== "board" && view !== "today") openBoard(boardId);
+                setCreating(true);
+              },
+            },
+          ]
+        : []),
+      ...cardMove(
+        "ready",
+        "Move to Ready",
+        ListTodo,
+        "ready",
+        "Move which card to Ready?",
+      ),
+      ...cardMove("start", "Start", Play, "running", "Start which card?"),
+      ...(boards.length > 1
+        ? [
+            {
+              id: "board",
+              label: "Switch board…",
+              icon: FolderGit2,
+              page: {
+                placeholder: "Switch to which board?",
+                items: boards.map((item) => ({
+                  id: `board-${item.id}`,
+                  label: repoName(item.repo),
+                  detail: item.repo,
+                  keywords: item.repo,
+                  current: item.id === boardId,
+                  run: () => openBoard(item.id),
+                })),
+              },
+            },
+          ]
+        : []),
+      {
+        id: "theme",
+        label: "Switch theme…",
+        icon: Palette,
+        page: {
+          placeholder: "Switch to which theme?",
+          items: themeNames.map((name) => ({
+            id: `theme-${name}`,
+            label: themes[name].label,
+            current: name === settings?.theme,
+            run: () => saveSettings({ theme: name }),
+          })),
+        },
+      },
+      {
+        id: "settings",
+        label: "Open settings",
+        icon: Settings2,
+        // The desktop app's menu has Cmd+, for this; the web app has no shortcut.
+        keys: document.documentElement.dataset.desktop
+          ? [modKey, ","]
+          : undefined,
+        run: () => openPage("settings"),
+      },
+      ...goTo,
+      {
+        id: "shortcuts",
+        label: "Show keyboard shortcuts",
+        icon: Keyboard,
+        keys: ["?"],
+        run: () => setShowShortcuts(true),
+      },
+    ];
+    const openCard = (item: Card) => {
+      if (view !== "board" && view !== "today" && boardId) openBoard(boardId);
+      setSelected(item.id);
+    };
+    return [
+      { heading: "Commands", items: commands },
+      {
+        heading: "Cards",
+        whenSearching: true,
+        items: scopeCards.map((item) => ({
+          id: `card-${item.id}`,
+          label: item.title,
+          detail:
+            view === "today"
+              ? `${lane(item)} · ${repoName(item.repo)}`
+              : lane(item),
+          keywords: item.id,
+          run: () => openCard(item),
+        })),
+      },
+    ];
+  })();
   if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
@@ -2973,6 +3210,7 @@ export function App() {
                               }}
                               onDragEnd={endDrag}
                               data-card-tile={item.status}
+                              data-card-id={item.id}
                               data-new={newCardIds.has(item.id) || undefined}
                               data-stripe={
                                 needsYourReview(item)
@@ -4043,6 +4281,11 @@ export function App() {
           for shortcuts
         </button>
       )}
+      <CommandPalette
+        open={palette.open}
+        onOpenChange={(open) => setPalette((current) => ({ ...current, open }))}
+        groups={paletteGroups}
+      />
       <Dialog open={showShortcuts} onOpenChange={setShowShortcuts}>
         <DialogContent
           className="bg-card/80 backdrop-blur-md"
@@ -4309,7 +4552,8 @@ const shortcutList: [string, string][] = [
   ["g p", "Go to Pull requests"],
   ["g s", "Go to Statistics"],
   ["g l", "Go to Logs"],
-  ["⌘ Enter", "Create or save card in the form"],
+  [`${modKey} K`, "Command palette"],
+  [`${modKey} Enter`, "Create or save card in the form"],
   ["?", "Show or hide this cheat sheet"],
 ];
 function CardForm({

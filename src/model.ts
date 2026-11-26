@@ -176,6 +176,24 @@ export const priorityTone = (value: number) =>
       : value > 0
         ? "text-amber-400"
         : "text-muted-foreground";
+/**
+ * The search behind the command palette and the TUI's /: an item matches when its label and keywords hold every
+ * word of the query. Labels that start with the first word come first; the rest keep their order.
+ */
+export const searchRank = <T extends { label: string; keywords?: string }>(
+  items: T[],
+  query: string,
+) => {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return items;
+  const found = items.filter((item) => {
+    const text = `${item.label} ${item.keywords ?? ""}`.toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+  const lead = (item: T) =>
+    item.label.toLowerCase().startsWith(terms[0]) ? 0 : 1;
+  return found.sort((a, b) => lead(a) - lead(b));
+};
 // Stable sort: equal priorities keep the server's existing order.
 export const byPriority = <T extends { priority?: number }>(items: T[]) =>
   [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));

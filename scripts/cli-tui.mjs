@@ -3,11 +3,11 @@
 // `createTui` holds the state and answers keys without touching the terminal, so tests drive it with a fake API;
 // `runTui` wires it to a raw-mode TTY.
 import { spawn } from "node:child_process";
-import { cardActivity, needsYouStatuses, needsYourReview, reviewWaitText, todaySections, waitingOn } from "../src/model.ts";
+import { cardActivity, needsYouStatuses, needsYourReview, reviewWaitText, searchRank, todaySections, waitingOn } from "../src/model.ts";
 import { Screen, clip, width, wrap } from "./cli-screen.mjs";
 import { useColor } from "./cli-style.mjs";
 
-const KEYS = { "\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down", "\x1b[C": "right", "\x1bOC": "right", "\x1b[D": "left", "\x1bOD": "left", "\r": "enter", "\n": "enter", "\t": "tab", "\x1b": "escape", "\x03": "interrupt", "\x1b[5~": "pageup", "\x1b[6~": "pagedown" };
+const KEYS = { "\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down", "\x1b[C": "right", "\x1bOC": "right", "\x1b[D": "left", "\x1bOD": "left", "\r": "enter", "\n": "enter", "\t": "tab", "\x1b": "escape", "\x03": "interrupt", "\x1b[5~": "pageup", "\x1b[6~": "pagedown", "\x7f": "backspace", "\b": "backspace" };
 export const keyName = data => KEYS[data] ?? data;
 /** One chunk of terminal input as key names: fast typing and pastes arrive several keys at a time. */
 export function keyNames(data) {
@@ -92,6 +92,7 @@ const HELP = [
   ["0", "Today: what needs you on every board"], ["1–9", "the board with that number in the sidebar"], ["b", "show or hide the sidebar"],
   ["← →  h l", "previous or next lane"], ["↑ ↓  j k", "move within a lane, or down Today"], ["g  G", "first or last card"],
   ["enter", "open the card (esc closes, tab switches to its attempts)"], ["o", "open the card in the browser"], ["A", "show or hide the Archive lane"],
+  ["/", "find a card on this board by title or id, or on every board from Today"],
   ["r  t", "move to Ready or back to Triage"], ["s", "start or run again (asks first: paid)"], ["x", "stop a running agent"],
   ["a", "approve, accept findings, or update the PR"], ["R", "recover a Failed card in a fresh session"], ["q", "quit"],
 ];
@@ -99,7 +100,7 @@ const HELP = [
 export function createTui({ api, board, today = false, size = () => ({ columns: 80, rows: 24 }), open = () => {}, webUrl = cardId => cardId, now = () => Date.now(), color = false }) {
   const state = {
     board, boards: [board], view: today ? "today" : "board", cards: [], today: [], todayAt: 0, conflicts: 0, slowAt: -Infinity, sidebar: null,
-    selected: null, all: false, mode: "board", confirm: null, message: "", error: false, details: null, tab: 0, scroll: 0,
+    selected: null, all: false, mode: "board", confirm: null, message: "", error: false, details: null, tab: 0, scroll: 0, search: null,
     laneStart: 0, laneScroll: {}, lastInLane: {}, quit: false,
   };
   const say = (message, error = false) => { state.message = message; state.error = error; };
@@ -120,7 +121,10 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
   }
   const todayCards = () => todayRows().filter(row => row.card).map(row => row.card);
   const selectedOnBoard = () => state.cards.find(card => card.id === state.selected);
-  const current = () => state.view === "today" ? todayCards()[state.todayAt] : selectedOnBoard();
+  /** The open dialog's card as of the latest refresh. */
+  const shownCard = () => [...state.cards, ...state.today].find(item => item.id === state.details.card.id) ?? state.details.card;
+  // A card found with / may be off the Today list, so the dialog's card, not the list's, is the one keys act on.
+  const current = () => state.mode === "details" ? shownCard() : state.view === "today" ? todayCards()[state.todayAt] : selectedOnBoard();
   const laneOfSelected = () => { const card = selectedOnBoard(); return card && laneOf(card, split()); };
   const filled = () => lanes().filter(lane => cardsIn(lane.id).length);
   const showSidebar = () => state.sidebar ?? size().columns >= 140;
@@ -161,8 +165,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     await refresh();
   }
 
-  async function openDetails() {
-    const card = current();
+  async function openDetails(card = current()) {
     if (!card) return;
     state.mode = "details"; state.tab = 0; state.scroll = 0; state.details = { card, runs: null };
     try { state.details.runs = await api("GET", `${pathOf(boardOf(card))}/cards/${card.id}/runs`); }
@@ -224,8 +227,34 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     select(cards.find(card => card.id === state.lastInLane[lane.id]) ?? cards[0]);
   }
 
+  /** What / finds: the board's cards, or every board's from Today, matched as the web palette matches them. */
+  const searchResults = () => {
+    const scope = state.view === "today" ? state.today : state.cards;
+    return searchRank(scope.map(card => ({ label: card.title, keywords: card.id, card })), state.search.query).map(item => item.card);
+  };
+  /** Opens a found card, and moves the board's selection to it so esc lands there. */
+  function openFound(card) {
+    if (state.view === "board") {
+      if (card.status === "archived") state.all = true;
+      select(card);
+    } else if (todayCards().some(item => item.id === card.id)) state.todayAt = todayCards().findIndex(item => item.id === card.id);
+    state.search = null;
+    return openDetails(card);
+  }
+  function searchKey(name) {
+    const search = state.search;
+    if (name === "escape") { state.search = null; state.mode = "board"; return; }
+    if (name === "enter") { const card = search.query.trim() && searchResults()[search.at]; return card ? openFound(card) : undefined; }
+    if (name === "down" || name === "up") { search.at = Math.max(0, Math.min(searchResults().length - 1, search.at + (name === "down" ? 1 : -1))); return; }
+    if (name === "backspace") search.query = [...search.query].slice(0, -1).join("");
+    else if ([...name].length === 1 && name >= " ") search.query += name;
+    else return;
+    search.at = 0;
+  }
+
   async function key(name) {
     if (name === "interrupt") { state.quit = true; return; }
+    if (state.mode === "search") return searchKey(name);
     if (state.confirm) {
       const { run } = state.confirm;
       state.confirm = null;
@@ -263,6 +292,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     if (name === "left" || name === "h") return jumpLane(-1);
     if (name === "enter") return openDetails();
     if (name === "?") { state.mode = "help"; return; }
+    if (name === "/") { state.mode = "search"; state.search = { query: "", at: 0 }; return; }
     if (name === "A") {
       state.all = !state.all;
       if (!state.all && selectedOnBoard()?.status === "archived") select(cardsIn(filled()[0]?.id)[0]);
@@ -495,9 +525,36 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     return lines;
   }
 
+  /** The / dialog: the query, then a row per matching card with its lane, and its board on Today. */
+  function drawSearch(screen, columns, bottom) {
+    screen.dim();
+    const w = Math.min(90, columns - 2), h = bottom - 1, x = Math.floor((columns - w) / 2), y = 1, inner = w - 6, { query } = state.search;
+    screen.clear(x, y, w, h);
+    screen.box(x, y, w, h, DIM);
+    const end = screen.parts(x + 3, y + 1, [["/ ", ACCENT], [clip(query, inner - 4), "1"]]);
+    screen.put(end, y + 1, "▏", ACCENT);
+    const top = y + 3, room = Math.max(1, y + h - 1 - top);
+    if (!query.trim()) { screen.put(x + 3, top, `Type to find a card ${state.view === "today" ? "on any board" : "on this board"} by its title or id.`, DIM); return; }
+    const results = searchResults();
+    if (!results.length) { screen.put(x + 3, top, "No cards match.", DIM); return; }
+    const count = `${results.length} card${results.length === 1 ? "" : "s"}`;
+    screen.put(x + w - 3 - width(count), y + 1, count, DIM);
+    state.search.at = Math.min(state.search.at, results.length - 1);
+    const off = Math.max(0, Math.min(state.search.at - Math.floor(room / 2), results.length - room));
+    results.slice(off, off + room).forEach((card, i) => {
+      const row = top + i, selected = off + i === state.search.at, home = boardOf(card);
+      const lane = LANES.find(item => item.id === laneOf(card, isPullRequestBoard(home))) ?? LANES[0];
+      const detail = state.view === "today" ? `${lane.label} · ${nameOf(home)}` : lane.label;
+      const where = clip(detail, 30);
+      if (selected) screen.put(x + 1, row, "▸", ACCENT);
+      screen.parts(x + 3, row, [glyph(card, lane), [` ${clip(card.title, inner - width(where) - 4)}`, selected ? "1" : ""]]);
+      screen.put(x + w - 3 - width(where), row, where, DIM);
+    });
+  }
+
   function drawDetails(screen, columns, bottom) {
     screen.dim();
-    const known = [...state.cards, ...state.today], card = known.find(item => item.id === state.details.card.id) ?? state.details.card;
+    const known = [...state.cards, ...state.today], card = shownCard();
     const w = Math.min(104, columns - 2), h = bottom - 1, x = Math.floor((columns - w) / 2), y = 1, inner = w - 6;
     screen.clear(x, y, w, h);
     screen.box(x, y, w, h, DIM);
@@ -525,10 +582,14 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     screen.clear(0, rows - 1 - lines.length, columns, lines.length);
     lines.forEach((line, i) => screen.put(1, rows - 1 - lines.length + i, line, style));
     if (state.mode === "help") return;
+    if (state.mode === "search") {
+      screen.parts(1, rows - 1, [["↑ ↓", "1"], [" results   ", DIM], ["⏎", "1"], [" open   ", DIM], ["esc", "1"], [" close", DIM]]);
+      return;
+    }
     const card = current(), actions = card ? cardActions(card, boardOf(card)).map(item => [item.key, item.label]) : [];
     const keys = state.mode === "details" ? [["esc", "close"], ["tab", "attempts"], ["j k", "scroll"], ...actions, ["o", "browser"]]
-      : state.view === "today" ? [["↑ ↓", "cards"], ["⏎", "open"], ...actions, ["0", "board"], ["1–9", "boards"], ["?", "keys"], ["q", "quit"]]
-      : [["← →", "lanes"], ["↑ ↓", "cards"], ["⏎", "open"], ...actions, ["0", "today"], ["1–9", "boards"], ["?", "keys"], ["q", "quit"]];
+      : state.view === "today" ? [["↑ ↓", "cards"], ["⏎", "open"], ...actions, ["/", "find"], ["0", "board"], ["1–9", "boards"], ["?", "keys"], ["q", "quit"]]
+      : [["← →", "lanes"], ["↑ ↓", "cards"], ["⏎", "open"], ...actions, ["/", "find"], ["0", "today"], ["1–9", "boards"], ["?", "keys"], ["q", "quit"]];
     let x = 1;
     for (const [name, label] of keys) {
       if (x + width(name) + width(label) + 1 > columns) break;
@@ -550,6 +611,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
       if (state.view === "today") drawToday(screen, left, columns, bottom);
       else drawBoard(screen, left, columns, bottom);
       if (state.mode === "details") drawDetails(screen, columns, bottom);
+      if (state.mode === "search") drawSearch(screen, columns, bottom);
     }
     footer(screen, columns, rows);
     return screen.lines(color);

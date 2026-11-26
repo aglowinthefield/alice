@@ -156,7 +156,9 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.equal(keyed.stdout, "new-card\ttriage\tpriority:normal\tScripted\n");
     assert.match((await f.run("cards", "--key", "nightly-1")).stderr, /only valid with create/);
     assert.match((await f.run("create", "--title", "Long", "--key", "k".repeat(201))).stderr, /1 to 200/);
-    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely" }, { status: "triage" }, { title: "Hotfix", body: "", priority: "urgent" }, { title: "Scripted", body: "", idempotencyKey: "nightly-1" }]);
+    assert.equal((await f.run("create", "--title", "From Hermes", "--source", "hermes")).code, 0);
+    assert.match((await f.run("cards", "--source", "hermes")).stderr, /only valid with create or add/);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely", source: "cli" }, { status: "triage" }, { title: "Hotfix", body: "", source: "cli", priority: "urgent" }, { title: "Scripted", body: "", source: "cli", idempotencyKey: "nightly-1" }, { title: "From Hermes", body: "", source: "hermes" }]);
   } finally { await f.close(); }
 });
 
@@ -197,9 +199,9 @@ test("add captures a Triage card on the board for the current directory", async 
     const chosen = await f.runIn(elsewhere, "add", "Chosen", "--board", alpha);
     assert.equal(chosen.code, 0, chosen.stderr);
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => [r.path, r.input]), [
-      ["/api/boards/board-one/cards", { title: "Fix the flaky test", body: "", priority: "high" }],
-      ["/api/boards/board-two/cards", { title: "Beta idea", body: "" }],
-      ["/api/boards/board-one/cards", { title: "Chosen", body: "" }],
+      ["/api/boards/board-one/cards", { title: "Fix the flaky test", body: "", source: "cli", priority: "high" }],
+      ["/api/boards/board-two/cards", { title: "Beta idea", body: "", source: "cli" }],
+      ["/api/boards/board-one/cards", { title: "Chosen", body: "", source: "cli" }],
     ]);
   } finally { await f.close(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -473,7 +475,7 @@ test("create --after and depend/undepend manage card dependencies through the HT
   try {
     const created = await f.run("create", "--title", "Follow-up", "--after", "card-one", "--after", "card-done");
     assert.equal(created.code, 0, created.stderr);
-    assert.deepEqual(f.requests.at(-1), { method: "POST", path: `/api/boards/${board.id}/cards`, input: { title: "Follow-up", body: "", dependsOn: ["card-one", "card-done"] } });
+    assert.deepEqual(f.requests.at(-1), { method: "POST", path: `/api/boards/${board.id}/cards`, input: { title: "Follow-up", body: "", source: "cli", dependsOn: ["card-one", "card-done"] } });
     assert.match(created.stdout, /after:card-one,card-done/);
     const depended = await f.run("depend", "card-one", "--on", "card-done");
     assert.equal(depended.code, 0, depended.stderr);

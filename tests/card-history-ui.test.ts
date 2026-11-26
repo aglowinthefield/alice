@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-test("Details has a collapsed History that lists state changes with reasons, newest first", async () => {
+test("Details shows where the card came from and has a collapsed History that lists state changes with reasons, newest first", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    const card = { id: "card", title: "Backfill", body: "", repo: "/tmp/repo", source: "manual", status: "review", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 2, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false };
+    const card = { id: "card", title: "Backfill", body: "", repo: "/tmp/repo", source: "hermes", status: "review", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 2, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false };
     const history = [
       { at: "2026-01-01T10:00:00.000Z", from: null, to: null, text: "Card created" },
       { at: "2026-01-01T10:05:00.000Z", from: "running", to: "review", text: "Attempt 1 finished; waiting for review" },
@@ -41,6 +41,7 @@ test("Details has a collapsed History that lists state changes with reasons, new
     await page.getByRole("tab", { name: "Details" }).click();
     const section = page.getByTestId("card-history");
     await section.waitFor();
+    assert.equal((await page.getByTestId("card-source").textContent())?.trim(), "Sourcehermes");
     assert.equal(await section.evaluate(element => (element as HTMLDetailsElement).open), false, "collapsed by default");
     await section.getByText("History (4)").click();
     const items = await section.locator("li").allTextContents();

@@ -4,7 +4,7 @@ import { buildStats, parseTime, type StatsInput } from "../server/stats.js";
 
 const now = Date.parse("2026-03-10T12:00:00.000Z");
 const run = (over: Partial<StatsInput["runs"][number]>): StatsInput["runs"][number] => ({
-  repo: "/code/alpha", cardId: "c1", status: "review", startedBy: "manual", agent: "pi · sonnet", ciFix: 0,
+  repo: "/code/alpha", id: "r", cardId: "c1", attempt: 1, kind: "first", timedOut: 0, status: "review", startedBy: "manual", agent: "pi · sonnet", ciFix: 0,
   startedAt: "2026-03-10T10:00:00.000Z", finishedAt: "2026-03-10T10:10:00.000Z",
   cost: 1, inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5, cacheTasks: 0, cacheHits: 0, cacheSavedMs: 0, ...over,
 });
@@ -16,10 +16,10 @@ const input: StatsInput = {
     run({ startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:05:00.000Z", cost: 10 }),
     run({ status: "running", cost: 99 }),
   ],
-  reviews: [{ repo: "/code/alpha", state: "merged", agent: "pi", startedAt: "2026-03-10T11:00:00.000Z", finishedAt: null, cost: 0.25 }],
+  reviews: [{ repo: "/code/alpha", cardId: "c1", sendBack: null, state: "merged", agent: "pi", startedAt: "2026-03-10T11:00:00.000Z", finishedAt: null, cost: 0.25 }],
   cards: [
-    { repo: "/code/alpha", status: "done", createdAt: "2026-03-09T12:00:00.000Z", updatedAt: "2026-03-10T00:00:00.000Z", attempts: 2, reviewRounds: 1, ciReworks: 2 },
-    { repo: "/code/beta", status: "triage", createdAt: "2026-03-10T01:00:00.000Z", updatedAt: "2026-03-10T01:00:00.000Z", attempts: 0, reviewRounds: 0, ciReworks: 0 },
+    { repo: "/code/alpha", id: "c1", title: "Alpha", status: "done", createdAt: "2026-03-09T12:00:00.000Z", updatedAt: "2026-03-10T00:00:00.000Z", attempts: 2, reviewRounds: 1, ciReworks: 2 },
+    { repo: "/code/beta", id: "c2", title: "Beta", status: "triage", createdAt: "2026-03-10T01:00:00.000Z", updatedAt: "2026-03-10T01:00:00.000Z", attempts: 0, reviewRounds: 0, ciReworks: 0 },
   ],
   closes: [
     { repo: "/code/alpha", at: "2026-03-10T09:00:00.000Z", reason: "duplicate" },

@@ -1088,10 +1088,30 @@ export class Board {
   }
   /** Every run, agent review and card, for the Statistics page to aggregate; see server/stats.ts. */
   statsInput(): StatsInput {
+    type Row = Omit<StatsInput["runs"][number], "kind"> & { recoveryOf: string | null };
+    // A run killed at the run timeout records "Alice sent SIGTERM: N-minute run timeout" in its error (see server/worker.ts); runs from before the rename say "Bakery".
+    const rows = this.db.prepare(`SELECT cards.repo AS repo, runs.id, runs.cardId, runs.attempt, runs.recoveryOf, CASE WHEN runs.error LIKE '%sent SIGTERM: %-minute run timeout%' THEN 1 ELSE 0 END AS timedOut, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens, runs.cacheTasks, runs.cacheHits, runs.cacheSavedMs FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL AND ${notSentinelJob}`).all() as Row[];
+    // Rework classification, as on the card's Attempts tab: start reasons from card history plus the operator's requested changes.
+    const events = new Map<string, { toStatus: string | null; reason: string }[]>();
+    for (const event of this.db.prepare("SELECT cardId, toStatus, reason FROM card_events WHERE toStatus='running' AND reason LIKE 'Attempt %'").all() as { cardId: string; toStatus: string; reason: string }[])
+      events.set(event.cardId, [...(events.get(event.cardId) ?? []), event]);
+    const requested = new Set((this.db.prepare("SELECT DISTINCT runId FROM review_comments WHERE state='requested'").all() as { runId: string }[]).map(row => row.runId));
+    const byCard = new Map<string, Row[]>();
+    for (const row of rows) byCard.set(row.cardId, [...(byCard.get(row.cardId) ?? []), row]);
+    const kinds = new Map<string, RunKind>();
+    for (const [cardId, runs] of byCard) for (const [id, kind] of classifyRuns(runs, events.get(cardId) ?? [], requested)) kinds.set(id, kind);
+    const sentBack = "Sent back to the implementer: ";
+    const reviews = (this.db.prepare(`SELECT cards.repo AS repo, job.cardId, job.details, job.changes, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId WHERE ${notSentinelJob}`).all() as (Omit<StatsInput["reviews"][number], "sendBack"> & { details: string; changes: string })[])
+      .map(({ details, changes, ...review }) => {
+        if (!details.startsWith(sentBack)) return { ...review, sendBack: null };
+        let comments = "";
+        try { comments = (JSON.parse(changes || "[]") as { comment?: string }[]).map(change => change.comment ?? "").join("\n"); } catch { comments = changes; }
+        return { ...review, sendBack: `${details.slice(sentBack.length)}\n${comments}`.trim() };
+      });
     return {
-      runs: this.db.prepare(`SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens, runs.cacheTasks, runs.cacheHits, runs.cacheSavedMs FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["runs"],
-      reviews: this.db.prepare(`SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId WHERE ${notSentinelJob}`).all() as StatsInput["reviews"],
-      cards: this.db.prepare(`SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards WHERE ${notSentinelJob})`).all() as StatsInput["cards"],
+      runs: rows.map(row => ({ ...row, kind: kinds.get(row.id) ?? "first" })),
+      reviews,
+      cards: this.db.prepare(`SELECT repo, id, title, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards WHERE ${notSentinelJob})`).all() as StatsInput["cards"],
       closes: this.db.prepare(`SELECT cards.repo AS repo, e.at, e.closeReason AS reason FROM card_events e JOIN cards ON cards.id=e.cardId WHERE e.closeReason IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["closes"],
     };
   }

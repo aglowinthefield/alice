@@ -236,6 +236,32 @@ export type Stats = {
   cardStatus: { status: string; count: number }[];
   /** Closes without merging in range, by reason ('' = not given), most common first, a skipped reason last among ties. A card closed twice counts twice. */
   closeReasons: { reason: string; count: number }[];
+  /** Newest week first; within a week, the busiest board first. */
+  churn: ChurnRow[];
+};
+export type SendBackReason = "verification" | "visual" | "writeup" | "code";
+export type ChurnCard = {
+  id: string;
+  title: string;
+  runs: number;
+  attempts: number;
+  cost: number;
+};
+/** One board's week (Monday, UTC). `cost` is run plus agent review spend; `reworkCost` is runs after the first attempt. */
+export type ChurnRow = {
+  repo: string;
+  week: string;
+  runs: number;
+  cards: number;
+  runsPerCard: number | null;
+  cost: number;
+  reworkCost: number;
+  reworkShare: number | null;
+  reworkByKind: Partial<Record<RunKind, number>>;
+  sendBacks: number;
+  sendBackReasons: Record<SendBackReason, number>;
+  timeouts: number;
+  topCards: ChurnCard[];
 };
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

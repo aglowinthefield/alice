@@ -320,6 +320,7 @@ flowchart LR
 - Bakery only considers runs that reach Review after you enable it.
 - Failed reviews aren't retried.
 - The reviewer reads the repository's `AGENTS.md`, `CLAUDE.md` and review instructions and runs the checks they ask for itself, instead of sending the card back for missing proof. Checks only a person can do, such as device runs, screenshots or staging access, leave the card for you.
+- When it hands a card to you, or approves work a person should still try, the reviewer can list up to 8 checks only a person can do. They show as checkboxes under **Checks for you** on the card's Overview and Reviews tabs. Ticks are saved on that attempt, so a new attempt starts with a fresh list. `bakery-cli show` prints them with `[x]` for ticked.
 - Turning the setting off stops a review in progress from opening a PR.
 - The reviewer is a full Pi agent in the card's worktree, with the same tools, extensions, skills, and context files as a card run. It can read code and run builds or tests, and runs locally with your permissions. It's told not to change anything; if the work changes during review, the card is left for you.
 
@@ -360,7 +361,7 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
 - `cards` on a terminal prints the board's lanes with the web board's badges (failure reason, Your turn, quiet, retries, PR). Archive and all but the 5 newest Done cards need `--all`; `--watch` redraws every 2 seconds. Piped, it prints one tab-separated line per card: ID, status, priority, attempt count, review rounds, and title.
 - `tui` is the board driven by keys: arrows or `j`/`k` move, `h`/`l` jump lanes, enter shows a card's latest attempt, `o` opens it in the browser and `?` lists every key. `s` starts or reruns, `x` stops, `a` approves, accepts findings or updates an open PR, `R` recovers, and `r`/`t` move between Ready and Triage. Paid runs, merges and stops ask for `y` first. Opening a new pull request needs its drafted title and body, so the TUI sends that to the browser.
-- `show` prints a card's title, status, repository, description, each attempt's status, agent and error, the latest auto-review verdict, and the cards it depends on and that depend on it, each with its status.
+- `show` prints a card's title, status, repository, description, each attempt's status, agent and error, the latest auto-review verdict and its checks for you, and the cards it depends on and that depend on it, each with its status.
 - `create --after CARD_ID` makes the new card depend on that card. Repeat it for several. `depend` and `undepend` add or remove one dependency on an existing card. See [Dependencies](#dependencies).
 - `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.
 - `archive` follows the same rules as the UI: it accepts only Done cards, and if any card isn't Done, nothing is archived. `restore` moves one archived card back to Done.

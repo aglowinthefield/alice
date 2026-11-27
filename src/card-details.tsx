@@ -302,6 +302,47 @@ export function CardDetails({
     };
   }, [boardId, cardId, busy, pushing]);
   const side = settings?.cardDetailsLayout === "side";
+  /** The agent review of the latest attempt, whose checks a person ticks before deciding. */
+  const latestJob = autoJobs.find((job) => job.runId === runs[0]?.id);
+  const replaceJob = (job: AutoReviewJob) =>
+    setAutoJobs((jobs) =>
+      jobs.map((item) => (item.runId === job.runId ? job : item)),
+    );
+  /** Shows the tick at once and keeps it on the run; a failed save puts the box back. */
+  const tickHumanCheck = async (
+    job: AutoReviewJob,
+    index: number,
+    ticked: boolean,
+  ) => {
+    const current = new Set<number>(
+      job.humanChecksTicked ? JSON.parse(job.humanChecksTicked) : [],
+    );
+    if (ticked) current.add(index);
+    else current.delete(index);
+    replaceJob({
+      ...job,
+      humanChecksTicked: current.size
+        ? JSON.stringify([...current].sort((a, b) => a - b))
+        : "",
+    });
+    setError("");
+    try {
+      replaceJob(
+        await api<AutoReviewJob>(
+          `/boards/${boardId}/cards/${cardId}/human-checks`,
+          {
+            method: "POST",
+            body: JSON.stringify({ runId: job.runId, index, ticked }),
+          },
+        ),
+      );
+    } catch (err) {
+      replaceJob(job);
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      onError(message);
+    }
+  };
   const action = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
@@ -668,6 +709,19 @@ export function CardDetails({
                       </p>
                     </section>
                   )}
+                {card?.status === "review" &&
+                  latestJob &&
+                  latestJob.state !== "running" &&
+                  humanChecks(latestJob).length > 0 && (
+                    <section className="mt-6 rounded-md border border-border px-4 py-3 text-sm">
+                      <HumanChecks
+                        job={latestJob}
+                        onToggle={(index, ticked) =>
+                          void tickHumanCheck(latestJob, index, ticked)
+                        }
+                      />
+                    </section>
+                  )}
                 {card?.status === "running" &&
                   runs[0]?.status === "running" && (
                     <LiveStatus run={runs[0]} turns={card.turns} />
@@ -898,7 +952,18 @@ export function CardDetails({
               </>
             )}
             {tab === "reviews" && reviewEntries.length > 0 && (
-              <ReviewHistory entries={reviewEntries} />
+              <ReviewHistory
+                entries={reviewEntries}
+                onTick={
+                  card?.status === "review" &&
+                  latestJob &&
+                  latestJob.state !== "running"
+                    ? (index, ticked) =>
+                        void tickHumanCheck(latestJob, index, ticked)
+                    : undefined
+                }
+                tickRunId={latestJob?.runId}
+              />
             )}
             {tab === "attempts" &&
               (runs.length > 0 ? (
@@ -1999,6 +2064,68 @@ function RunReport({
   );
 }
 
+/** The checks the agent reviewer left for a person on this run, with whether each is ticked. */
+function humanChecks(
+  job: AutoReviewJob | undefined,
+): { text: string; ticked: boolean }[] {
+  try {
+    const ticked = new Set<number>(
+      job?.humanChecksTicked ? JSON.parse(job.humanChecksTicked) : [],
+    );
+    const checks: string[] = job?.humanChecks
+      ? JSON.parse(job.humanChecks)
+      : [];
+    return checks.map((text, index) => ({ text, ticked: ticked.has(index) }));
+  } catch {
+    return [];
+  }
+}
+
+/** The reviewer's checklist for a person. Without `onToggle` it only shows what was ticked. */
+function HumanChecks({
+  job,
+  onToggle,
+}: {
+  job: AutoReviewJob;
+  onToggle?: (index: number, ticked: boolean) => void;
+}) {
+  const checks = humanChecks(job);
+  if (!checks.length) return null;
+  const done = checks.filter((check) => check.ticked).length;
+  return (
+    <div aria-label="Checks for you" role="group">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="font-semibold">Checks for you</span>
+        <span className="tabular-nums text-muted-foreground">
+          {done} of {checks.length} done
+        </span>
+      </div>
+      <ul className="mt-1 space-y-1">
+        {checks.map((check, index) => (
+          <li key={index}>
+            <label className="flex items-start gap-2 leading-6">
+              <input
+                type="checkbox"
+                className="mt-1.5 size-3.5 shrink-0 accent-primary"
+                checked={check.ticked}
+                disabled={!onToggle}
+                onChange={(event) => onToggle?.(index, event.target.checked)}
+              />
+              <span
+                className={
+                  check.ticked ? "text-muted-foreground" : "text-foreground/80"
+                }
+              >
+                {check.text}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** Each attempt's agent review and the changes a person requested, newest attempt first. */
 function requestedChanges(
   job: AutoReviewJob,
@@ -2012,12 +2139,17 @@ function requestedChanges(
 
 function ReviewHistory({
   entries,
+  onTick,
+  tickRunId,
 }: {
   entries: {
     attempt: number;
     job?: AutoReviewJob;
     requested: ReviewComment[];
   }[];
+  /** Ticks a check on the run awaiting a decision; older runs' checklists only show what was ticked. */
+  onTick?: (index: number, ticked: boolean) => void;
+  tickRunId?: string;
 }) {
   if (!entries.length)
     return (
@@ -2056,6 +2188,14 @@ function ReviewHistory({
                 <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
                   {job.details}
                 </p>
+              )}
+              {humanChecks(job).length > 0 && (
+                <div className="mt-2">
+                  <HumanChecks
+                    job={job}
+                    onToggle={job.runId === tickRunId ? onTick : undefined}
+                  />
+                </div>
               )}
             </div>
           )}

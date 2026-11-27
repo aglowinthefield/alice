@@ -318,3 +318,102 @@ test("the side panel switches cards without leaking the previous card's review o
     await page.getByRole("dialog").waitFor({ state: "hidden" });
   } finally { await page.close(); }
 });
+
+test("the reviewer's checks for a person show as checkboxes whose ticks persist on the run", async () => {
+  const page = await browser.newPage();
+  const job = { cardId: "card", runId: "run", state: "needs_human", details: "Agent requested human review: screens need a look", fingerprint: "", startedAt: "2026-01-01", finishedAt: "2026-01-01",
+    agent: "", interruptions: 0, requeued: 0, changes: "", humanChecks: JSON.stringify(["Open the card in dark mode", "Open the card in light mode"]), humanChecksTicked: "" };
+  const older = { ...job, runId: "old", humanChecks: JSON.stringify(["Check the old build"]), humanChecksTicked: "" };
+  const ticks: unknown[] = [];
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/human-checks")) {
+      const tick = route.request().postDataJSON() as { runId: string; index: number; ticked: boolean };
+      ticks.push(tick);
+      const ticked = new Set<number>(job.humanChecksTicked ? JSON.parse(job.humanChecksTicked) : []);
+      if (tick.ticked) ticked.add(tick.index); else ticked.delete(tick.index);
+      job.humanChecksTicked = ticked.size ? JSON.stringify([...ticked].sort()) : "";
+      await route.fulfill({ json: job });
+      return;
+    }
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card/runs": [
+        { id: "run", attempt: 2, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-02", finishedAt: "2026-01-02", startedBy: "manual" },
+        { id: "old", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" },
+      ],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
+      "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/history": [],
+      "/api/boards/board/cards/card/comments": [],
+      "/api/boards/board/cards/card/auto-review": [job, older],
+      "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
+    };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
+    assert.ok(path in data, `Unexpected API request: ${path}`);
+    await route.fulfill({ json: data[path] });
+  });
+  try {
+    await page.goto(new URL("/board/board", url).href);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    const checks = page.getByRole("group", { name: "Checks for you" });
+    const dark = checks.getByRole("checkbox", { name: "Open the card in dark mode" });
+    const light = checks.getByRole("checkbox", { name: "Open the card in light mode" });
+    await dark.waitFor();
+    assert.equal(await dark.isChecked(), false);
+    assert.equal(await dark.isEnabled(), true);
+    await checks.getByText("0 of 2 done").waitFor();
+    await light.check();
+    await checks.getByText("1 of 2 done").waitFor();
+    assert.deepEqual(ticks, [{ runId: "run", index: 1, ticked: true }]);
+    // A reload reads the ticks back from the run.
+    await page.reload();
+    await page.getByRole("group", { name: "Checks for you" }).getByRole("checkbox", { name: "Open the card in light mode" }).waitFor();
+    assert.equal(await page.getByRole("checkbox", { name: "Open the card in light mode" }).first().isChecked(), true);
+    // The Reviews tab, where Approve also sits, can tick the latest run's checks; an older attempt's list only shows.
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
+    const history = page.getByRole("checkbox", { name: "Open the card in light mode" });
+    await history.waitFor();
+    assert.equal(await history.isChecked(), true);
+    await history.uncheck();
+    await page.getByText("0 of 2 done").waitFor();
+    assert.deepEqual(ticks.at(-1), { runId: "run", index: 1, ticked: false });
+    assert.equal(await page.getByRole("checkbox", { name: "Check the old build" }).isDisabled(), true);
+  } finally { await page.close(); }
+});
+
+test("a review without checks shows no checklist", async () => {
+  const page = await browser.newPage();
+  await page.route("**/api/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
+      "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/history": [],
+      "/api/boards/board/cards/card/comments": [],
+      // A job from before the field existed has no humanChecks at all.
+      "/api/boards/board/cards/card/auto-review": [{ cardId: "card", runId: "run", state: "needs_human", details: "Agent requested human review: look", fingerprint: "", startedAt: "2026-01-01", finishedAt: "2026-01-01", changes: "" }],
+      "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
+    };
+    if (path === "/api/status") { await route.fulfill({ json: { draining: false, activeRuns: 0 } }); return; }
+    assert.ok(path in data, `Unexpected API request: ${path}`);
+    await route.fulfill({ json: data[path] });
+  });
+  try {
+    await page.goto(new URL("/board/board", url).href);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
+    await page.getByText("Agent review: needs you").waitFor();
+    assert.equal(await page.getByRole("group", { name: "Checks for you" }).count(), 0);
+  } finally { await page.close(); }
+});

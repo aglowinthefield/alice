@@ -87,6 +87,10 @@ export type AutoReviewJob = {
   requeued: number;
   /** JSON list of `{ path, line?, comment }` the agent reviewer sent the card back with; empty when none. */
   changes: string;
+  /** JSON list of checks only a person can do, left by an approving or handing-off reviewer; empty when none. */
+  humanChecks?: string;
+  /** JSON list of the indexes into `humanChecks` a person has ticked for this run; empty when none. */
+  humanChecksTicked?: string;
 } & UsageFields;
 export type BakerySettings = {
   confirmRunStart: boolean;

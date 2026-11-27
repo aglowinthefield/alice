@@ -11,7 +11,10 @@ import { atReviewCapacity, loopGuards, needsPatchSize, reviewDiffRefusal } from 
 // context files. It is told not to change anything, and the fingerprint checks after review fail closed if it does.
 
 export type RequestedChange = { path: string; line?: number; comment: string };
-export type ReviewerVerdict = { verdict: "approve" | "needs_human" | "request_changes"; reason: string; changes?: RequestedChange[] };
+export type ReviewerVerdict = { verdict: "approve" | "needs_human" | "request_changes"; reason: string; changes?: RequestedChange[]; humanChecks?: string[] };
+/** A hand-off lists at most this many checks only a person can do, each shorter than `maxHumanCheckLength`. */
+export const maxHumanChecks = 8;
+export const maxHumanCheckLength = 200;
 /** A card goes back to its implementer at most this many times; after that a person decides. */
 export const maxReviewerSendBacks = loopGuards.reviewerSendBacks;
 
@@ -42,7 +45,7 @@ Look for correctness regressions, security issues, missing tests, and changes un
 
 Verification is yours to do. When the card or the repository asks for a check you can run here (a test suite, a typecheck, a verify script, a database test), run it and judge the result. Never send the work back only because the implementer did not report running it. When a check needs something only a person can provide (a phone, emulator or browser session by hand, screenshots, staging or production access, a product decision), first look for it among the files attached to the card: a screenshot that shows what the card asks for is evidence, so open it and judge it. Only when no attachment covers the check, or the images do not settle it, answer needs_human and name the check; do not send it back. Write-ups that belong in a pull request body, such as parity tables or checklists, are not a reason to send the work back; mention them in your reason.
 
-Your final message must be exactly one JSON object, no markdown or other text: {"verdict":"approve"|"needs_human"|"request_changes","reason":"short specific explanation"}. Use request_changes for a concrete problem in the code that the implementing agent can fix without a human decision (a bug, a failing check, a missing test, an unrelated change to drop); then the object must also carry "changes":[{"path":"file path","line":optional line number in the new file,"comment":"the exact change to make"}], at most 10 items, and Bakery sends the card back to the implementer. Use needs_human for doubts that need a person, such as product direction, risk you cannot judge, or a check only a person can run.
+Your final message must be exactly one JSON object, no markdown or other text: {"verdict":"approve"|"needs_human"|"request_changes","reason":"short specific explanation"}. Use request_changes for a concrete problem in the code that the implementing agent can fix without a human decision (a bug, a failing check, a missing test, an unrelated change to drop); then the object must also carry "changes":[{"path":"file path","line":optional line number in the new file,"comment":"the exact change to make"}], at most 10 items, and Bakery sends the card back to the implementer. Use needs_human for doubts that need a person, such as product direction, risk you cannot judge, or a check only a person can run. With needs_human or approve, add "humanChecks":["one concrete check",…] when a person still has to verify something you could not, such as "Open the card dialog on an iPhone in dark mode and confirm the checklist is readable"; at most ${maxHumanChecks} items, each under ${maxHumanCheckLength} characters, each a single check the person can tick off. Leave it out when there is nothing only a person can check.
 
 Card title: ${card.title}
 Card body: ${card.body.slice(0, 8000)}${report}${files}
@@ -92,10 +95,17 @@ export function reviewerVerdict(stream: string): ReviewerVerdict {
   const fields = answer as Record<string, unknown>;
   const invalid = () => new Error(`Agent review verdict is invalid or ambiguous: ${JSON.stringify(text.trim().slice(0, 300))}`);
   const sendsBack = fields.verdict === "request_changes";
-  if (Object.keys(fields).sort().join(",") !== (sendsBack ? "changes,reason,verdict" : "reason,verdict") ||
+  const keys = Object.keys(fields).filter(key => sendsBack || key !== "humanChecks").sort().join(",");
+  if (keys !== (sendsBack ? "changes,reason,verdict" : "reason,verdict") ||
     (fields.verdict !== "approve" && fields.verdict !== "needs_human" && !sendsBack) ||
     typeof fields.reason !== "string" || !fields.reason.trim() || fields.reason.length > 2000) throw invalid();
-  if (!sendsBack) return { verdict: fields.verdict as "approve" | "needs_human", reason: fields.reason };
+  if (!sendsBack) {
+    const checks = fields.humanChecks;
+    if (checks !== undefined && (!Array.isArray(checks) || checks.length > maxHumanChecks ||
+      checks.some(check => typeof check !== "string" || !check.trim() || check.trim().length >= maxHumanCheckLength))) throw invalid();
+    const humanChecks = (checks as string[] | undefined)?.map(check => check.trim()) ?? [];
+    return { verdict: fields.verdict as "approve" | "needs_human", reason: fields.reason, ...(humanChecks.length ? { humanChecks } : {}) };
+  }
   const list = fields.changes;
   if (!Array.isArray(list) || !list.length || list.length > 10) throw invalid();
   const changes = list.map((item): RequestedChange => {
@@ -206,11 +216,17 @@ export class AutoReview {
         }
         return;
       }
-      if (verdict.verdict !== "approve") throw new Error(`Agent requested ${verdict.verdict === "request_changes" ? "changes" : "human review"}: ${verdict.reason}${verdict.changes ? ` ${JSON.stringify(verdict.changes)}` : ""}`);
+      if (verdict.verdict === "request_changes") throw new Error(`Agent requested changes: ${verdict.reason} ${JSON.stringify(verdict.changes)}`);
+      const checks = { humanChecks: verdict.humanChecks };
+      if (verdict.verdict === "needs_human") {
+        this.board.finishAutoReview(run.id, "needs_human", `Agent requested human review: ${verdict.reason}`, fingerprint, undefined, checks);
+        console.error(`Auto-review left card ${card.id} for a human: ${verdict.reason}`);
+        return;
+      }
       // Nothing merges into local main without a person: on a local board, and on a pull-request board where Bakery
       // cannot push, the agent's approval is advice and the card waits in Review for Approve.
       if (!pullRequests || !this.openPullRequest) {
-        this.board.finishAutoReview(run.id, "approved", verdict.reason, fingerprint);
+        this.board.finishAutoReview(run.id, "approved", verdict.reason, fingerprint, undefined, checks);
         return;
       }
       const current = this.board.getBoard(repoBoard.id);
@@ -220,10 +236,10 @@ export class AutoReview {
       this.board.setAutoReviewProgress(run.id, "Agent approved; pushing the branch and opening the pull request…");
       const opened = await this.openPullRequest(latest, fingerprint);
       if (opened.prState === "OPEN" && opened.prPushedRunId === run.id && opened.prUrl) {
-        this.board.finishAutoReview(run.id, "pull_request", `${verdict.reason}\n\nOpened ${opened.prUrl}`, fingerprint);
+        this.board.finishAutoReview(run.id, "pull_request", `${verdict.reason}\n\nOpened ${opened.prUrl}`, fingerprint, undefined, checks);
         console.log(`Auto-review opened ${opened.prUrl} for card ${card.id} in ${card.repo}`);
       } else {
-        this.board.finishAutoReview(run.id, "needs_human", `Agent approved, but the push did not reach a pull request (the pre-push hook may have sent it back to the implementer): ${verdict.reason}`, fingerprint);
+        this.board.finishAutoReview(run.id, "needs_human", `Agent approved, but the push did not reach a pull request (the pre-push hook may have sent it back to the implementer): ${verdict.reason}`, fingerprint, undefined, checks);
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : "Unknown auto-review failure";

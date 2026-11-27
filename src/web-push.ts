@@ -35,7 +35,7 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 export async function enablePush(): Promise<void> {
   if ((await Notification.requestPermission()) !== "granted")
     throw new Error(
-      "Notification permission was not granted. Allow notifications for Bakery in your browser.",
+      "Notification permission was not granted. Allow notifications for Alice in your browser.",
     );
   const { publicKey } = await api<{ publicKey: string }>("/push/key");
   const registration = await navigator.serviceWorker.register("/sw.js");

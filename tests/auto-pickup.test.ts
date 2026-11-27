@@ -13,7 +13,7 @@ import { AutoReview, sendBackReason } from "../server/auto-review.js";
 import { runningWork } from "../server/running.js";
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-pickup-")), repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "fake-pi");
+  const dir = mkdtempSync(join(tmpdir(), "alice-pickup-")), repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "fake-pi");
   mkdirSync(repo); execFileSync("git", ["init", "-q", "-b", "main", repo]);
   writeFileSync(join(repo, "README.md"), "fixture\n");
   execFileSync("git", ["-C", repo, "add", "."]);
@@ -420,7 +420,7 @@ test("a reviewer send-back at the run limit is queued and starts with the reques
     assert.ok(item.board.listCardEvents(sent.id).some(event => event.reason === `Attempt 2 started ${sendBackReason}`));
     await waitFor(() => item.board.getRun(second.id)?.status === "review");
     const prompts = readFileSync(join(item.dir, "prompts"), "utf8");
-    assert.match(prompts.slice(prompts.lastIndexOf(`Task from Bakery card ${sent.id}`)), /agent reviewer.*Cover the empty case/);
+    assert.match(prompts.slice(prompts.lastIndexOf(`Task from Alice card ${sent.id}`)), /agent reviewer.*Cover the empty case/);
   } finally { await item.close(); }
 });
 
@@ -467,8 +467,8 @@ test("sentinel jobs live outside auto-pickup: never picked, never limited, never
     item.board.setAutoPickup(item.repoBoard.id, true, 1);
     item.pickup.tick();
     assert.equal(item.board.listRuns(fix.id).length + item.board.listRuns(request.id).length, 0, "the sentinel starts its own jobs");
-    item.worker.start(fix, "manual", "by Bakery's sentinel");
-    item.worker.start(request, "manual", "by Bakery's sentinel");
+    item.worker.start(fix, "manual", "by Alice's sentinel");
+    item.worker.start(request, "manual", "by Alice's sentinel");
     const plain = item.card("Plain");
     item.pickup.tick();
     assert.equal(item.board.listRuns(plain.id)[0]?.status, "running", "two running jobs take no slot at the 1-run limit");

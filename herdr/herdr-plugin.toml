@@ -1,23 +1,23 @@
-id = "bakery"
-name = "Bakery"
+id = "alice"
+name = "Alice"
 version = "0.1.0"
 min_herdr_version = "0.9.5"
-description = "What Bakery is running on every board, in a narrow pane beside your work"
-# pane.sh is POSIX sh; toggle.mjs needs Node, as bakery-cli does.
+description = "What Alice is running on every board, in a narrow pane beside your work"
+# pane.sh is POSIX sh; toggle.mjs needs Node, as alice does.
 platforms = ["linux", "macos"]
 
 # Herdr has no sidebar placement, so the view opens as a split and this action
 # opens or closes it. Bind it to a key, or run it from the command bar.
 [[actions]]
 id = "toggle"
-title = "Toggle Bakery"
-description = "Show or hide what Bakery is running on every board"
+title = "Toggle Alice"
+description = "Show or hide what Alice is running on every board"
 contexts = ["global"]
 command = ["./toggle.mjs"]
 
 [[panes]]
 id = "running"
-title = "Bakery"
+title = "Alice"
 description = "Runs, agent reviews and PR drafts going now, and the cards waiting for you"
 placement = "split"
 command = ["./pane.sh"]

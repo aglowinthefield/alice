@@ -33,7 +33,7 @@ if (args.startsWith("plugin pane open")) {
 `;
 
 test("the Herdr toggle closes only the view its own session opened, though sessions share a state directory", { skip: process.platform === "win32" && "the plugin runs on Linux and macOS" }, () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-herdr-")), fake = join(dir, "herdr"), states = join(dir, "state");
+  const dir = mkdtempSync(join(tmpdir(), "alice-herdr-")), fake = join(dir, "herdr"), states = join(dir, "state");
   writeFileSync(fake, fakeHerdr);
   chmodSync(fake, 0o755);
   try {

@@ -5,7 +5,7 @@ import { loopGuards } from "./repo-limits.js";
 
 /**
  * How the repository's hooks went on the card's work when its run reached Review. "passed" names the commit whose
- * pre-push hook passed; Approve pushes exactly that commit without running the hook again. "unchecked" means Bakery
+ * pre-push hook passed; Approve pushes exactly that commit without running the hook again. "unchecked" means Alice
  * could not tell (no network, origin's branch moved), so Approve runs the hooks as before. A "failed" check names the
  * `hook` that refused: "commit" (pre-commit or commit-msg, nothing was committed) or "push". `sentBack` is set when
  * the refusal went back to the agent from here.
@@ -17,7 +17,7 @@ type Job = { runId: string; abort: AbortController; progress: ReadinessProgress;
 /** A draft from its request until its promise settles: when its agent started (null while it waits for a slot) and its latest step. */
 type DraftState = { cardId: string; since: number | null; step: string };
 
-/** Hook failures in a row sent back to the agent from Review before Bakery leaves the next one for a person. */
+/** Hook failures in a row sent back to the agent from Review before Alice leaves the next one for a person. */
 const maxHookSendBacks = loopGuards.hookSendBacks;
 /** Drafts written at once, so a restart with many cards in Review does not start dozens of Pi processes. */
 const draftConcurrency = 2;
@@ -152,8 +152,8 @@ export class Readiness {
       const message = error instanceof Error ? error.message : String(error);
       if (!(error instanceof PushHookError) && !(error instanceof CommitHookError)) {
         result = { state: "unchecked", candidate: null, detail: message };
-        // Only a failed commit is news: a worktree Bakery cannot inspect says so on Approve anyway.
-        if (/^diff failed|uncommitted changes after/.test(message)) this.board.noteCard(cardId, `Bakery could not get this card's commit ready to push at Review, so Approve runs the hooks itself: ${message.slice(0, 1500)}`);
+        // Only a failed commit is news: a worktree Alice cannot inspect says so on Approve anyway.
+        if (/^diff failed|uncommitted changes after/.test(message)) this.board.noteCard(cardId, `Alice could not get this card's commit ready to push at Review, so Approve runs the hooks itself: ${message.slice(0, 1500)}`);
       } else {
         const hook = error instanceof PushHookError ? "push" : "commit";
         const name = hook === "push" ? "The pre-push hook" : "The repository's commit hook";
@@ -161,7 +161,7 @@ export class Readiness {
         this.step(job, hook === "push" ? "The pre-push hook refused the commit" : "A commit hook refused the card's work, so nothing was committed");
         const streak = this.sendBackStreak(cardId, run.id);
         if (streak >= maxHookSendBacks) {
-          this.board.noteCard(cardId, `${name} refused this attempt at Review too. Bakery already sent it back ${streak} times in a row, so a person decides now; Approve shows the output.`);
+          this.board.noteCard(cardId, `${name} refused this attempt at Review too. Alice already sent it back ${streak} times in a row, so a person decides now; Approve shows the output.`);
         } else {
           result.sentBack = true;
           this.save(run, { hooks: result });
@@ -169,7 +169,7 @@ export class Readiness {
           try {
             if (!this.deps.sendBack(card, error)) this.board.noteCard(cardId, `${name} refused this attempt at Review. Its output goes to the agent once a run can start.`);
           } catch (sendError) {
-            this.board.noteCard(cardId, `${name} refused this attempt at Review, and Bakery could not send it back to the agent: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
+            this.board.noteCard(cardId, `${name} refused this attempt at Review, and Alice could not send it back to the agent: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
           }
           return;
         }

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { acquireLock } from "../server/lock.js";
 
 function withDir(fn: (lock: string) => void) {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-lock-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-lock-"));
   try { fn(join(dir, "server.lock")); } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -22,7 +22,7 @@ test("a lock from a dead PID is taken over and logged", () => withDir(lock => {
   const logs: string[] = [];
   closeSync(acquireLock(lock, message => logs.push(message)));
   assert.equal(readFileSync(lock, "utf8"), `${process.pid}\n`);
-  assert.match(logs[0] ?? "", new RegExp(`stale Bakery lock .* PID ${dead}`));
+  assert.match(logs[0] ?? "", new RegExp(`stale Alice lock .* PID ${dead}`));
 }));
 
 test("a lock held by a live PID or without a PID still refuses", () => withDir(lock => {

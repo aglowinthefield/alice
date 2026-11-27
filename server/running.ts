@@ -16,7 +16,7 @@ export type RunningSources = {
 };
 
 /**
- * What Bakery does on every visible board without the operator, for `bakery-cli running`. Going now: runs, reviewer
+ * What Alice does on every visible board without the operator, for `alice running`. Going now: runs, reviewer
  * agents, PR drafts, and automatic PR openings (`pr`, one row per card, showing its draft's step while it drafts).
  * Queued: hook fixes waiting for a run slot, PR drafts waiting for a drafting slot, and cards waiting to have their PR
  * opened automatically. `tool` is the agent's latest tool call or a draft's latest step, "" before the first.

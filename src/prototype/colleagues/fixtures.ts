@@ -1,4 +1,4 @@
-// Fictional fixture data for the colleagues prototype. Nothing here comes from or goes to Bakery, Pi, or Impression.
+// Fictional fixture data for the colleagues prototype. Nothing here comes from or goes to Alice, Pi, or Impression.
 
 export interface Project {
   id: string;
@@ -48,7 +48,7 @@ export interface Memory {
 
 export const projects: Project[] = [
   { id: "silk", name: "Silk", newCards: "ready", autoPickup: true },
-  { id: "bakery", name: "Bakery", newCards: "triage", autoPickup: false },
+  { id: "alice", name: "Alice", newCards: "triage", autoPickup: false },
   { id: "coda", name: "Coda", newCards: "ready", autoPickup: false },
 ];
 
@@ -126,7 +126,7 @@ export const colleagues: Colleague[] = [
     summary: "Recovery, interrupted work, and safe handoffs.",
     instructions: "Look for partial writes and unsafe retries.",
     model: "fixture-large · thinking high",
-    projects: ["bakery", "coda"],
+    projects: ["alice", "coda"],
     replies: [
       {
         keywords: ["queue", "stop", "restart"],
@@ -173,10 +173,10 @@ export const memories: Memory[] = [
   },
   {
     id: "imp_9a0f33",
-    title: "Bakery runs use one worktree per card",
+    title: "Alice runs use one worktree per card",
     content: "Card implementation happens in a dedicated worktree, not a room.",
     scope: "project",
-    project: "bakery",
+    project: "alice",
     source: "docs/reference.md, 2026-10-02",
   },
 ];

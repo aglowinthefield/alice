@@ -1,5 +1,5 @@
 /**
- * Optional Bakery features, chosen when Bakery is built and started. Each is off unless its switch is set to 1.
+ * Optional Alice features, chosen when Alice is built and started. Each is off unless its switch is set to 1.
  * The server reads the switches from its environment at startup (server/index.ts), and vite.config.ts bakes the same
  * reading into the UI when it builds or dev-serves it (src/build-features.ts). Build the UI and start the server with
  * the same switches. Turning a feature off hides and refuses it but keeps its stored data, so turning it back on
@@ -9,8 +9,8 @@ export type Feature = "sentinels" | "pullRequests";
 export type Features = Record<Feature, boolean>;
 
 export const featureSwitches: Record<Feature, string> = {
-  sentinels: "BAKERY_FEATURE_SENTINELS",
-  pullRequests: "BAKERY_FEATURE_PULL_REQUESTS",
+  sentinels: "ALICE_FEATURE_SENTINELS",
+  pullRequests: "ALICE_FEATURE_PULL_REQUESTS",
 };
 const featureNames: Record<Feature, string> = {
   sentinels: "Sentinels are",
@@ -34,5 +34,5 @@ export function readFeatures(
 
 /** Why a feature's screen or action is unavailable, and how to get it back. */
 export function featureOffMessage(feature: Feature): string {
-  return `${featureNames[feature]} turned off in this Bakery build. Build and start Bakery with ${featureSwitches[feature]}=1 to use them.`;
+  return `${featureNames[feature]} turned off in this Alice build. Build and start Alice with ${featureSwitches[feature]}=1 to use them.`;
 }

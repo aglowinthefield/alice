@@ -5,10 +5,10 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
-const cli = fileURLToPath(new URL("../scripts/bakery-cli.mjs", import.meta.url));
-const board = { id: "board-one", repo: "/tmp/bakery-project", limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
+const cli = fileURLToPath(new URL("../scripts/alice.mjs", import.meta.url));
+const board = { id: "board-one", repo: resolve("/tmp/alice-project"), limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 const cards = [
   { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 50, attempts: 3, reviewRounds: 2 },
@@ -39,7 +39,7 @@ const allCards = [
   { id: "card-draft2", title: "Draft later", repo: board.repo, status: "review", reviewWait: "agent_review", reviewQueue: null, updatedAt: "2026-01-01" },
   // Its start is already queued, so it does not ask anything of you; it counts as a queued run instead.
   { id: "card-retry", title: "Retry queued", repo: board.repo, status: "failed", startQueued: true, updatedAt: "2026-01-01" },
-  // Review cards Bakery is still handling are not your turn yet; one whose automatic open failed is.
+  // Review cards Alice is still handling are not your turn yet; one whose automatic open failed is.
   { id: "card-hookfix", title: "Hook fix", repo: board.repo, status: "review", reviewAction: "pr_ready", updatedAt: "2026-01-01" },
   { id: "card-pr-open", title: "Open me", repo: boardTwo.repo, status: "review", reviewAction: "pr_ready", updatedAt: "2026-01-01" },
   { id: "card-pr-wait", title: "Open me later", repo: boardTwo.repo, status: "review", reviewAction: "pr_ready", updatedAt: "2026-01-01" },
@@ -90,6 +90,7 @@ async function fixture(boards: object[] = [board]) {
     else if (path === `/api/boards/${board.id}/cards/purge-attachments` && req.method === "POST") data = (input as { cardIds: string[] }).cardIds.map(cardId => ({ cardId, files: 2, bytes: 10 }));
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|flagged)\/status$/.test(path) && req.method === "POST") data = { id: path.split("/")[5], status: (input as { status: string }).status };
+    else if (path === `/api/boards/${board.id}/cards/card-one/close` && req.method === "POST") data = { ...cards[0], status: "done" };
     // card-one stands in for an older server without the check, which answers 404.
     else if (path === `/api/boards/${board.id}/cards/card-flagged/ready-check`) data = { flags: [
       { rule: "person-only", message: "Needs a physical device, which the agent does not have", quote: "Verify on a physical iPhone." },
@@ -125,7 +126,7 @@ async function fixture(boards: object[] = [board]) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
   const runAt = async (url: string, cwd: string | undefined, ...args: string[]) => {
-    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BAKERY_URL: url, FORCE_COLOR: "", NO_COLOR: "" } });
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, ALICE_URL: url, FORCE_COLOR: "", NO_COLOR: "" } });
     let stdout = "", stderr = "";
     for await (const chunk of child.stdout) stdout += chunk;
     for await (const chunk of child.stderr) stderr += chunk;
@@ -146,19 +147,19 @@ test("lists sentinels and pauses and resumes one", async () => {
   } finally { await f.close(); }
 });
 
-test("BAKERY_URL without a scheme falls back to HTTP when HTTPS does not answer", async () => {
+test("ALICE_URL without a scheme falls back to HTTP when HTTPS does not answer", async () => {
   const f = await fixture();
   try {
     const result = await f.runAt(`127.0.0.1:${f.port}`, undefined, "boards");
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /bakery-project/);
+    assert.match(result.stdout, /alice-project/);
   } finally { await f.close(); }
 });
 
 test("lists boards, cards, runs and conflicts through the HTTP API", async () => {
   const f = await fixture();
   try {
-    assert.match((await f.run("boards")).stdout, /bakery-project/);
+    assert.match((await f.run("boards")).stdout, /alice-project/);
     assert.match((await f.run("cards")).stdout, /card-one\ttriage\tpriority:high\tattempts:3\treview-rounds:2\tMake an improvement/);
     const runs = JSON.parse((await f.run("runs", "card-one", "--json")).stdout);
     assert.equal(runs.cardId, "card-one");
@@ -206,6 +207,25 @@ test("card creation and status changes go through the API; Ready needs consent w
   } finally { await f.close(); }
 });
 
+test("close sends an optional reason and note", async () => {
+  const f = await fixture();
+  try {
+    for (const args of [["close", "card-one", "--reason", "duplicate"], ["close", "card-one", "--reason", "Wrong approach", "--note", "Use the queue instead"], ["close", "card-one"]]) {
+      const result = await f.run(...args);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /^card-one\tdone\t/);
+    }
+    assert.match((await f.run("close", "card-one", "--note", "why")).stderr, /--note needs --reason/);
+    const blank = await f.run("close", "card-one", "--reason", "   ", "--note", "why");
+    assert.notEqual(blank.code, 0);
+    assert.match(blank.stderr, /--reason cannot be empty/);
+    assert.match((await f.run("show", "card-one", "--reason", "duplicate")).stderr, /only valid with close/);
+    assert.match((await f.run("help", "close")).stdout, /duplicate, wrong-approach, not-needed, superseded or other/);
+    const closes = f.requests.filter(r => r.path.endsWith("/close"));
+    assert.deepEqual(closes.map(r => r.input), [{ reason: "duplicate" }, { reason: "wrong-approach", note: "Use the queue instead" }, {}]);
+  } finally { await f.close(); }
+});
+
 test("ready lists a Triage card's flags and moves it only with --yes", async () => {
   const f = await fixture([{ ...board, autoPickupEnabled: false }]);
   try {
@@ -214,7 +234,7 @@ test("ready lists a Triage card's flags and moves it only with --yes", async () 
     assert.match(flagged.stderr, /may need another pass/);
     assert.match(flagged.stderr, /Needs a physical device.*"Verify on a physical iPhone\."/);
     assert.match(flagged.stderr, /No acceptance criteria/);
-    assert.match(flagged.stderr, /bakery-cli edit card-flagged .*--yes to move it to Ready anyway/s);
+    assert.match(flagged.stderr, /alice edit card-flagged .*--yes to move it to Ready anyway/s);
     assert.equal(f.requests.filter(r => r.method === "POST").length, 0, "a flagged card stays in Triage");
     const anyway = await f.run("ready", "card-flagged", "--yes");
     assert.equal(anyway.code, 0, anyway.stderr);
@@ -227,7 +247,7 @@ test("ready lists a Triage card's flags and moves it only with --yes", async () 
 });
 
 test("add captures a Triage card on the board for the current directory", async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "bakery-cli-add-")));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "alice-add-")));
   const alpha = join(root, "alpha"), beta = join(root, "beta"), elsewhere = join(root, "elsewhere");
   for (const dir of [join(alpha, "src"), beta, elsewhere]) mkdirSync(dir, { recursive: true });
   const f = await fixture([{ ...board, repo: alpha }, { ...board, id: "board-two", repo: beta }]);
@@ -268,7 +288,7 @@ test("pickup enable needs consent; disable and concurrency changes use settings 
 
 test("open prints and opens the board or a card by its short ID, through $BROWSER", async () => {
   const f = await fixture();
-  const dir = mkdtempSync(join(tmpdir(), "bakery-open-")), log = join(dir, "opened.txt"), browser = join(dir, "browser");
+  const dir = mkdtempSync(join(tmpdir(), "alice-open-")), log = join(dir, "opened.txt"), browser = join(dir, "browser");
   writeFileSync(browser, `#!/bin/sh\nprintf '%s\\n' "$1" >> '${log}'\n`); chmodSync(browser, 0o755);
   const saved = process.env.BROWSER;
   process.env.BROWSER = browser;
@@ -284,8 +304,9 @@ test("open prints and opens the board or a card by its short ID, through $BROWSE
     const printed = await f.run("open", "card-one", "--print");
     assert.match(printed.stdout, /\/board\/board-one\/card\/card-one\n$/);
     assert.notEqual((await f.run("cards", "--print")).code, 0, "--print only goes with open");
-    // The browser runs detached; wait for both opens to land.
-    for (let i = 0; i < 50 && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    // The browser runs detached; wait for both opens to land. On Windows each goes through node and sh, which can take
+    // a while; the deadline only keeps a browser that never runs from hanging the test.
+    for (const deadline = Date.now() + 30_000; Date.now() < deadline && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2);) await new Promise(resolve => setTimeout(resolve, 20));
     assert.deepEqual(readFileSync(log, "utf8").trim().split("\n").map(url => new URL(url).pathname), ["/board/board-one", "/board/board-one/card/card-one"]);
   } finally {
     if (saved === undefined) delete process.env.BROWSER; else process.env.BROWSER = saved;
@@ -313,7 +334,7 @@ test("limits shows the spend limits and turns them on or off for one board", asy
   try {
     const shown = await f.run("limits");
     assert.equal(shown.code, 0, shown.stderr);
-    assert.match(shown.stdout, /^Limits on: 6 starts per 24h; no budget; .*loop guards always apply\.\nAll boards: 3 of 4 agents running \(bakery-cli agents\)\.\n$/);
+    assert.match(shown.stdout, /^Limits on: 6 starts per 24h; no budget; .*loop guards always apply\.\nAll boards: 3 of 4 agents running \(alice agents\)\.\n$/);
     const off = await f.run("limits", "off");
     assert.equal(off.code, 0, off.stderr);
     assert.match(off.stdout, /^Limits off \(stored, not applied\)/);
@@ -377,7 +398,7 @@ test("a daily pickup limit of 0 means no limit in output and settings", async ()
 });
 
 test("ambiguous boards require a selector and bad card ids fail before mutation", async () => {
-  const f = await fixture([board, { ...board, id: "board-two", repo: "/tmp/another-project" }]);
+  const f = await fixture([board, { ...board, id: "board-two", repo: resolve("/tmp/another-project") }]);
   try {
     assert.match((await f.run("cards")).stderr, /More than one board/);
     assert.match((await f.run("cards", "--board", board.repo)).stdout, /card-one/);
@@ -398,7 +419,7 @@ test("start needs consent, starts each card independently, and reports refusals"
     const started = await f.run("start", "card-one", "card-three", "card-two", "--yes");
     assert.equal(started.code, 1);
     assert.match(started.stdout, /card-one\tattempt #2\trunning/);
-    assert.match(started.stdout, /card-three\terror\tBakery 400: Move this card to Ready/);
+    assert.match(started.stdout, /card-three\terror\tAlice 400: Move this card to Ready/);
     assert.match(started.stdout, /card-two\tattempt #2\trunning/);
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.path), ["card-one", "card-three", "card-two"].map(id => `/api/boards/${board.id}/cards/${id}/start`));
   } finally { await f.close(); }
@@ -423,7 +444,7 @@ test("show prints the card, its attempts and the latest auto-review verdict", as
     assert.equal(shown.code, 0, shown.stderr);
     assert.match(shown.stdout, /^Make an improvement$/m);
     assert.match(shown.stdout, /^status\ttriage$/m);
-    assert.match(shown.stdout, /^repo\t\/tmp\/bakery-project$/m);
+    assert.equal(shown.stdout.split("\n").includes(`repo\t${board.repo}`), true);
     assert.match(shown.stdout, /^Line one\nLine two$/m);
     assert.match(shown.stdout, /^#2\treview\tpi\/claude$/m);
     assert.match(shown.stdout, /^depends on\tcard-done\tdone\tFinished\ndepends on\tcard-ready\tready\tNot yet\ndependent\tcard-later\ttriage\tFollow-up$/m);
@@ -499,7 +520,7 @@ test("purge-attachments needs --yes and reports what each card lost", async () =
 });
 
 test("stats prints per-lane counts and pickup state for the selected board", async () => {
-  const f = await fixture([{ ...board, cardCounts: { triage: 2, review: 1, done: 4 } }, { ...board, id: "board-two", repo: "/tmp/another-project", cardCounts: { ready: 9 } }]);
+  const f = await fixture([{ ...board, cardCounts: { triage: 2, review: 1, done: 4 } }, { ...board, id: "board-two", repo: resolve("/tmp/another-project"), cardCounts: { ready: 9 } }]);
   try {
     assert.match((await f.run("stats")).stderr, /More than one board/);
     const stats = await f.run("stats", "--board", board.id);
@@ -542,12 +563,12 @@ test("create --after and depend/undepend manage card dependencies through the HT
 });
 
 test("doctor reports PASS, WARN and FAIL per check and exits 1 on a failure", async () => {
-  const f = await fixture([{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]);
+  const f = await fixture([{ ...board, repo: "/nonexistent/alice-doctor", autoPickupError: "" }]);
   try {
     const result = await f.run("doctor");
     assert.equal(result.code, 1, "a board whose repository is missing fails the run");
     assert.match(result.stdout, /^PASS\tserver\thttp:\/\/127\.0\.0\.1:\d+ \(local, 1 board\)/m);
-    assert.match(result.stdout, /^FAIL\tboard \/nonexistent\/bakery-doctor\trepository path does not exist/m);
+    assert.match(result.stdout, /^FAIL\tboard \/nonexistent\/alice-doctor\trepository path does not exist/m);
     // pi, gh and Worktrunk may be missing on the machine running the tests, so count the failures instead of fixing them at 1.
     const failed = result.stdout.split("\n").filter(line => line.startsWith("FAIL\t")).length;
     assert.match(result.stdout, new RegExp(`\\d+ passed, \\d+ warnings, ${failed} failed$`, "m"));
@@ -569,12 +590,12 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
       return;
     }
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/nonexistent/bakery-doctor", autoPickupError: "" }]));
+    res.end(JSON.stringify(req.url === "/api/status" ? { version: "9.8.7", commit: "abc1234" } : [{ ...board, repo: "/nonexistent/alice-doctor", autoPickupError: "" }]));
   });
   await new Promise<void>(resolve => stub.listen(0, "127.0.0.1", resolve));
   try {
     const port = (stub.address() as { port: number }).port;
-    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://127.0.0.1:${port}` } });
+    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, ALICE_URL: `http://127.0.0.1:${port}` } });
     let stdout = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
     const code = await new Promise<number | null>(resolve => child.once("close", resolve));
@@ -586,22 +607,22 @@ test("doctor exits promptly with its own status when the telemetry route stalls"
   } finally { for (const res of stalled) res.destroy(); await new Promise<void>(resolve => stub.close(() => resolve())); }
 });
 
-test("doctor ends with INFO rows for the CLI's BAKERY_* variables and the server's settings, hiding secrets", async () => {
+test("doctor ends with INFO rows for the CLI's ALICE_* variables and the server's settings, hiding secrets", async () => {
   const { doctor, report } = await import(new URL("../scripts/doctor.mjs", import.meta.url).href);
   const checks = await doctor({
-    env: { BAKERY_URL: "mochi", BAKERY_DISCORD_WEBHOOK_URL: "https://discord.example/hook/secret", PATH: "/usr/bin" },
+    env: { ALICE_URL: "mochi", ALICE_DISCORD_WEBHOOK_URL: "https://discord.example/hook/secret", PATH: "/usr/bin" },
     origin: new URL("http://mochi:4317"), local: false,
     fetchBoards: async () => [],
     fetchStatus: async () => ({ version: "1.2.3", hostname: "mochi", activeRuns: 2, draining: true, features: { sentinels: false, pullRequests: true } }),
     fetchSettings: async () => ({ agentModels: { work: { model: "claude", thinking: "high" }, review: { model: "", thinking: "" } }, telemetryAvailable: true, telemetryEnabled: false, discordWebhookUrl: "https://discord.example/hook/secret" }),
-    cliPath: "/opt/bakery/scripts/bakery-cli.mjs",
+    cliPath: "/opt/alice/scripts/alice.mjs",
   });
   const lines = report(checks);
   const info = lines.filter((line: string) => line.startsWith("INFO\t"));
   assert.deepEqual(info, [
-    "INFO\tcli path\t/opt/bakery/scripts/bakery-cli.mjs",
-    "INFO\tenv BAKERY_DISCORD_WEBHOOK_URL\tset (hidden)",
-    "INFO\tenv BAKERY_URL\tmochi",
+    "INFO\tcli path\t/opt/alice/scripts/alice.mjs",
+    "INFO\tenv ALICE_DISCORD_WEBHOOK_URL\tset (hidden)",
+    "INFO\tenv ALICE_URL\tmochi",
     "INFO\tserver host\tmochi",
     "INFO\tserver features\tsentinels off, pullRequests on",
     "INFO\tserver runs\t2 active, draining for an update",
@@ -614,26 +635,27 @@ test("doctor ends with INFO rows for the CLI's BAKERY_* variables and the server
   assert.ok(!(await doctor({ env: {}, origin: new URL("http://127.0.0.1:1"), local: false, fetchBoards: async () => { throw new Error("down"); } })).some((check: { name: string }) => check.name.startsWith("server ")), "no server rows when it is unreachable");
 });
 
-test("doctor fails the server check when Bakery is not running", async t => {
+test("doctor fails the server check when Alice is not running", async t => {
   // An unreadable PATH directory makes a missing binary fail with EACCES, not ENOENT; it must still read as not found.
-  const locked = mkdtempSync(join(tmpdir(), "bakery-locked-path-"));
+  const locked = mkdtempSync(join(tmpdir(), "alice-locked-path-"));
   chmodSync(locked, 0o000);
   t.after(() => { chmodSync(locked, 0o700); rmSync(locked, { recursive: true, force: true }); });
-  const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, PATH: `${locked}${delimiter}${process.env.PATH}`, BAKERY_URL: "http://127.0.0.1:1", BAKERY_PI_BIN: "bakery-no-such-pi" } });
+  const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, PATH: `${locked}${delimiter}${process.env.PATH}`, ALICE_URL: "http://127.0.0.1:1", ALICE_PI_BIN: "alice-no-such-pi" } });
   let stdout = "";
   for await (const chunk of child.stdout) stdout += chunk;
   const code = await new Promise<number | null>(resolve => child.once("close", resolve));
   assert.equal(code, 1);
-  assert.match(stdout, /^FAIL\tserver\tCannot reach Bakery/m);
-  assert.match(stdout, /^FAIL\tpi\tbakery-no-such-pi not found/m);
+  assert.match(stdout, /^FAIL\tserver\tCannot reach Alice/m);
+  assert.match(stdout, /^FAIL\tpi\talice-no-such-pi not found/m);
 });
 
 test("board-add posts the repository path to the HTTP API", async () => {
   const f = await fixture();
   try {
+    const repo = resolve("/tmp/new-repo");
     const out = JSON.parse((await f.run("board-add", "/tmp/new-repo", "--json")).stdout);
-    assert.deepEqual(out, { id: "board-new", repo: "/tmp/new-repo" });
-    assert.deepEqual(f.requests.find(item => item.method === "POST" && item.path === "/api/boards")?.input, { repo: "/tmp/new-repo" });
+    assert.deepEqual(out, { id: "board-new", repo });
+    assert.deepEqual(f.requests.find(item => item.method === "POST" && item.path === "/api/boards")?.input, { repo });
   } finally { await f.close(); }
 });
 
@@ -642,17 +664,17 @@ test("--version prints the CLI's package.json version and Git commit", async () 
   const f = await fixture();
   try {
     const out = (await f.run("--version")).stdout.trim();
-    assert.match(out, new RegExp(`^bakery-cli ${pkg.version.replace(/\./g, "\\.")}( \\([0-9a-f]{7,}\\))?$`));
+    assert.match(out, new RegExp(`^alice ${pkg.version.replace(/\./g, "\\.")}( \\([0-9a-f]{7,}\\))?$`));
     assert.equal(f.requests.length, 0, "--version does not need the server");
   } finally { await f.close(); }
 });
 
-test("doctor starts with the CLI version, and adds the server's against a remote BAKERY_URL", async () => {
+test("doctor starts with the CLI version, and adds the server's against a remote ALICE_URL", async () => {
   const f = await fixture();
   try {
     const local = (await f.run("doctor")).stdout.split("\n");
-    assert.match(local[0], /^PASS\tbakery-cli\t\d+\.\d+\.\d+/);
-    assert.ok(!local.some(line => line.includes("bakery server")), "a local server is this checkout, so one line");
+    assert.match(local[0], /^PASS\talice\t\d+\.\d+\.\d+/);
+    assert.ok(!local.some(line => line.includes("alice server")), "a local server is this checkout, so one line");
   } finally { await f.close(); }
   // A remote server is any address the CLI does not treat as loopback, so reach a stub through this machine's LAN address.
   const lan = Object.values(networkInterfaces()).flat().find(item => item && item.family === "IPv4" && !item.internal)?.address;
@@ -664,12 +686,12 @@ test("doctor starts with the CLI version, and adds the server's against a remote
   await new Promise<void>(resolve => stub.listen(0, "0.0.0.0", resolve));
   try {
     const port = (stub.address() as { port: number }).port;
-    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, BAKERY_URL: `http://${lan}:${port}`, BAKERY_ALLOW_REMOTE: "1" } });
+    const child = spawn(process.execPath, [cli, "doctor"], { env: { ...process.env, ALICE_URL: `http://${lan}:${port}`, ALICE_ALLOW_REMOTE: "1" } });
     let stdout = "";
     for await (const chunk of child.stdout) stdout += chunk;
     const lines = stdout.split("\n");
-    assert.match(lines[0], /^PASS\tbakery-cli\t\d+\.\d+\.\d+/);
-    assert.equal(lines[1], "PASS\tbakery server\t9.8.7 (abc1234)");
+    assert.match(lines[0], /^PASS\talice\t\d+\.\d+\.\d+/);
+    assert.equal(lines[1], "PASS\talice server\t9.8.7 (abc1234)");
     assert.equal(lines[2], `PASS\tserver\thttp://${lan}:${port} (remote, 1 board)`, "the instance comes right after the versions");
     assert.ok(lines.some(line => line.startsWith(`PASS\tboard ${lan}:/srv/remote-only\t`)), "a remote board's path names its host");
   } finally { await new Promise<void>(resolve => stub.close(() => resolve())); }
@@ -682,8 +704,8 @@ test("help lists every command the CLI runs, and renders plain off a terminal", 
   const variadic = source.match(/const variadic = \[([^\]]*)\]/)![1];
   const handled = new Set([...expected.matchAll(/"?([a-z][a-z-]*)"?:/g), ...variadic.matchAll(/"([a-z-]+)"/g)].map(m => m[1]).concat("pickup", "help"));
   assert.deepEqual([...handled].sort(), COMMANDS.map((item: { name: string }) => item.name).sort());
-  assert.doesNotMatch(overview("1.0.0"), /\x1b\[|⣿|b a k e r y/, "no banner or colour when piped");
-  for (const item of COMMANDS) assert.match(commandHelp(item.name)!, new RegExp(`bakery-cli ${item.name}`));
+  assert.doesNotMatch(overview("1.0.0"), /\x1b\[|⣿|a l i c e/, "no banner or colour when piped");
+  for (const item of COMMANDS) assert.match(commandHelp(item.name)!, new RegExp(`alice ${item.name}`));
   assert.equal(suggest("crate"), "create");
   assert.equal(suggest("zzzzzzzz"), undefined);
 });
@@ -769,7 +791,7 @@ test("running lists work on every board, then what waits for you, then the queue
     assert.equal(result.code, 0, result.stderr);
     const lines = result.stdout.trimEnd().split("\n").map(line => line.replace(/\t(\d+h \d+m|\d+m)\t/, "\tELAPSED\t"));
     assert.deepEqual(lines, [
-      "running\trun\tcard-run\t/tmp/bakery-project\tELAPSED\tbash\tFix the login redirect",
+      "running\trun\tcard-run\t/tmp/alice-project\tELAPSED\tbash\tFix the login redirect",
       "running\treview\tcard-review\t/tmp/other-project\tELAPSED\tread\tRaise small labels",
       "running\trun\tcard-run2\t/tmp/other-project\tELAPSED\tedit\tTab here and a line",
       "running\tdraft\tcard-draft\t/tmp/other-project\tELAPSED\t-\tDraft me",
@@ -777,7 +799,7 @@ test("running lists work on every board, then what waits for you, then the queue
       "waiting\tcard-approved\t/tmp/other-project\tAgent approved\tAgent liked it",
       "waiting\tcard-draft\t/tmp/other-project\tPR ready\tDraft me",
       "waiting\tcard-pr-failed\t/tmp/other-project\tPR ready\tOpen failed",
-      "waiting\tcard-broken\t/tmp/bakery-project\tfailed\tBroken build",
+      "waiting\tcard-broken\t/tmp/alice-project\tfailed\tBroken build",
       "queued\t7\truns:4\treviews:1\tdrafts:1\tprs:1",
     ]);
     assert.ok(lines.every(line => line.split("\t").length === { running: 7, waiting: 5, queued: 6 }[line.split("\t")[0]]), "every record keeps its column count");
@@ -799,13 +821,13 @@ test("a server error reaches the terminal on one line, in running and in the wat
   try {
     const result = await f.runAt(`http://127.0.0.1:${(nasty.address() as { port: number }).port}`, undefined, "running");
     assert.equal(result.code, 1);
-    assert.equal(result.stderr, "bakery-cli: Bakery 500: Database locked retry later\n");
+    assert.equal(result.stderr, "alice: Alice 500: Database locked retry later\n");
   } finally { await new Promise<void>(resolve => nasty.close(() => resolve())); await f.close(); }
   const { footer } = await import(new URL("../scripts/cli-style.mjs", import.meta.url).href);
   const before = process.env.FORCE_COLOR;
   process.env.FORCE_COLOR = "0";
   try {
-    assert.equal(footer({ problem: "Bakery 500: Database locked\n\x1b[2Jretry later" }, 40), "Bakery 500: Database locked retry later");
+    assert.equal(footer({ problem: "Alice 500: Database locked\n\x1b[2Jretry later" }, 40), "Alice 500: Database locked retry later");
     assert.equal(footer({ problem: "x".repeat(60) }, 40).length, 40, "clipped to the pane");
     assert.equal(footer({ updated: "10:00:00", scrolls: true }, 40), "10:00:00 · j/k scroll · q to quit");
   } finally { if (before === undefined) delete process.env.FORCE_COLOR; else process.env.FORCE_COLOR = before; }

@@ -18,7 +18,7 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "source", "concurrency", "limit", "budget", "integration", "host"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "source", "concurrency", "limit", "budget", "integration", "host", "reason", "note"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch" || arg === "--print") result[arg.slice(2)] = true;
@@ -40,20 +40,20 @@ function options(argv) {
   return result;
 }
 
-// BAKERY_URL may omit the scheme (HTTPS is tried first, then HTTP) and the port (4317).
+// ALICE_URL may omit the scheme (HTTPS is tried first, then HTTP) and the port (4317).
 async function serverUrl() {
-  const raw = (process.env.BAKERY_URL ?? `http://127.0.0.1:${process.env.BAKERY_PORT ?? "4317"}`).trim();
-  const invalid = new Error("BAKERY_URL must be a loopback server origin (for example 127.0.0.1:4317); set BAKERY_ALLOW_REMOTE=1 to allow another host");
+  const raw = (process.env.ALICE_URL ?? `http://127.0.0.1:${process.env.ALICE_PORT ?? "4317"}`).trim();
+  const invalid = new Error("ALICE_URL must be a loopback server origin (for example 127.0.0.1:4317); set ALICE_ALLOW_REMOTE=1 to allow another host");
   const parse = text => {
     let url;
     try { url = new URL(text); } catch { throw invalid; }
-    if (!["http:", "https:"].includes(url.protocol) || (process.env.BAKERY_ALLOW_REMOTE !== "1" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) || url.pathname !== "/" || url.search || url.hash || url.username || url.password) throw invalid;
+    if (!["http:", "https:"].includes(url.protocol) || (process.env.ALICE_ALLOW_REMOTE !== "1" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) || url.pathname !== "/" || url.search || url.hash || url.username || url.password) throw invalid;
     return url;
   };
   if (raw.includes("://")) return parse(raw);
   // A non-special scheme keeps the port exactly as typed, so ":443" is not mistaken for no port.
   let typedPort = "";
-  try { typedPort = new URL(`bakery://${raw}`).port; } catch { throw invalid; }
+  try { typedPort = new URL(`alice://${raw}`).port; } catch { throw invalid; }
   const candidates = ["https", "http"].map(scheme => {
     const url = parse(`${scheme}://${raw}`);
     if (!typedPort) url.port = "4317";
@@ -74,11 +74,11 @@ async function request(origin, path, method = "GET", input, timeoutMs = 10000) {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    throw new Error(`Cannot reach Bakery at ${origin.origin}: ${plain(error instanceof Error ? error.message : error)}`);
+    throw new Error(`Cannot reach Alice at ${origin.origin}: ${plain(error instanceof Error ? error.message : error)}`);
   }
   const data = await response.json().catch(() => null);
   // The server's text goes to a terminal, so it loses escape sequences and line breaks on the way.
-  if (!response.ok) throw new Error(`Bakery ${response.status}: ${plain(data?.error ?? response.statusText)}`);
+  if (!response.ok) throw new Error(`Alice ${response.status}: ${plain(data?.error ?? response.statusText)}`);
   return data;
 }
 
@@ -88,7 +88,7 @@ function selectBoard(boards, selector) {
   const here = boards.filter(item => cwd === item.repo || cwd.startsWith(item.repo + sep)).sort((a, b) => b.repo.length - a.repo.length)[0];
   if (!selector && here) return here;
   if (!selector && boards.length === 1) return boards[0];
-  if (!selector) throw new Error(boards.length ? "More than one board; choose one with --board ID|PATH" : "No boards yet. Add one with bakery-cli board-add PATH, or in Bakery.");
+  if (!selector) throw new Error(boards.length ? "More than one board; choose one with --board ID|PATH" : "No boards yet. Add one with alice board-add PATH, or in Alice.");
   const path = /^~[\\/]/.test(selector) ? resolve(homedir(), selector.slice(2)) : resolve(selector);
   const matches = boards.filter(item => item.id === selector || item.repo === path);
   if (matches.length !== 1) throw new Error(`Board not found: ${selector}`);
@@ -96,18 +96,19 @@ function selectBoard(boards, selector) {
 }
 
 /**
- * Prints what may make the card churn before it moves to Ready (asks only a person can meet, no acceptance criteria).
+ * Prints what may make the card churn before it moves to Ready (asks only a person can meet, no acceptance criteria,
+ * work too wide for one run).
  * A flagged card needs --yes, the CLI's "Ready anyway"; with it the flags still go to stderr. Servers without the
  * check answer 404 and the move goes ahead as before.
  */
 async function readyCheck(origin, boardPath, id, yes) {
   let flags;
   try { ({ flags } = await request(origin, `${boardPath}/cards/${id}/ready-check`)); }
-  catch (error) { if (/^Bakery 404: Not found$/.test(error.message)) return; throw error; }
+  catch (error) { if (/^Alice 404: Not found$/.test(error.message)) return; throw error; }
   if (!flags?.length) return;
   const lines = flags.map(flag => `  - ${flag.message}${flag.quote ? `: "${flag.quote}"` : ""}`).join("\n");
-  if (!yes) throw new Error(`This card may need another pass before a run:\n${lines}\nEdit it (bakery-cli edit ${id} --body ...), or repeat with --yes to move it to Ready anyway.`);
-  process.stderr.write(`bakery-cli: moving to Ready anyway:\n${lines}\n`);
+  if (!yes) throw new Error(`This card may need another pass before a run:\n${lines}\nEdit it (alice edit ${id} --body ...), or repeat with --yes to move it to Ready anyway.`);
+  process.stderr.write(`alice: moving to Ready anyway:\n${lines}\n`);
 }
 
 function cardId(value) {
@@ -159,10 +160,10 @@ async function uploadAttachment(origin, base, file) {
       body: Readable.toWeb(createReadStream(path)), duplex: "half",
     });
   } catch (error) {
-    throw new Error(`Cannot reach Bakery at ${origin.origin}: ${error instanceof Error ? error.message : error}`);
+    throw new Error(`Cannot reach Alice at ${origin.origin}: ${error instanceof Error ? error.message : error}`);
   }
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(`Bakery ${response.status}: ${data?.error ?? response.statusText}`);
+  if (!response.ok) throw new Error(`Alice ${response.status}: ${data?.error ?? response.statusText}`);
   return data;
 }
 
@@ -219,13 +220,13 @@ async function watch(render) {
 // A usage mistake, so it exits 2 like other CLIs (house-style references/cli.md).
 function unknown(name) {
   const near = suggest(name);
-  return Object.assign(new Error(`Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run bakery-cli help to see them all.`), { exitCode: 2 });
+  return Object.assign(new Error(`Unknown command: ${name}.${near ? ` Did you mean ${near}?` : ""} Run alice help to see them all.`), { exitCode: 2 });
 }
 
 async function main() {
   const opts = options(process.argv.slice(2));
   const [command, ...args] = opts.positionals;
-  if (opts.version) { console.log(`bakery-cli ${formatVersion(readVersion())}`); return; }
+  if (opts.version) { console.log(`alice ${formatVersion(readVersion())}`); return; }
   if (!command || command === "help" && !args.length) { console.log(overview(formatVersion(readVersion()))); return; }
   if (opts.help || command === "help") {
     const name = command === "help" ? args[0] : command;
@@ -244,6 +245,11 @@ async function main() {
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined || opts.source !== undefined)) throw new Error("--key, --priority and --source are only valid with create or add");
   if (opts.priority !== undefined && priorityValue(opts.priority) === null) throw new Error("Priority must be a whole number from -100 to 100, or low, normal, high, or urgent");
+  if (command !== "close" && (opts.reason !== undefined || opts.note !== undefined)) throw new Error("--reason and --note are only valid with close");
+  if (opts.note !== undefined && opts.reason === undefined) throw new Error("--note needs --reason; use --reason other for free text");
+  // "wrong approach" and "Wrong_Approach" both mean wrong-approach; the server rejects anything outside its list.
+  const closeReason = opts.reason?.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  if (opts.reason !== undefined && !closeReason) throw new Error("--reason cannot be empty; leave it out to close without a reason");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
   if (opts.integration !== undefined && command !== "board") throw new Error("--integration is only valid with board");
@@ -320,7 +326,7 @@ async function main() {
   }
   if (command === "open") {
     if (args.length) cardId(args[0]);
-    // With no card and no board to pick, open Bakery's home page rather than failing.
+    // With no card and no board to pick, open Alice's home page rather than failing.
     const target = !args.length && !opts.board && boards.length > 1 && !boards.some(item => process.cwd() === item.repo || process.cwd().startsWith(item.repo + sep)) ? null : selectBoard(boards, opts.board);
     let route = "/";
     if (target) {
@@ -337,15 +343,18 @@ async function main() {
     print({ url, opened }, opts.json, [opened || opts.print ? url : `${url}\t(no browser here; open it yourself)`]);
     return;
   }
-  const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
-  const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "tui") {
+    // With several boards and none chosen (by --board or the current directory), the TUI opens on Today.
+    const here = boards.some(item => process.cwd() === item.repo || process.cwd().startsWith(item.repo + sep));
+    const today = !opts.board && !here && boards.length > 1;
     return runTui({
       api: (method, route, input) => request(origin, route, method, input, 30_000),
-      board, title: board.repo.replace(homedir(), "~"),
-      webUrl: id => new URL(`/board/${encodeURIComponent(board.id)}/card/${encodeURIComponent(id)}`, origin).href,
+      board: today ? boards[0] : selectBoard(boards, opts.board), today,
+      webUrl: (id, boardId) => new URL(`/board/${encodeURIComponent(boardId)}/card/${encodeURIComponent(id)}`, origin).href,
     });
   }
+  const board = selectBoard(boards, command === "board" && args.length ? args[0] : opts.board);
+  const path = `/api/boards/${encodeURIComponent(board.id)}`;
   if (command === "cards") {
     const draw = cards => renderBoard(cards, { width: columns(), all: opts.all, title: board.repo.replace(homedir(), "~") });
     if (opts.watch) return watch(() => request(origin, `${path}/cards`).then(draw));
@@ -423,7 +432,7 @@ async function main() {
     const card = await request(origin, `${path}/cards/${id}`, "PATCH", { title: opts.title ?? current.title, body: opts.body ?? current.body ?? "" });
     print(card, opts.json, [cardLine(card)]);
   } else if (command === "close") {
-    const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", {});
+    const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", closeReason ? { reason: closeReason, ...(opts.note ? { note: opts.note } : {}) } : {});
     print(card, opts.json, [cardLine(card)]);
   } else if (command === "archive" || command === "restore") {
     const cards = await request(origin, `${path}/cards/${command === "archive" ? "archive" : "unarchive"}`, "POST", { cardIds: args });
@@ -487,7 +496,7 @@ async function main() {
     const budget = typeof updated.pickupCostBudget === "number" ? `${money(updated.pickupCostBudget)} daily budget` : "no budget";
     const diff = updated.autoReviewMaxFiles || updated.autoReviewMaxPatchChars ? `review diffs up to ${updated.autoReviewMaxFiles || "any"} files / ${updated.autoReviewMaxPatchChars || "any"} characters` : "no review diff caps";
     print(updated, opts.json, [`Limits ${updated.limitsEnabled ? "on" : "off"}${updated.limitsEnabled ? "" : " (stored, not applied)"}: ${daily}; ${budget}; ${diff}. Concurrency ${updated.pickupConcurrency} runs, ${updated.autoReviewConcurrency ?? 1} reviews; loop guards always apply.`,
-      ...await request(origin, "/api/settings").then(settings => typeof settings.activeAgentsLimit === "number" ? [`All boards: ${settings.activeAgents} of ${settings.activeAgentsLimit} agents running (bakery-cli agents).`] : [], () => [])]);
+      ...await request(origin, "/api/settings").then(settings => typeof settings.activeAgentsLimit === "number" ? [`All boards: ${settings.activeAgents} of ${settings.activeAgentsLimit} agents running (alice agents).`] : [], () => [])]);
   } else if (command === "pickup") {
     const summary = pickupSummary;
     if (!args.length) { print(board, opts.json, [summary(board)]); return; }
@@ -517,4 +526,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(`${paint("31", process.stderr)("bakery-cli:")} ${error instanceof Error ? error.message : error}`); process.exitCode = error?.exitCode ?? 1; });
+main().catch(error => { console.error(`${paint("31", process.stderr)("alice:")} ${error instanceof Error ? error.message : error}`); process.exitCode = error?.exitCode ?? 1; });

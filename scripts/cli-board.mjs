@@ -1,6 +1,7 @@
-// The board as a terminal sees it: the web board's lanes and card badges, as text. The badge rules come from the web
-// app's src/model.ts (Node 24 strips its types), so the terminal and the browser cannot disagree on "Your turn".
-import { cardActivity, needsYourReview, reviewActionText, reviewWaitText, waitingOn } from "../src/model.ts";
+// The board as a terminal sees it: the web board's lanes and card badges, as text. The badge rules come from
+// shared/card-state.ts, which the web app uses too (Node 24 strips its types), so the terminal and the browser
+// cannot disagree on "Your turn".
+import { cardActivity, needsYouStatuses, needsYourReview, reviewActionText, reviewWaitText, waitingOn } from "../shared/card-state.ts";
 import { repoName } from "../src/repo-appearance.ts";
 import { c, clip, paint, plain, width } from "./cli-style.mjs";
 
@@ -76,8 +77,6 @@ export function elapsed(since, now = Date.now()) {
 }
 
 const kinds = { run: { label: "run", color: c.warn }, review: { label: "review", color: blue }, draft: { label: "PR draft", color: c.info }, pr: { label: "opening PR", color: c.ok } };
-// The lanes Today lists under "Needs you", in its order; Review counts only cards that are your turn.
-const yours = ["review", "failed", "interrupted"];
 const yourStep = card => card.status === "review" ? { label: reviewActionText(card) || "Your turn", color: text => c.bold(blue(text)) }
   : card.status === "failed" ? { label: "failed", color: c.bad } : { label: "interrupted", color: c.warn };
 const plural = (count, word) => count ? `${count} ${word}${count === 1 ? "" : "s"}` : "";
@@ -86,7 +85,7 @@ const plural = (count, word) => count ? `${count} ${word}${count === 1 ? "" : "s
  * Every board at once, for `running`. `work` is `/api/running`, the server's scheduler state: the runs, agent reviews,
  * PR drafts and automatic PR openings going now, shown longest first, and those it has queued (hook fixes waiting for a
  * run slot, drafts waiting for a drafting slot, cards waiting to have their PR opened). Then the cards waiting for you,
- * as Today lists them, leaving out cards Bakery is handling itself (every card in `work` but a PR draft, which only
+ * as Today lists them, leaving out cards Alice is handling itself (every card in `work` but a PR draft, which only
  * prepares the Approve dialog) and cards whose start is queued; and how many will start without you: those queued
  * items, Ready cards on boards with pickup on, queued starts and agent reviews in line.
  */
@@ -94,8 +93,8 @@ export function runningView(work, cards, boards) {
   const busy = new Set(work.map(item => item.cardId));
   const handled = new Set(work.filter(item => item.kind !== "draft").map(item => item.cardId));
   const pickup = new Set(boards.filter(item => item.autoPickupEnabled).map(item => item.repo));
-  const waiting = cards.filter(card => yours.includes(card.status) && !handled.has(card.id) && !card.startQueued && (card.status !== "review" || needsYourReview(card)))
-    .sort((a, b) => yours.indexOf(a.status) - yours.indexOf(b.status) || (a.updatedAt ?? "").localeCompare(b.updatedAt ?? ""));
+  const waiting = cards.filter(card => needsYouStatuses.includes(card.status) && !handled.has(card.id) && !card.startQueued && (card.status !== "review" || needsYourReview(card)))
+    .sort((a, b) => needsYouStatuses.indexOf(a.status) - needsYouStatuses.indexOf(b.status) || (a.updatedAt ?? "").localeCompare(b.updatedAt ?? ""));
   const later = cards.filter(card => !busy.has(card.id));
   const queued = kind => work.filter(item => item.queued && item.kind === kind).length;
   const runs = later.filter(card => card.startQueued || (card.status === "ready" && !card.blocked && pickup.has(card.repo))).length + queued("run");

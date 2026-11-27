@@ -1,4 +1,4 @@
-// Terminal styling for bakery-cli. Layout and colour only on a terminal, so scripts and agents that pipe the output
+// Terminal styling for the alice CLI. Layout and colour only on a terminal, so scripts and agents that pipe the output
 // keep the plain tab-separated lines. NO_COLOR drops the colour but keeps the layout; FORCE_COLOR wins over both.
 
 const forced = () => process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== "";
@@ -93,7 +93,7 @@ const CAKE = [
 const SHADES = [31, 31, 35, 35, 35, 33, 33, 33, 33, 33];
 
 export function banner(version) {
-  const beside = ["", "", "", "", c.bold("b a k e r y"), "Pi agents bake your cards, one worktree each.", version ? c.dim(version) : "", "", "", ""];
+  const beside = ["", "", "", "", c.bold("a l i c e"), "Pi agents work your cards, one worktree each.", version ? c.dim(version) : "", "", "", ""];
   return CAKE.map((row, i) => `  ${paint(String(SHADES[i]))(row)}${beside[i] ? `   ${beside[i]}` : ""}`).join("\n");
 }
 

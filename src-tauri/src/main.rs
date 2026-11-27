@@ -153,7 +153,7 @@ fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow,
     let popup_app = app.clone();
     let download_app = app.clone();
     let builder = WebviewWindowBuilder::new(app, "remote", WebviewUrl::External(url))
-        .title("Bakery")
+        .title("Alice")
         // The page paints its own title bar; see docs/desktop.md.
         .initialization_script(
             "document.documentElement.dataset.desktop = navigator.platform.startsWith('Mac') ? 'macos' : 'other';",
@@ -209,14 +209,14 @@ fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow,
             false
         })
         .build()
-        .map_err(|error| format!("Cannot open the Bakery window: {error}"))?;
+        .map_err(|error| format!("Cannot open the Alice window: {error}"))?;
     let close_app = app.clone();
     remote.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             if let Some(window) = remote_window(&close_app) {
                 if let Err(error) = window.hide() {
-                    eprintln!("Cannot hide Bakery: {error}");
+                    eprintln!("Cannot hide Alice: {error}");
                 }
             }
             show_connection(&close_app);
@@ -238,7 +238,7 @@ fn open_settings(app: &tauri::AppHandle) {
         return;
     }
     if let Err(error) = remote.show().and_then(|_| remote.set_focus()) {
-        eprintln!("Cannot show Bakery: {error}");
+        eprintln!("Cannot show Alice: {error}");
     }
 }
 
@@ -257,7 +257,7 @@ fn main() {
                 .flatten();
             let connection =
                 WebviewWindowBuilder::new(app, "connection", WebviewUrl::App("index.html".into()))
-                    .title("Connect to Bakery")
+                    .title("Connect to Alice")
                     // Shown only when there is no saved server or it cannot be reached.
                     .visible(false)
                     .inner_size(620.0, 620.0)
@@ -298,12 +298,12 @@ fn main() {
                 None::<&str>,
             )?;
             let reload =
-                MenuItem::with_id(app, "reload", "Reload Bakery", true, Some("CmdOrCtrl+R"))?;
+                MenuItem::with_id(app, "reload", "Reload Alice", true, Some("CmdOrCtrl+R"))?;
             let browser =
-                MenuItem::with_id(app, "browser", "Open Bakery in browser", true, None::<&str>)?;
+                MenuItem::with_id(app, "browser", "Open Alice in browser", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let quit = PredefinedMenuItem::quit(app, None)?;
-            let mut bakery_items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+            let mut alice_items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
                 vec![&settings, &connection_item, &reload, &browser, &separator];
             // A custom menu replaces the default one, so restore macOS's Cmd+H items.
             #[cfg(target_os = "macos")]
@@ -314,14 +314,14 @@ fn main() {
                 PredefinedMenuItem::separator(app)?,
             );
             #[cfg(target_os = "macos")]
-            bakery_items.extend([
+            alice_items.extend([
                 &hide as &dyn tauri::menu::IsMenuItem<_>,
                 &hide_others,
                 &show_all,
                 &hide_separator,
             ]);
-            bakery_items.push(&quit);
-            let bakery = Submenu::with_items(app, "Bakery", true, &bakery_items)?;
+            alice_items.push(&quit);
+            let alice = Submenu::with_items(app, "Alice", true, &alice_items)?;
             let edit = Submenu::with_items(
                 app,
                 "Edit",
@@ -345,14 +345,14 @@ fn main() {
                     &PredefinedMenuItem::fullscreen(app, None)?,
                 ],
             )?;
-            app.set_menu(Menu::with_items(app, &[&bakery, &edit, &window])?)?;
+            app.set_menu(Menu::with_items(app, &[&alice, &edit, &window])?)?;
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "connection" => show_connection(app),
                 "settings" => open_settings(app),
                 "reload" => {
                     if let Some(window) = remote_window(app) {
                         if let Err(error) = window.reload() {
-                            eprintln!("Cannot reload Bakery: {error}");
+                            eprintln!("Cannot reload Alice: {error}");
                             show_connection(app);
                         }
                     }
@@ -369,5 +369,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("Bakery desktop failed to start");
+        .expect("Alice desktop failed to start");
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The bakery plugin's toggle action: closes the running view this Herdr session opened, otherwise opens it as a split
-// to the right of the focused pane and narrows it to the 40 columns `bakery-cli running` is laid out for.
+// The alice plugin's toggle action: closes the running view this Herdr session opened, otherwise opens it as a split
+// to the right of the focused pane and narrows it to the 40 columns `alice running` is laid out for.
 //
 // Named sessions share the plugin's state directory and number their panes alike, so the saved pane ID is kept per
 // session, keyed by its socket, and only this action writes it. An ID gone stale (the view was quit with Ctrl-C, or
@@ -13,7 +13,7 @@ import { join } from "node:path";
 const herdr = (...args) => execFileSync(process.env.HERDR_BIN_PATH || "herdr", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const dir = process.env.HERDR_PLUGIN_STATE_DIR;
 if (!dir) {
-  console.error("Run this through Herdr: herdr plugin action invoke toggle --plugin bakery");
+  console.error("Run this through Herdr: herdr plugin action invoke toggle --plugin alice");
   process.exit(2);
 }
 const session = createHash("sha256").update(process.env.HERDR_SOCKET_PATH ?? "").digest("hex").slice(0, 16);
@@ -25,7 +25,7 @@ if (open) {
   try { herdr("plugin", "pane", "close", open); process.exit(0); }
   catch { /* Stale: open a new view. */ }
 }
-const id = JSON.parse(herdr("plugin", "pane", "open", "--plugin", "bakery", "--entrypoint", "running", "--placement", "split", "--direction", "right", "--no-focus"))
+const id = JSON.parse(herdr("plugin", "pane", "open", "--plugin", "alice", "--entrypoint", "running", "--placement", "split", "--direction", "right", "--no-focus"))
   .result.plugin_pane.pane.pane_id;
 mkdirSync(dir, { recursive: true });
 writeFileSync(state, `${id}\n`);

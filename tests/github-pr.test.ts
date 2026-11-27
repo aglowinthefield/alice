@@ -47,9 +47,14 @@ if (args[0] === "pr" && args[1] === "create") {
   if (fs.existsSync(path.join(dir, "create-error"))) { process.stderr.write(fs.readFileSync(path.join(dir, "create-error"), "utf8")); process.exit(1); }
   const number = 100 + prs.length, url = "https://github.com/" + flag("--repo") + "/pull/" + number;
   prs.push({ number, url, state: "OPEN", mergedAt: null, mergeCommit: null, headRefName: flag("--head"), headRefOid: "", statusCheckRollup: [],
-    title: flag("--title"), body: flag("--body"), base: flag("--base") });
+    title: flag("--title"), body: flag("--body"), base: flag("--base"), isDraft: args.includes("--draft") });
   fs.writeFileSync(file, JSON.stringify(prs));
   console.log(url); process.exit(0);
+}
+if (args[0] === "pr" && args[1] === "ready") {
+  const pr = prs.find(item => item.number === Number(args[2]));
+  if (pr) pr.isDraft = false;
+  fs.writeFileSync(file, JSON.stringify(prs)); process.exit(0);
 }
 if (args[0] === "pr" && args[1] === "comment") {
   if (fs.existsSync(path.join(dir, "comment-error"))) { console.error("comment failed"); process.exit(1); }
@@ -208,6 +213,52 @@ test("a card's PR is found by its alice/<id> branch, and an attached PR link ove
     assert.equal((await linkedPullRequest(f.github, "acme/widgets", cleared))?.number, 8);
     f.setPrs([{ number: 10, url: "https://github.com/acme/widgets/pull/10", state: "OPEN", mergedAt: null, mergeCommit: null, headRefName: `bakery/${card.id}` }]);
     assert.equal((await linkedPullRequest(f.github, "acme/widgets", cleared))?.number, 10, "a card opened before the rename is found by its bakery/<id> branch");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a draft opened for a reviewer handoff carries the findings in its body, and stays the person's turn", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const run = f.board.listRuns(card.id)[0];
+    f.board.recordChangedFiles(run.id, 1);
+    f.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,details,handoff,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','x','The agent reviewer left this for a person:\n\nProduct call','')").run(card.id, run.id);
+    writeFileSync(join(f.ghDir, "comment-error"), "");
+    const integration = new Integration(f.board, f.data);
+    const opened = await integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "auto-pull-request", undefined, f.board.autoReviewHandoff(run.id)!);
+    assert.match(f.prs()[0].body, /Product call/, "findings are in the body, so a failed comment cannot lose them");
+    assert.equal((f.prs()[0] as { isDraft?: boolean }).isDraft, true);
+    assert.equal(opened.prState, "OPEN");
+    const current = f.board.getCard(card.id)!;
+    assert.equal(current.reviewWait, null, "the card is not waiting on GitHub: a person decides");
+    assert.equal(current.reviewAction, "needs_you", "the reviewer handed it to a person");
+    // Approving the draft makes it ready and clears the handoff wait.
+    await integration.openPullRequest(current, integration.review(current).fingerprint, f.github);
+    assert.equal((f.prs()[0] as { isDraft?: boolean }).isDraft, false, "GitHub shows it ready for review");
+    assert.equal(f.board.autoReviewHandoff(run.id), null);
+    assert.equal(f.board.getCard(card.id)!.reviewWait, "github");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: findings for an already open pull request that fail to post are kept and delivered by a later sync", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    const run = f.board.listRuns(card.id)[0];
+    const integration = new Integration(f.board, f.data);
+    await integration.openPullRequest(card, integration.review(card).fingerprint, f.github);
+    f.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,details,handoff,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','x','Findings to post','')").run(card.id, run.id);
+    writeFileSync(join(f.ghDir, "comment-error"), "");
+    const again = f.board.getCard(card.id)!;
+    await integration.openPullRequest(again, integration.review(again).fingerprint, f.github, undefined, "auto-pull-request", undefined, "Findings to post");
+    assert.equal(f.comments().some(item => /Findings to post/.test(item.body)), false);
+    await f.sync.tick(true);
+    assert.equal(f.comments().some(item => /Findings to post/.test(item.body)), false, "still failing, still pending");
+    rmSync(join(f.ghDir, "comment-error"));
+    await f.sync.tick(true);
+    assert.equal(f.comments().filter(item => /Findings to post/.test(item.body)).length, 1);
+    await f.sync.tick(true);
+    assert.equal(f.comments().filter(item => /Findings to post/.test(item.body)).length, 1, "delivered once");
   } finally { f.cleanup(); }
 });
 
@@ -1002,6 +1053,7 @@ test("github-pr: a CI fix run starts from origin/main merged in, and hears about
     await sync.syncBoard(f.repoBoard.id);
     await waitFor(() => f.board.getCard(card.id)!.status === "review");
     const run = f.board.listRuns(card.id)[0];
+    f.board.recordChangedFiles(run.id, 1);
     assert.equal(run.status, "review", `${run.error} ${run.output}`);
     assert.match(run.output, /Merging origin\/main into the card branch so the fix run sees what CI tested/);
     const worktree = join(f.data, "worktrees", card.id);
@@ -1073,6 +1125,44 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
     assert.equal(f.comments().filter(c => /Alice has stopped sending it back/.test(c.body)).length, 1, "said once");
     assert.match(f.board.getCard(card.id)!.prError ?? "", /after 3 automatic fix runs/, "the reason stays on the card");
     assert.equal(f.board.getCard(card.id)!.reviewWait, null, "past the limit, CI is yours to fix");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: conflicts from CI-fix merges and PR conflict repairs count toward one hotspot under the file's real name", async () => {
+  const f = fixture();
+  // Every card writes its own line to a file whose name Git quotes in newline output ("notes \\303\\274.md").
+  writeFileSync(f.fakePi, `#!/bin/sh\necho "card $(basename "$PWD")" > 'notes ü.md'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  const worker = new Worker(f.board, f.data, f.fakePi);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card));
+  try {
+    const cards: Card[] = [];
+    for (const title of ["CI fix", "Repair one", "Repair two"]) { const card = await reviewedCard(f, title); await approve(f, card.id); cards.push(card); }
+    const [ciFix, ...repairs] = cards;
+    const pushed = (id: string) => git(f.origin, "rev-parse", `refs/heads/alice/${id}`);
+    const prs = f.prs(), prFor = (id: string) => prs.find(pr => pr.headRefName === `alice/${id}`)!;
+    git(f.upstream, "pull", "-q", "--ff-only", "origin", "main");
+    writeFileSync(join(f.upstream, "notes ü.md"), "main\n"); git(f.upstream, "add", "notes ü.md"); git(f.upstream, ...commitArgs, "main edits notes"); git(f.upstream, "push", "-q", "origin", "main");
+    const done = new Date(Date.now() - 1000).toISOString();
+    const lint = { __typename: "CheckRun", name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done };
+    // GitHub can report a PR mergeable while its checks fail; the fix run's own merge of main then conflicts.
+    f.setPrs([
+      { ...prFor(ciFix.id), headRefOid: pushed(ciFix.id), mergeable: "MERGEABLE", statusCheckRollup: [lint] },
+      ...repairs.map(card => ({ ...prFor(card.id), headRefOid: pushed(card.id), mergeable: "CONFLICTING", statusCheckRollup: [] })),
+    ]);
+    assert.deepEqual(f.board.conflictHotspots(), {});
+    await sync.syncBoard(f.repoBoard.id);
+    await waitFor(() => cards.every(card => { const [run] = f.board.listRuns(card.id); return run.attempt === 2 && run.status !== "running"; }));
+
+    const ciRun = f.board.listRuns(ciFix.id)[0];
+    assert.match(ciRun.output, /The merge conflicted in notes ü\.md; the card branch is unchanged/);
+    assert.equal(f.board.getMergeFailure(ciFix.id), undefined, "the CI-fix merge leaves the card's merge-failure state alone");
+    for (const card of repairs) assert.equal(f.board.listRuns(card.id)[0].ciFix, 2, "a conflict repair run");
+    const hotspots = f.board.conflictHotspots()[f.repoBoard.repo];
+    assert.deepEqual(hotspots?.map(item => [item.file, item.cards]), [["notes ü.md", 3]], "one file, counted once per card");
+    assert.deepEqual([...hotspots[0].cardIds].sort(), cards.map(card => card.id).sort());
+    // The local merge at Approve reads `ls-files -u -z`, so it records the same spelling and adds to the same row.
+    f.board.recordMergeFailure(ciFix.id, ["notes ü.md"], "local merge conflict");
+    assert.deepEqual(f.board.conflictHotspots()[f.repoBoard.repo].map(item => item.file), ["notes ü.md"]);
   } finally { f.cleanup(); }
 });
 

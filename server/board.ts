@@ -13,6 +13,7 @@ import type { ThemeName } from "../src/themes.js";
 import { featureOffMessage, readFeatures, type Features } from "../src/features.js";
 import { parsePlan } from "../src/plan.js";
 import { defaultStaleReviewDays, validateStaleReviewDays } from "../src/stale-review.js";
+import { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot } from "../src/model.js";
 import { classifyRuns, type RunKind } from "../src/run-kinds.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 import type { StatsInput } from "./stats.js";
@@ -69,9 +70,10 @@ export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment"
 export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number; conflictRepairs: number; conflictRepairKey: string | null; prCommentsSeen: string | null };
 /**
  * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Alice is about to send
- * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
+ * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main). A rerun the
+ * agent reviewer asked for that is waiting for a free run slot (`rerun_queued`) is the agent's turn too.
  */
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export type ReviewWait = "agent_review" | "ci_fix" | "github" | "rerun_queued";
 /**
  * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
@@ -147,6 +149,8 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   attachmentCount: number;
   /** A Failed card's reason in a few words (see `summarizeFailure`); null on other cards. */
   failureSummary: string | null;
+  /** Why the running run may be stuck (see server/stuck.ts); null when the card is not running or looks fine. */
+  stuck: string | null;
   /** Done cards on a local board with a GitHub remote: is the merge on origin/main (last fetch)? */
   originMain?: "pushed" | "local" } & UsageFields & CardPullRequest;
 /** A card on the other end of a dependency edge, with enough to show and link it. */
@@ -178,11 +182,20 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   sessionFile: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
+  /** Why Alice thinks this run may be going in circles (see server/stuck.ts); null while it looks fine. */
+  stuck: string | null;
   /** Files the run's work changes against main, as of the last time Alice looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
+/**
+ * `handoff` is what Alice posts on the draft pull request it opens when the review leaves the card for a person on a
+ * board with automatic pull requests; empty for jobs from before it was kept.
+ */
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string; handoff: string; handoffPending: number } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
+export { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot };
+// Conflict events older than this are pruned; only the hotspot window reads them.
+const conflictEventRetentionDays = 30;
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches, staleReviewDays";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
@@ -210,7 +223,8 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   EXISTS (SELECT 1 FROM approvals merged WHERE merged.cardId=cards.id AND merged.merged=1) AS locallyMerged,
   COALESCE((SELECT (latest.report LIKE '%alice-plan%' OR latest.report LIKE '%bakery-plan%') FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), 0) AS planOnly,
   CASE WHEN cards.status='failed' THEN (SELECT latest.error FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedError,
-  CASE WHEN cards.status='failed' THEN (SELECT latest.failureKind FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedKind
+  CASE WHEN cards.status='failed' THEN (SELECT latest.failureKind FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedKind,
+  CASE WHEN cards.status='running' THEN (SELECT latest.stuck FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS stuck
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id`;
 
 /**
@@ -249,6 +263,9 @@ export class Board {
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conflict_events (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, cardId TEXT NOT NULL, file TEXT NOT NULL, createdAt TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS conflict_events_window ON conflict_events(createdAt, repo, file);
+      CREATE TABLE IF NOT EXISTS conflict_hotspot_dismissals (repo TEXT NOT NULL, file TEXT NOT NULL, lastEventId INTEGER NOT NULL, PRIMARY KEY(repo, file));
       CREATE TABLE IF NOT EXISTS dependent_updates (cardId TEXT PRIMARY KEY, parentId TEXT NOT NULL, deferredAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','approved','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
@@ -439,11 +456,14 @@ export class Board {
     // Lets the attempt after a run timeout check the session is still there before continuing it.
     if (!runColumns.has("sessionFile")) this.db.exec("ALTER TABLE runs ADD COLUMN sessionFile TEXT");
     if (!runColumns.has("retryScheduled")) this.db.exec("ALTER TABLE runs ADD COLUMN retryScheduled INTEGER NOT NULL DEFAULT 0");
+    if (!runColumns.has("stuck")) this.db.exec("ALTER TABLE runs ADD COLUMN stuck TEXT");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
     if (!jobColumns.has("changes")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN changes TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("requeued")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN requeued INTEGER NOT NULL DEFAULT 0");
+    if (!jobColumns.has("handoff")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN handoff TEXT NOT NULL DEFAULT ''");
+    if (!jobColumns.has("handoffPending")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN handoffPending INTEGER NOT NULL DEFAULT 0");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
       for (const definition of usageDefinitions.split(", "))
@@ -979,14 +999,16 @@ export class Board {
   }
   /**
    * Review cards whose pull request Alice should open without Approve, oldest finished run first. See
-   * `setAutoPullRequest`. With auto-review on, the agent reviewer's approval opens the PR instead, so this stays out.
+   * `setAutoPullRequest`. With auto-review on, the agent reviewer goes first: its approval opens the PR itself, and a
+   * card it sends back reruns, so only a run whose review ended in a hand-off to a person (or that no review covers,
+   * because it finished before auto-review was turned on) is a candidate here, and its PR opens as a draft.
    * Only a card's first PR is opened this way: updating a pushed PR still takes Approve (CI fixes excepted, which
    * GitHub sync pushes). Each run is tried once, and a card at most `loopGuards.autoPullRequestPushes` times, so a pre-push
    * hook that keeps refusing the agent's fixes cannot loop forever.
    */
   listAutoPullRequestCandidates(): { card: Card; run: Run }[] {
     const result: { card: Card; run: Run }[] = [];
-    for (const repoBoard of this.listBoards().filter(item => item.integration === "github-pr" && item.autoPullRequestEnabled && !item.autoReviewEnabled)) {
+    for (const repoBoard of this.listBoards().filter(item => item.integration === "github-pr" && item.autoPullRequestEnabled)) {
       const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review' AND ${notSentinelJob}`).all(repoBoard.repo) as { id: string }[];
       for (const { id } of ids) {
         const card = this.getCard(id), run = this.listRuns(id)[0];
@@ -999,7 +1021,20 @@ export class Board {
     const attempts = this.db.prepare("SELECT COUNT(*) AS n, SUM(runId=?) AS tried FROM auto_pull_requests WHERE cardId=?").get(run.id, card.id) as { n: number; tried: number | null };
     return run.status === "review" && !!run.finishedAt && !!repoBoard.autoPullRequestEnabledAt && run.finishedAt > repoBoard.autoPullRequestEnabledAt &&
       !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !attempts.tried && attempts.n < loopGuards.autoPullRequestPushes &&
-      !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id);
+      !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id) && !this.agentReviewPending(repoBoard, card.id, run);
+  }
+  /** Whether the agent reviewer still has a say on this run before a pull request may open: it is queued, running, or sent the card back. */
+  agentReviewPending(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
+    if (!repoBoard.autoReviewEnabled) return false;
+    if (this.awaitsAutoReview(repoBoard, cardId, run)) return true;
+    const job = this.getAutoReviewJob(run.id);
+    return !!job && (job.state !== "needs_human" || (job.changes !== "" && job.handoff === ""));
+  }
+  /** What the agent reviewer left for a person on this run, for the draft pull request; null when it never reviewed it. */
+  autoReviewHandoff(runId: string): string | null {
+    const job = this.getAutoReviewJob(runId);
+    // Requested changes stay on the job for a manual retry; a handoff marks them as findings for a person instead of a rerun.
+    return job?.state === "needs_human" && (job.changes === "" || job.handoff !== "") ? job.handoff || "The agent review did not reach a verdict." : null;
   }
   /** Records that Alice is opening `runId`'s pull request on its own. False when the run is no longer a candidate. */
   claimAutoPullRequest(cardId: string, runId: string): boolean {
@@ -1038,10 +1073,16 @@ export class Board {
   private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "startQueuedForSlot">, repoBoard: RepoBoard | undefined, run = this.listRuns(card.id)[0]): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
     if (run?.status !== "review") return null;
+    // A reviewer send-back the run limit refused waits in `queued_starts` for a slot (see `AutoReview.process`).
+    const job = this.getAutoReviewJob(run.id);
+    if (!card.prState && job?.state === "needs_human" && job.changes !== "" && job.handoff === "" &&
+      this.db.prepare("SELECT 1 FROM queued_starts WHERE cardId=? AND untilSlot=1").get(card.id)) return "rerun_queued";
     if (repoBoard.integration === "github-pr") {
       // Before a pull request exists, an agent review in progress or queued is the agent's turn.
       if (!card.prState && (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run))) return "agent_review";
       if (card.prState === "MERGED") return "github";
+      // A draft opened for a reviewer handoff stays the person's turn until they act on it (a newer run replaces it).
+      if (card.prState === "OPEN" && card.prPushedRunId === run.id && this.autoReviewHandoff(run.id) !== null) return null;
       // A run newer than the pushed one (a CI fix, a rerun) waits for Approve to push it.
       if (card.prState !== "OPEN" || (!card.prOverrideUrl && card.prPushedRunId !== run.id)) return null;
       if (this.getCiFeedback(card.id)?.source === "conflict" || this.getCiFeedback(card.id)?.source === "comment") return "ci_fix";
@@ -1121,9 +1162,34 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
-    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
-      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
+  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[], handoff = ""): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=?, handoff=? WHERE runId=? AND state='running'")
+      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", handoff, runId);
+  }
+  /**
+   * The reviewer's requested rerun cannot start (not a capacity wait): the completed review becomes a human handoff, so
+   * its requested changes go to the draft pull request as findings and the card no longer waits on a rerun.
+   */
+  handOffSendBack(runId: string, why: string): void {
+    const job = this.getAutoReviewJob(runId);
+    if (!job) return;
+    const findings = (job.changes ? JSON.parse(job.changes) as { path: string; line?: number; comment: string }[] : []).map(change => `- \`${change.path}${change.line ? `:${change.line}` : ""}\`: ${change.comment}`).join("\n");
+    const reason = job.details.replace(/^Sent back to the implementer: /, "");
+    this.db.prepare("UPDATE auto_review_jobs SET handoff=?, details=? WHERE runId=?")
+      .run(`The agent reviewer asked for changes, but Alice could not start the rerun (${why}):\n\n${reason}${findings ? `\n\n${findings}` : ""}`, `Agent requested changes, but the rerun could not start: ${reason}`.slice(0, 4000), runId);
+  }
+  /** The operator approved the draft opened for a handoff: the person has decided, so the handoff no longer waits. */
+  resolveHandoff(runId: string): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state='pull_request', handoffPending=0 WHERE runId=? AND state='needs_human'").run(runId);
+  }
+  /** Marks the handoff's findings comment on an existing pull request as not yet posted, or as posted. */
+  setHandoffPending(runId: string, pending: boolean): void {
+    this.db.prepare("UPDATE auto_review_jobs SET handoffPending=? WHERE runId=?").run(pending ? 1 : 0, runId);
+  }
+  /** Findings comments whose posting failed, for pull requests on this repository, to be retried. */
+  listPendingHandoffs(repo: string): { runId: string; prNumber: number; handoff: string }[] {
+    return this.db.prepare(`SELECT j.runId AS runId, c.prNumber AS prNumber, j.handoff AS handoff FROM auto_review_jobs j JOIN cards c ON c.id=j.cardId
+      WHERE j.handoffPending=1 AND j.state='needs_human' AND c.repo=? AND c.prNumber IS NOT NULL AND c.prState='OPEN'`).all(repo) as { runId: string; prNumber: number; handoff: string }[];
   }
   /** What a running review is doing now; shown in the Reviews tab until it finishes. */
   setAutoReviewProgress(runId: string, details: string): void {
@@ -1554,9 +1620,40 @@ export class Board {
     return (this.db.prepare("SELECT merge_failures.* FROM merge_failures JOIN cards ON cards.id=merge_failures.cardId WHERE cards.repo=? AND cards.status IN ('review', 'failed')").all(repo) as { cardId: string; files: string; details: string }[])
       .map(row => ({ cardId: row.cardId, files: JSON.parse(row.files) as string[], details: row.details }));
   }
+  /** Stores the card's current conflict and logs one event per file, so files that keep conflicting can be counted after the failure clears. */
   recordMergeFailure(cardId: string, files: string[], details: string): void {
     this.db.prepare("INSERT INTO merge_failures(cardId, files, details) VALUES (?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET files=excluded.files, details=excluded.details")
       .run(cardId, JSON.stringify(files), details);
+    this.recordConflictEvents(cardId, files);
+  }
+  /** Logs a conflict for the hotspot count only, leaving the card's current merge-failure state alone. Pass Git's real path names (read with `-z`), not its quoted spelling. */
+  recordConflictEvents(cardId: string, files: string[]): void {
+    const at = now(), log = this.db.prepare("INSERT INTO conflict_events(repo, cardId, file, createdAt) SELECT repo, id, ?, ? FROM cards WHERE id=?");
+    for (const file of new Set(files)) log.run(file, at, cardId);
+    const cutoff = new Date(Date.now() - conflictEventRetentionDays * 86_400_000).toISOString();
+    if (this.db.prepare("DELETE FROM conflict_events WHERE createdAt<?").run(cutoff).changes)
+      this.db.exec("DELETE FROM conflict_hotspot_dismissals WHERE NOT EXISTS (SELECT 1 FROM conflict_events e WHERE e.repo=conflict_hotspot_dismissals.repo AND e.file=conflict_hotspot_dismissals.file)");
+  }
+  /**
+   * Files per repo that conflicted on at least `conflictHotspotCards` cards in the `conflictHotspotDays` before `at`,
+   * most cards first. A dismissed file stays hidden until it conflicts again.
+   */
+  conflictHotspots(at = new Date()): Record<string, ConflictHotspot[]> {
+    const since = new Date(at.getTime() - conflictHotspotDays * 86_400_000).toISOString();
+    const rows = this.db.prepare(`SELECT e.repo, e.file, COUNT(DISTINCT e.cardId) AS cards, group_concat(DISTINCT e.cardId) AS cardIds, MAX(e.createdAt) AS lastAt
+      FROM conflict_events e LEFT JOIN conflict_hotspot_dismissals d ON d.repo=e.repo AND d.file=e.file
+      WHERE e.createdAt>=? AND e.createdAt<=? GROUP BY e.repo, e.file
+      HAVING COUNT(DISTINCT e.cardId)>=? AND MAX(e.id)>COALESCE(MAX(d.lastEventId), 0)
+      ORDER BY cards DESC, lastAt DESC, e.file`).all(since, at.toISOString(), conflictHotspotCards) as { repo: string; file: string; cards: number; cardIds: string; lastAt: string }[];
+    const byRepo: Record<string, ConflictHotspot[]> = {};
+    for (const row of rows) (byRepo[row.repo] ??= []).push({ file: row.file, cards: Number(row.cards), cardIds: row.cardIds.split(","), lastAt: row.lastAt });
+    return byRepo;
+  }
+  /** Hides a file's hotspot notice until the file conflicts again. */
+  dismissConflictHotspot(repo: string, file: string): void {
+    const last = this.db.prepare("SELECT MAX(id) AS id FROM conflict_events WHERE repo=? AND file=?").get(repo, file) as { id: number | null };
+    if (last.id === null) throw new Error("No conflicts recorded for that file on this board");
+    this.db.prepare("INSERT INTO conflict_hotspot_dismissals(repo, file, lastEventId) VALUES (?, ?, ?) ON CONFLICT(repo, file) DO UPDATE SET lastEventId=excluded.lastEventId").run(repo, file, last.id);
   }
   clearMergeFailure(cardId: string): void { this.db.prepare("DELETE FROM merge_failures WHERE cardId=?").run(cardId); }
   /**
@@ -1740,6 +1837,8 @@ export class Board {
       return this.getCard(cardId)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  /** Flags a running run as maybe stuck with the reason, or clears the flag with null. */
+  markStuck(id: string, reason: string | null) { this.db.prepare("UPDATE runs SET stuck=? WHERE id=? AND status='running'").run(reason, id); }
   recordSessionFile(id: string, path: string) { this.db.prepare("UPDATE runs SET sessionFile=? WHERE id=?").run(path, id); }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {

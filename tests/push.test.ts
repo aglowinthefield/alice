@@ -192,3 +192,35 @@ test("the digest follows each board's threshold and lists the oldest cards first
     assert.equal(f.sent.filter(item => item.notice.tag === "stale-review-digest")[0].notice.title, "2 cards have sat in Review too long");
   } finally { f.close(); }
 });
+
+test("a running card that may be stuck notifies once, naming why", async () => {
+  const f = fixture();
+  try {
+    f.push.subscribe(subscription("https://push.example/a"));
+    const card = f.board.createCard({ repo: f.repoBoard.repo, title: "Rerun the tests", body: "" });
+    f.board.setStatus(card.id, "ready");
+    const run = f.board.claim(card.id);
+    await f.push.tick();
+    assert.equal(f.sent.length, 0, "a running card that looks fine is quiet");
+    f.board.markStuck(run.id, "repeated the same bash call 5 times in its last 20 tool calls");
+    await f.push.tick();
+    await f.push.tick();
+    assert.deepEqual(f.sent.map(item => item.notice), [{
+      title: "May be stuck: Rerun the tests",
+      body: "repo · The run repeated the same bash call 5 times in its last 20 tool calls",
+      tag: `stuck-${card.id}`,
+      url: `/board/${f.repoBoard.id}/card/${card.id}`,
+    }]);
+  } finally { f.close(); }
+});
+
+test("an older push_seen table that rejects 'stuck' is rebuilt and keeps what it had seen", async () => {
+  const f = fixture();
+  try {
+    const db = f.board.sqlite;
+    db.exec("DROP TABLE push_seen; CREATE TABLE push_seen (cardId TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('turn','failed')), PRIMARY KEY (cardId, kind)); INSERT INTO push_seen VALUES ('old', 'turn');");
+    new PushNotifications(f.board, db, f.dir, async () => {});
+    db.prepare("INSERT INTO push_seen (cardId, kind) VALUES ('new', 'stuck')").run();
+    assert.deepEqual(db.prepare("SELECT cardId, kind FROM push_seen ORDER BY cardId").all().map(row => ({ ...row })), [{ cardId: "new", kind: "stuck" }, { cardId: "old", kind: "turn" }]);
+  } finally { f.close(); }
+});

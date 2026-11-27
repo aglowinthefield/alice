@@ -6,7 +6,8 @@ import { isSentinelJob, reviewActionLabels, type Board, type Card } from "./boar
 import { isStaleReview, reviewAgeDays } from "../src/stale-review.js";
 
 // Web Push: browsers that turned notifications on in Settings get one when a card becomes your turn (in Review, with
-// nothing else, such as the agent reviewer or GitHub CI, still holding it) or fails, even with no Alice tab open.
+// nothing else, such as the agent reviewer or GitHub CI, still holding it), fails, or its run may be stuck (see
+// server/stuck.ts), even with no Alice tab open.
 // A timer compares the cards against the set it last saw, which is stored, so a restart neither repeats nor drops
 // notifications and turning them on does not replay cards that already needed you.
 // Once a day at most, and only when some Review card has gone stale (see src/stale-review.ts), one digest lists the
@@ -14,7 +15,7 @@ import { isStaleReview, reviewAgeDays } from "../src/stale-review.js";
 
 export type PushSubscriptionInput = { endpoint: string; keys: { p256dh: string; auth: string } };
 export type Notice = { title: string; body: string; tag: string; url: string };
-type Kind = "turn" | "failed";
+type Kind = "turn" | "failed" | "stuck";
 /** Sends one notice to one subscription; rejects with a `statusCode` of 404 or 410 when the subscription is gone. */
 export type Send = (subscription: PushSubscriptionInput, notice: Notice, keys: VapidKeys) => Promise<void>;
 export type VapidKeys = { publicKey: string; privateKey: string };
@@ -34,8 +35,18 @@ export class PushNotifications {
   constructor(private board: Board, private db: DatabaseSync, private dataDir: string, private send: Send = sendWebPush, private clock: () => number = Date.now) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, createdAt TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS push_seen (cardId TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('turn','failed')), PRIMARY KEY (cardId, kind));
+      CREATE TABLE IF NOT EXISTS push_seen (cardId TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('turn','failed','stuck')), PRIMARY KEY (cardId, kind));
       CREATE TABLE IF NOT EXISTS push_digest (id INTEGER PRIMARY KEY CHECK(id=1), sentAt TEXT NOT NULL);
+    `);
+    // Older tables reject 'stuck'. SQLite cannot alter a CHECK, so rebuild the table; it has only these two columns.
+    const seenSchema = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='push_seen'").get() as { sql: string }).sql;
+    if (!seenSchema.includes("'stuck'")) db.exec(`
+      BEGIN;
+      CREATE TABLE push_seen_new (cardId TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('turn','failed','stuck')), PRIMARY KEY (cardId, kind));
+      INSERT INTO push_seen_new SELECT cardId, kind FROM push_seen;
+      DROP TABLE push_seen;
+      ALTER TABLE push_seen_new RENAME TO push_seen;
+      COMMIT;
     `);
   }
 
@@ -60,7 +71,7 @@ export class PushNotifications {
 
   stop(): void { if (this.timer) clearInterval(this.timer); }
 
-  /** Notifies every subscription about cards that became your turn or failed since the last tick, then sends the stale digest when due. */
+  /** Notifies every subscription about cards that became your turn, failed or may be stuck since the last tick, then sends the stale digest when due. */
   async tick(): Promise<void> {
     await this.notifyChanges();
     await this.digest();
@@ -111,7 +122,7 @@ export class PushNotifications {
     const now = new Map<string, { card: Card; kind: Kind }>();
     for (const repoBoard of this.board.listBoards()) {
       for (const card of this.board.listCards(repoBoard.repo)) {
-        const kind = card.status === "failed" ? "failed" : card.status === "review" && !card.reviewWait ? "turn" : null;
+        const kind = card.status === "failed" ? "failed" : card.status === "review" && !card.reviewWait ? "turn" : card.status === "running" && card.stuck ? "stuck" : null;
         if (kind) now.set(`${card.id}\t${kind}`, { card, kind });
       }
     }
@@ -132,6 +143,7 @@ export class PushNotifications {
     const boardId = this.board.boardForRepo(card.repo)?.id;
     const url = boardId ? `/board/${encodeURIComponent(boardId)}/card/${encodeURIComponent(card.id)}` : "/";
     const repo = basename(card.repo);
+    if (kind === "stuck") return { title: `May be stuck: ${card.title}`.slice(0, 120), body: `${repo} · The run ${card.stuck ?? "may be going in circles"}`.slice(0, 240), tag: `stuck-${card.id}`, url };
     if (kind === "failed") return { title: `Failed: ${card.title}`.slice(0, 120), body: `${repo} · ${card.failureSummary ?? "The run failed"}`.slice(0, 240), tag: `failed-${card.id}`, url };
     const action = card.reviewAction ? reviewActionLabels[card.reviewAction] : "Ready for your review";
     return { title: `Your turn: ${card.title}`.slice(0, 120), body: `${repo} · ${action}`, tag: `turn-${card.id}`, url };

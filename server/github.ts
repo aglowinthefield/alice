@@ -333,6 +333,11 @@ export class GitHub {
   async createComment(repo: string, number: number, body: string): Promise<string> {
     return (await this.gh(["api", "-X", "POST", `repos/${repo}/issues/${number}/comments`, "-f", `body=${body}`, "--jq", ".id"])).trim();
   }
+  /** A comment's body, or null when it no longer exists (someone deleted it). */
+  async getComment(repo: string, commentId: string): Promise<string | null> {
+    try { return (await this.gh(["api", `repos/${repo}/issues/comments/${commentId}`, "--jq", ".body"])).replace(/\n$/, ""); }
+    catch (error) { if (/HTTP 404/.test((error as Error).message)) return null; throw error; }
+  }
   async editComment(repo: string, commentId: string, body: string): Promise<void> {
     await this.gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`]);
   }
@@ -349,8 +354,9 @@ export class GitHub {
 const aliceIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/alice/main/public/icons/${repoIcons[Math.floor(Math.random() * repoIcons.length)]}.png`;
 
 /**
- * Alice comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
- * reviewers can see what the automation did. A comment that fails to post never blocks the work; it is logged.
+ * Alice posts a new comment on its PRs when a person is needed (a loop cap reached, a request blocked, a fix run
+ * that changed nothing), since a new comment notifies and an edit does not. Routine progress goes on the status comment
+ * (`updatePullRequestStatus`). A comment that fails to post never blocks the work; it is logged.
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
@@ -358,6 +364,57 @@ export async function commentOnPullRequest(github: GitHub, repo: string, number:
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
+const statusStart = (cardId: string) => `<!-- alice-status ${cardId} -->`, statusEnd = "<!-- /alice-status -->";
+const summaryStart = "<!-- alice-summary -->", summaryEnd = "<!-- /alice-summary -->";
+/** A long-lived PR keeps its newest lines; GitHub caps a comment at 65,536 characters. */
+const maxStatusLines = 60;
+const between = (body: string, start: string, end: string) => {
+  const from = body.indexOf(start), to = body.indexOf(end, from + 1);
+  return from < 0 || to < 0 ? undefined : body.slice(from + start.length, to);
+};
+function statusBody(cardId: string, lines: string[], summary: string | undefined): string {
+  return [statusStart(cardId), "Alice's progress on this pull request. Routine steps are added here; anything that needs a person gets its own comment.", "",
+    ...lines.slice(-maxStatusLines), statusEnd,
+    ...(summary ? [`${summaryStart}\n<details><summary>Latest run summary</summary>\n\n${summary}\n\n</details>\n${summaryEnd}`] : []),
+    "", `<img src="${aliceIconUrl()}" width="16" height="16" alt="" /> Posted by Alice`].join("\n");
+}
+/** Where Alice keeps each card's status comment id. `Board` is one. */
+export type StatusCommentStore = { getCard(cardId: string): Pick<Card, "prStatusComment"> | undefined; setPrStatusComment(cardId: string, value: string): void };
+/** Per card, so two updates (a sync pass and a push) never read the same body and drop each other's line, or post two comments. */
+const statusQueues = new Map<string, Promise<void>>();
+
+/**
+ * Routine progress (sent back for CI, conflict repair started, a fix or update pushed) goes on one Alice status
+ * comment per PR, edited in place with a new timeline line each time, so it does not bury human review. Edits notify
+ * nobody, so anything that needs a person goes through `commentOnPullRequest` instead. The comment id is stored on the
+ * card; a comment someone deleted is posted again. `summary` replaces the run summary shown under the timeline. Like
+ * `commentOnPullRequest`, a failure is logged and never blocks the work.
+ */
+export function updatePullRequestStatus(github: GitHub, store: StatusCommentStore, cardId: string, repo: string, number: number | null | undefined, line: string, summary?: string): Promise<void> {
+  if (!number) return Promise.resolve();
+  const next = (statusQueues.get(cardId) ?? Promise.resolve())
+    .then(() => appendStatus(github, store, cardId, repo, number, line, summary))
+    .catch(error => console.error(`Could not update Alice's status comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`));
+  statusQueues.set(cardId, next);
+  void next.then(() => { if (statusQueues.get(cardId) === next) statusQueues.delete(cardId); });
+  return next;
+}
+async function appendStatus(github: GitHub, store: StatusCommentStore, cardId: string, repo: string, number: number, line: string, summary: string | undefined): Promise<void> {
+  const key = `${repo}#${number}:`, stored = store.getCard(cardId)?.prStatusComment;
+  const entry = `- ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC: ${githubMarkdown(line).replace(/\s*\n\s*/g, " ").trim()}`;
+  const id = stored?.startsWith(key) ? stored.slice(key.length) : undefined;
+  if (id) {
+    const body = await github.getComment(repo, id);
+    if (body !== null) {
+      const lines = (between(body, statusStart(cardId), statusEnd) ?? "").split("\n").filter(item => item.startsWith("- "));
+      await github.editComment(repo, id, statusBody(cardId, [...lines, entry], summary ?? between(body, summaryStart, summaryEnd)?.match(/<\/summary>\n\n([\s\S]*)\n\n<\/details>/)?.[1]));
+      return;
+    }
+    console.log(`[status ${repo}#${number}] Alice's status comment ${id} was deleted; posting a new one`);
+  }
+  const created = await github.createComment(repo, number, statusBody(cardId, [entry], summary));
+  store.setPrStatusComment(cardId, `${key}${created}`);
+}
 /** Like `commentOnPullRequest`, but a failure to post is thrown, for comments that must not be lost. */
 export function postPullRequestComment(github: GitHub, repo: string, number: number, body: string): Promise<void> {
   return github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${aliceIconUrl()}" width="16" height="16" alt="" /> Posted by Alice`);
@@ -598,7 +655,7 @@ export class GitHubSync {
     }
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} has ${requests.length} requested change(s) from ${[...new Set(requests.map(item => item.author))].join(", ")}`);
     this.board.recordCommentRequests(card.id, head, JSON.stringify(requests, null, 1), latest);
-    await commentOnPullRequest(this.github, repo, pr.number, `Alice sent this back to its coding agent with ${requests.length === 1 ? "the request" : `the ${requests.length} requested changes`} above. Its changes will wait for the operator's approval before they are pushed here.`);
+    await updatePullRequestStatus(this.github, this.board, card.id, repo, pr.number, `Sent back to the coding agent with ${requests.length === 1 ? "1 requested change" : `${requests.length} requested changes`} from ${[...new Set(requests.map(item => item.author))].join(", ")}. Its changes will wait for the operator's approval before they are pushed here.`);
     return this.startRework(card);
   }
   /**
@@ -649,7 +706,7 @@ export class GitHubSync {
       return said(`The pull request conflicts with main${files.length ? ` in ${files.join(", ")}` : ""}; ${reason}, so a person needs to resolve it.`);
     }
     this.board.recordConflictRepair(card.id, key, head, files, details || "GitHub reports a conflict with main");
-    await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Alice sent it back to its coding agent to merge main in (automatic conflict repair ${card.conflictRepairs + 1} of ${maxConflictRepairs}). The resolution will be pushed here when it's ready.`);
+    await updatePullRequestStatus(this.github, this.board, card.id, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Alice sent it back to its coding agent to merge main in (automatic conflict repair ${card.conflictRepairs + 1} of ${maxConflictRepairs}). The resolution will be pushed here when it's ready.`);
     return this.startRework(card);
   }
   /**
@@ -705,7 +762,7 @@ export class GitHubSync {
     const cancelled = latestChecks(pr).filter(check => outcome(check) === "CANCELLED").map(checkName).filter(Boolean);
     if (cancelled.length) sections.push(`### Not run\nThese checks were cancelled before they finished, so they may hide further failures: ${cancelled.slice(0, 12).join(", ")}. Run the repository's full local verification, not only the checks that failed above, so this round fixes everything.`);
     this.board.recordCiFailure(card.id, head, sections.join("\n\n"));
-    await commentOnPullRequest(this.github, repo, pr.number, `CI failed at ${head.slice(0, 12)}: ${failures.map(check => `\`${checkName(check) || "check"}\``).join(", ")}. Alice sent this back to its coding agent with the failure logs (automatic fix run ${card.ciReworks + 1} of ${maxCiReworks}). The fix will be pushed here when it's ready.`);
+    await updatePullRequestStatus(this.github, this.board, card.id, repo, pr.number, `CI failed at ${head.slice(0, 12)}: ${failures.map(check => `\`${checkName(check) || "check"}\``).join(", ")}. Alice sent this back to its coding agent with the failure logs (automatic fix run ${card.ciReworks + 1} of ${maxCiReworks}). The fix will be pushed here when it's ready.`);
     return this.startRework(card);
   }
   /**

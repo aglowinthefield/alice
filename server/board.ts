@@ -243,7 +243,7 @@ export class Board {
     // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
     // Cards that exist before this column are not new, and a card made in the board UI never is.
     if (!cardColumns.has("unseen")) this.db.exec("ALTER TABLE cards ADD COLUMN unseen INTEGER NOT NULL DEFAULT 0");
-    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT", "prCommentsSeen TEXT", "autoRetries INTEGER NOT NULL DEFAULT 0", "autoRetryAt TEXT"])
+    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT", "prCommentsSeen TEXT", "autoRetries INTEGER NOT NULL DEFAULT 0", "autoRetryAt TEXT", "prStatusComment TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     if (!cardColumns.has("prPushedRunId")) {
       // Before this column, a PR was opened from the latest run unless a CI fix run came after it. When a fix run may
@@ -600,6 +600,10 @@ export class Board {
   /** Approve pushed `runId`'s work to the card's PR. */
   recordPullRequestPush(cardId: string, runId: string): void {
     this.db.prepare("UPDATE cards SET prPushedRunId=? WHERE id=?").run(runId, cardId);
+  }
+  /** Remembers Alice's status comment on the card's PR (`owner/repo#number:commentId`). */
+  setPrStatusComment(cardId: string, value: string): void {
+    this.db.prepare("UPDATE cards SET prStatusComment=? WHERE id=?").run(value, cardId);
   }
   recordPullRequestError(cardId: string, error: string): void {
     this.db.prepare("UPDATE cards SET prError=? WHERE id=?").run(error.slice(0, 4000), cardId);

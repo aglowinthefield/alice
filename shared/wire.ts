@@ -72,6 +72,8 @@ export type CardPullRequest = {
   conflictRepairs: number;
   conflictRepairKey: string | null;
   prCommentsSeen: string | null;
+  /** Alice's status comment on the card's PR, as `owner/repo#number:commentId`; see `updatePullRequestStatus`. */
+  prStatusComment: string | null;
 };
 
 /**

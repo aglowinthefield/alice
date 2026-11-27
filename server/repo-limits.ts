@@ -1,3 +1,5 @@
+import { availableParallelism } from "node:os";
+
 /**
  * Every limit on what a board may start, decided here. Call sites ask; they do not compare numbers themselves.
  *
@@ -15,11 +17,11 @@ export const loopGuards = {
   reviewerSendBacks: 2,
   /** Refused commit or pre-push hooks sent back to the agent in a row. */
   hookSendBacks: 2,
-  /** Runs Bakery starts to fix a card's failing CI. */
+  /** Runs Alice starts to fix a card's failing CI. */
   ciFixRuns: 3,
-  /** Runs Bakery starts to repair a card's pull request conflicting with main. */
+  /** Runs Alice starts to repair a card's pull request conflicting with main. */
   conflictRepairs: 3,
-  /** Runs of one card Bakery pushes to open its pull request without Approve. */
+  /** Runs of one card Alice pushes to open its pull request without Approve. */
   autoPullRequestPushes: 3,
   /** Minutes before each automatic retry of a temporary provider failure; one entry per retry. */
   autoRetryDelaysMinutes: [1, 5, 15],
@@ -66,6 +68,21 @@ export function budgetReached(board: LimitSettings, cost24h: number): boolean {
   return costBudget !== null && cost24h >= costBudget;
 }
 
+/**
+ * Machine capacity: agents (card runs plus agent reviews) at once across every board. Each one ends with the
+ * repository's tests, often headless browsers, so boards that are each within their own concurrency can still
+ * swamp the machine together. `setting` is the stored value; 0 means automatic, a quarter of the CPU cores.
+ */
+export function machineAgentLimit(setting: number, cores = availableParallelism()): number {
+  return setting > 0 ? setting : Math.max(2, Math.floor(cores / 4));
+}
+/** The most agents a person may allow at once. */
+export const maxMachineAgents = 32;
+/** Whether automatic work must wait for an agent slot. A run a person starts counts but is never refused. */
+export function atMachineCapacity(setting: number, active: number): boolean {
+  return active >= machineAgentLimit(setting);
+}
+
 /** Whether the board already runs as many cards as it may. */
 export function atRunCapacity(board: LimitSettings, running: number): boolean {
   return running >= board.pickupConcurrency;
@@ -80,7 +97,9 @@ export function atReviewCapacity(board: LimitSettings, reviewing: number): boole
  * Why automatic pickup may not start another card on this board right now, or null when it may. `wait` means a slot
  * frees by itself (a run finishes, the 24-hour window moves); `budget` means spend has to age out or the budget rise.
  */
-export function autoStartRefusal(board: LimitSettings, usage: { running: number; starts: number; cost24h: number }): { kind: "capacity" | "daily" | "budget"; reason: string } | null {
+export function autoStartRefusal(board: LimitSettings, usage: { running: number; starts: number; cost24h: number; machine?: { setting: number; active: number } }): { kind: "machine" | "capacity" | "daily" | "budget"; reason: string } | null {
+  if (usage.machine && atMachineCapacity(usage.machine.setting, usage.machine.active))
+    return { kind: "machine", reason: `Alice is running ${usage.machine.active} agents, its limit across all boards` };
   if (atRunCapacity(board, usage.running)) return { kind: "capacity", reason: `at its ${board.pickupConcurrency}-run concurrency limit` };
   if (dailyStartsReached(board, usage.starts)) return { kind: "daily", reason: `used its ${board.pickupDailyLimit} automatic starts for the last 24 hours` };
   if (budgetReached(board, usage.cost24h)) return { kind: "budget", reason: "reached its daily cost budget" };

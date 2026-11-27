@@ -4,7 +4,7 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 // The browser half of Web Push. The push service itself is out of reach in a test, so the service worker container
-// and push manager are stand-ins; the subscription Bakery saves and the card a clicked notification opens are real.
+// and push manager are stand-ins; the subscription Alice saves and the card a clicked notification opens are real.
 test("Settings subscribes this browser to push notifications, and a clicked notification opens its card", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();

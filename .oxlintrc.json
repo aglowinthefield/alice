@@ -1,6 +1,13 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc", "react", "import", "node"],
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "react",
+    "import",
+    "node"
+  ],
   "categories": {
     "correctness": "error"
   },
@@ -15,5 +22,80 @@
   "env": {
     "builtin": true
   },
-  "ignorePatterns": ["dist/**", "src-tauri/target/**", ".worktrees/**"]
+  "ignorePatterns": [
+    "dist/**",
+    "src-tauri/target/**",
+    ".worktrees/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "src/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/server/*",
+                  "**/server"
+                ],
+                "message": "The browser bundle must not pull in server code. Move what both sides need into shared/."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "scripts/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/server/*",
+                  "**/server",
+                  "!**/server/data-dir.ts",
+                  "!**/server/platform.ts"
+                ],
+                "message": "The CLI must not pull in server code. Move what both sides need into shared/. Only server/data-dir.ts, which says where the board's data lives, and server/platform.ts, whose command() gives the TUI's openUrl the same per-OS opener the server uses, are allowed."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "shared/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/server/*",
+                  "**/server"
+                ],
+                "message": "The browser bundle and the CLI must not pull in server code. Move what both sides need into shared/."
+              },
+              {
+                "regex": "^node:",
+                "message": "shared/ runs in the browser too, so it cannot use Node built-ins."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

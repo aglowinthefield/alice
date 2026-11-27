@@ -27,7 +27,7 @@ import {
 } from "./review-patch.js";
 
 type DiffStyle = "unified" | "split";
-const DIFF_STYLE_KEY = "bakery-diff-style";
+const DIFF_STYLE_KEY = "alice-diff-style";
 function initialDiffStyle(): DiffStyle {
   try {
     return localStorage.getItem(DIFF_STYLE_KEY) === "split"
@@ -480,7 +480,7 @@ function useThemeType(): "light" | "dark" {
   return type;
 }
 // Pierre renders inside shadow DOM; CSS variables cross that boundary, so the diff
-// follows Bakery's palette instead of the library's default colors.
+// follows Alice's palette instead of the library's default colors.
 const diffFont = {
   "--diffs-font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
   "--diffs-header-font-family": "inherit",
@@ -536,9 +536,9 @@ function DiffPatch({
   const select = useRef(onSelect);
   select.current = onSelect;
   const commentable = onSelect !== undefined;
-  // Only the Bakery theme repaints the diff with Bakery's surface; other themes
+  // Only the Alice theme repaints the diff with Alice's surface; other themes
   // keep their own background and add/remove colors.
-  const bakerySurface = diffTheme === "bakery";
+  const aliceSurface = diffTheme === "alice";
   const options = useMemo<FileDiffOptions<Note, undefined>>(
     () => ({
       theme: {
@@ -552,7 +552,7 @@ function DiffPatch({
       lineDiffType: "word-alt",
       overflow: "scroll",
       disableFileHeader: true,
-      unsafeCSS: bakerySurface ? diffCSS : undefined,
+      unsafeCSS: aliceSurface ? diffCSS : undefined,
       enableGutterUtility: commentable,
       lineHoverHighlight: commentable ? "both" : "disabled",
       onGutterUtilityClick: (range) => {
@@ -560,7 +560,7 @@ function DiffPatch({
         if (row) select.current?.(row);
       },
     }),
-    [themeType, diffTheme, bakerySurface, diffStyle, commentable, rows],
+    [themeType, diffTheme, aliceSurface, diffStyle, commentable, rows],
   );
   const target = selectedLine ? targetForRow(rows, selectedLine) : null;
   const selectedLines = useMemo(
@@ -592,12 +592,12 @@ function DiffPatch({
   }
   return (
     <div
-      className={`max-h-[32rem] overflow-auto ${bakerySurface ? "bg-[var(--code-background)]" : ""}`}
+      className={`max-h-[32rem] overflow-auto ${aliceSurface ? "bg-[var(--code-background)]" : ""}`}
     >
       <FileDiff<Note>
         fileDiff={fileDiff}
         options={options}
-        style={bakerySurface ? diffSurface : diffFont}
+        style={aliceSurface ? diffSurface : diffFont}
         lineAnnotations={annotations}
         selectedLines={selectedLines}
         renderAnnotation={(annotation) =>
@@ -637,7 +637,7 @@ export function MergeConflictPanel({
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold">Merge blocked by conflicts</h3>
           <p className="mt-1 text-muted-foreground">
-            Bakery has not merged these changes into main. The card worktree
+            Alice has not merged these changes into main. The card worktree
             remains available.
           </p>
         </div>

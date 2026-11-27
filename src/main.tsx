@@ -1,4 +1,5 @@
 import { BrandIcon } from "./brand-icon";
+import { WindowControls } from "./window-controls";
 import { sharedCaches } from "../shared/shared-caches.js";
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -837,6 +838,25 @@ export function App() {
   const [palette, setPalette] = useState<{ open: boolean; cardId?: string }>({
     open: false,
   });
+  // The Windows desktop app has no menu bar, so the page takes Ctrl+, for Settings the way the macOS menu does.
+  useEffect(() => {
+    if (document.documentElement.dataset.desktop !== "windows") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "," ||
+        !event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        location.pathname.startsWith("/settings")
+      )
+        return;
+      event.preventDefault();
+      history.pushState(null, "", "/settings/general");
+      dispatchEvent(new PopStateEvent("popstate"));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
@@ -1796,7 +1816,7 @@ export function App() {
         id: "settings",
         label: "Open settings",
         icon: Settings2,
-        // The desktop app's menu has Cmd+, for this; the web app has no shortcut.
+        // The desktop app takes Cmd/Ctrl+, for this; the web app has no shortcut.
         keys: document.documentElement.dataset.desktop
           ? [modKey, ","]
           : undefined,
@@ -1835,7 +1855,7 @@ export function App() {
   })();
   if (!settings && !error) return null;
   return (
-    <div className="min-h-screen lg:flex">
+    <div className="min-h-[calc(100vh_-_var(--titlebar-h))] lg:flex">
       <UpdateNotice
         onOpenSettings={() => {
           setSettingsSection("updates");
@@ -1852,6 +1872,7 @@ export function App() {
         aria-hidden="true"
         className="desktop-titlebar"
       />
+      <WindowControls />
       <div ref={pageFadeVeil} aria-hidden="true" className="page-fade-veil" />
       <ConfirmHost />
       <ReadyCheckHost />
@@ -1868,7 +1889,7 @@ export function App() {
       <aside
         hidden={sidebarHidden}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
-        className="relative flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-0 lg:h-screen lg:w-[var(--sidebar-w)] lg:shrink-0 lg:border-r lg:border-b-0"
+        className="relative flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-[var(--titlebar-h)] lg:h-[calc(100vh_-_var(--titlebar-h))] lg:w-[var(--sidebar-w)] lg:shrink-0 lg:border-r lg:border-b-0"
       >
         <div
           role="separator"

@@ -183,7 +183,7 @@ export function Visualizer({
         </div>
       ) : (
         <div
-          className="relative h-[calc(100vh-170px)] min-h-[360px] overflow-hidden"
+          className="relative h-[calc(100vh_-_170px_-_var(--titlebar-h))] min-h-[360px] overflow-hidden"
           aria-label="Card dependency graph"
         >
           {!nodes.length ? (

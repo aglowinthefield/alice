@@ -425,11 +425,18 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
 @view-transition { navigation: none; }
 ::view-transition-group(*), ::view-transition-image-pair(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 
-/* The desktop app hides the native title bar on macOS and the page paints under the traffic lights. */
+/* The desktop app hides the native title bar on macOS and Windows, and this strip drags the window. On macOS the page
+   paints under the traffic lights. On Windows the strip is a title bar row of its own, --titlebar-h tall, with the
+   caption buttons from src/window-controls.tsx; full-height layouts subtract it. */
+:root { --titlebar-h: 0px; }
+:root[data-desktop="windows"] { --titlebar-h: 32px; }
+:root[data-desktop="windows"] body { padding-top: var(--titlebar-h); }
 .desktop-titlebar { display: none; }
-:root[data-desktop="macos"] .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }
+:root:is([data-desktop="macos"], [data-desktop="windows"]) .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }
+:root[data-desktop="windows"] .desktop-titlebar { height: var(--titlebar-h); background: var(--sidebar); border-bottom: 1px solid var(--border); }
 :root[data-desktop="macos"] .desktop-sidebar-head { padding-top: 2.5rem; }
 :root[data-desktop="macos"] .desktop-sidebar-toggle { top: 2.25rem; }
+:root[data-desktop="windows"] .desktop-sidebar-toggle { top: calc(var(--titlebar-h) + 0.75rem); }
 
 /* Chat and discussion entries fade in when they mount: opacity only, short, so nothing shifts or reflows. */
 @keyframes chat-entry-in { from { opacity: 0; } }

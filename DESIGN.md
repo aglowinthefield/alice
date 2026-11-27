@@ -144,6 +144,8 @@ Built on Radix primitives and shadcn's new-york style with Lucide icons. Dialogs
 
 The Cmd+K (Ctrl+K) command palette is a dialog with the same motion, placed high on the screen like Spotlight. Its rows are 32px, show the command's own shortcut at the right, and cards appear only once something is typed. A command that needs a card acts on the focused or open card, or asks which card.
 
+The Windows desktop app has no native frame. A 32px title bar row in the sidebar colour holds the caption buttons, drawn with Segoe Fluent Icons glyphs at Windows' own 46 by 32px size. Close turns Windows' red, `#c42b1c`, on hover, the one colour outside the palette.
+
 ## Do's and Don'ts
 
 - Do keep live progress motion: the orbit on a card whose agent is working, the slow breathe on one waiting, the pulse on cards that move along during a drag. These are Alice's spinner equivalents and stop under reduced motion.

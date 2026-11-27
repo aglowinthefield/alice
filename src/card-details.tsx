@@ -364,9 +364,9 @@ export function CardDetails({
           }
           className={
             expandedDetails
-              ? "left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none [--pop-x:0px] [--pop-y:6px]"
+              ? "left-0 top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none [--pop-x:0px] [--pop-y:6px]"
               : side
-                ? "right-0 left-auto top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right [--pop-x:32px] [--pop-y:0px]"
+                ? "right-0 left-auto top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right [--pop-x:32px] [--pop-y:0px]"
                 : "w-[min(94vw,750px)]"
           }
         >

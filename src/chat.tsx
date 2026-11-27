@@ -697,7 +697,7 @@ export function ChatView({
     <CardLinks.Provider value={onOpenCard ? cardLinks : null}>
       <div
         ref={layout}
-        className={`flex h-[calc(100dvh-9rem)] min-h-96 ${collapsed ? "" : "flex-col md:flex-row"}`}
+        className={`flex h-[calc(100dvh_-_9rem_-_var(--titlebar-h))] min-h-96 ${collapsed ? "" : "flex-col md:flex-row"}`}
       >
         <nav
           ref={rail}

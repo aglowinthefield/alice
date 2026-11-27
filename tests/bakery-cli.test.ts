@@ -16,6 +16,48 @@ const cards = [
   { id: "card-old", title: "Old work", body: "", repo: board.repo, status: "archived", attempts: 0, reviewRounds: 0 },
 ];
 
+// Work going on two boards at once, for running: board-one has pickup on, board-two does not.
+const boardTwo = { ...board, id: "board-two", repo: "/tmp/other-project", autoPickupEnabled: false };
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+const activeWork = [
+  { kind: "review", cardId: "card-review", boardId: "board-two", repo: boardTwo.repo, title: "Raise small labels", startedAt: hoursAgo(1), tool: "read", queued: false },
+  { kind: "run", cardId: "card-run", boardId: board.id, repo: board.repo, title: "Fix the login redirect", startedAt: hoursAgo(2), tool: "bash", queued: false },
+  // Server text with a tab, a line break and escape sequences, which must not split a piped record or reach the terminal.
+  { kind: "run", cardId: "card-run2", boardId: "board-two", repo: boardTwo.repo, title: "Tab\there\nand a line", startedAt: hoursAgo(0.75), tool: "\x1b[31medit\x1b[0m", queued: false },
+  { kind: "draft", cardId: "card-draft", boardId: "board-two", repo: boardTwo.repo, title: "Draft me", startedAt: hoursAgo(0.5), tool: "", queued: false },
+  // A PR draft waiting for a drafting slot counts as queued, not running.
+  { kind: "draft", cardId: "card-draft2", boardId: board.id, repo: board.repo, title: "Draft later", startedAt: null, tool: "", queued: true },
+  // A refused push waiting for a run slot: a queued run, though its card is in Review and has no queued start.
+  { kind: "run", cardId: "card-hookfix", boardId: board.id, repo: board.repo, title: "Hook fix", startedAt: null, tool: "", queued: true },
+  // Automatic pull request openings: one going now, one waiting for the scheduler.
+  { kind: "pr", cardId: "card-pr-open", boardId: "board-two", repo: boardTwo.repo, title: "Open me", startedAt: hoursAgo(0.25), tool: "pushing", queued: false },
+  { kind: "pr", cardId: "card-pr-wait", boardId: "board-two", repo: boardTwo.repo, title: "Open me later", startedAt: null, tool: "", queued: true },
+];
+const allCards = [
+  { id: "card-run", title: "Fix the login redirect", repo: board.repo, status: "running", updatedAt: "2026-01-01" },
+  { id: "card-run2", title: "Tab\there\nand a line", repo: boardTwo.repo, status: "running", updatedAt: "2026-01-01" },
+  { id: "card-draft2", title: "Draft later", repo: board.repo, status: "review", reviewWait: "agent_review", reviewQueue: null, updatedAt: "2026-01-01" },
+  // Its start is already queued, so it does not ask anything of you; it counts as a queued run instead.
+  { id: "card-retry", title: "Retry queued", repo: board.repo, status: "failed", startQueued: true, updatedAt: "2026-01-01" },
+  // Review cards Bakery is still handling are not your turn yet; one whose automatic open failed is.
+  { id: "card-hookfix", title: "Hook fix", repo: board.repo, status: "review", reviewAction: "pr_ready", updatedAt: "2026-01-01" },
+  { id: "card-pr-open", title: "Open me", repo: boardTwo.repo, status: "review", reviewAction: "pr_ready", updatedAt: "2026-01-01" },
+  { id: "card-pr-wait", title: "Open me later", repo: boardTwo.repo, status: "review", reviewAction: "pr_ready", updatedAt: "2026-01-01" },
+  { id: "card-pr-failed", title: "Open failed", repo: boardTwo.repo, status: "review", reviewAction: "pr_ready", prError: "could not open", updatedAt: "2026-01-05" },
+  { id: "card-review", title: "Raise small labels", repo: boardTwo.repo, status: "review", reviewWait: "agent_review", reviewQueue: null, updatedAt: "2026-01-01" },
+  { id: "card-draft", title: "Draft me", repo: boardTwo.repo, status: "review", reviewAction: "pr_ready", updatedAt: "2026-01-04" },
+  { id: "card-broken", title: "Broken build", repo: board.repo, status: "failed", failureSummary: "Timed out", updatedAt: "2026-01-02" },
+  { id: "card-approved", title: "Agent liked it", repo: boardTwo.repo, status: "review", reviewAction: "agent_approved", updatedAt: "2026-01-03" },
+  // Queued: Ready under pickup, a start held for a slot, and an agent review in line. The rest wait for nothing.
+  { id: "card-next", title: "Next up", repo: board.repo, status: "ready", updatedAt: "2026-01-01" },
+  { id: "card-slot", title: "Held for a slot", repo: boardTwo.repo, status: "ready", startQueued: true, updatedAt: "2026-01-01" },
+  { id: "card-line", title: "In line", repo: boardTwo.repo, status: "review", reviewWait: "agent_review", reviewQueue: { position: 1, of: 1 }, updatedAt: "2026-01-01" },
+  { id: "card-idle", title: "Ready, pickup off", repo: boardTwo.repo, status: "ready", updatedAt: "2026-01-01" },
+  { id: "card-blocked", title: "Blocked", repo: board.repo, status: "ready", blocked: true, updatedAt: "2026-01-01" },
+  { id: "card-github", title: "On GitHub", repo: board.repo, status: "review", reviewWait: "github", updatedAt: "2026-01-01" },
+  { id: "card-triage", title: "Someday", repo: board.repo, status: "triage", updatedAt: "2026-01-01" },
+];
+
 async function fixture(boards: object[] = [board]) {
   const requests: { method: string; path: string; input: unknown }[] = [];
   const server = createServer(async (req, res) => {
@@ -30,6 +72,8 @@ async function fixture(boards: object[] = [board]) {
     else if (path === "/api/status") data = { version: "9.8.7", commit: "abc1234" };
     else if (path === "/api/settings") data = { maxActiveAgents: req.method === "PATCH" ? (input as { maxActiveAgents: number }).maxActiveAgents : 0, activeAgentsLimit: req.method === "PATCH" && (input as { maxActiveAgents: number }).maxActiveAgents ? (input as { maxActiveAgents: number }).maxActiveAgents : 4, activeAgents: 3 };
     else if (path === "/api/boards") data = boards;
+    else if (path === "/api/running") data = activeWork;
+    else if (path === "/api/cards") data = allCards;
     else if (path === `/api/boards/${board.id}/cards` && req.method === "GET") data = cards;
     else if (/^\/api\/boards\/board-one\/cards\/[\w-]+$/.test(path) && req.method === "PATCH") {
       const card = cards.find(item => item.id === path.split("/")[5]);
@@ -709,9 +753,123 @@ test("cards --all and --watch are cards-only, and --watch needs a terminal", asy
     assert.equal(piped.code, 1);
     assert.match(piped.stderr, /--watch needs a terminal/);
     const elsewhere = await f.run("stats", "--all");
-    assert.match(elsewhere.stderr, /--all and --watch are only valid with cards/);
+    assert.match(elsewhere.stderr, /--all is only valid with cards/);
+    assert.match((await f.run("stats", "--watch")).stderr, /--watch is only valid with cards or running/);
+    assert.match((await f.run("running", "--watch")).stderr, /--watch needs a terminal/);
     const all = await f.run("cards", "--all");
     assert.equal(all.code, 0);
     assert.match(all.stdout, /^card-one\ttriage\t/m, "piped output keeps the tab-separated lines");
   } finally { await f.close(); }
+});
+
+test("running lists work on every board, then what waits for you, then the queue; piped it keeps tab-separated lines", async () => {
+  const f = await fixture([board, boardTwo]);
+  try {
+    const result = await f.run("running");
+    assert.equal(result.code, 0, result.stderr);
+    const lines = result.stdout.trimEnd().split("\n").map(line => line.replace(/\t(\d+h \d+m|\d+m)\t/, "\tELAPSED\t"));
+    assert.deepEqual(lines, [
+      "running\trun\tcard-run\t/tmp/bakery-project\tELAPSED\tbash\tFix the login redirect",
+      "running\treview\tcard-review\t/tmp/other-project\tELAPSED\tread\tRaise small labels",
+      "running\trun\tcard-run2\t/tmp/other-project\tELAPSED\tedit\tTab here and a line",
+      "running\tdraft\tcard-draft\t/tmp/other-project\tELAPSED\t-\tDraft me",
+      "running\tpr\tcard-pr-open\t/tmp/other-project\tELAPSED\tpushing\tOpen me",
+      "waiting\tcard-approved\t/tmp/other-project\tAgent approved\tAgent liked it",
+      "waiting\tcard-draft\t/tmp/other-project\tPR ready\tDraft me",
+      "waiting\tcard-pr-failed\t/tmp/other-project\tPR ready\tOpen failed",
+      "waiting\tcard-broken\t/tmp/bakery-project\tfailed\tBroken build",
+      "queued\t7\truns:4\treviews:1\tdrafts:1\tprs:1",
+    ]);
+    assert.ok(lines.every(line => line.split("\t").length === { running: 7, waiting: 5, queued: 6 }[line.split("\t")[0]]), "every record keeps its column count");
+    assert.doesNotMatch(result.stdout, /\x1b/, "no colour or escape sequences in a pipe");
+    assert.ok(!f.requests.some(item => item.path.includes("/api/boards/")), "one request per source covers every board");
+    const json = JSON.parse((await f.run("running", "--json")).stdout);
+    assert.deepEqual([json.active.length, json.waiting.length, json.queued], [5, 4, { total: 7, runs: 4, reviews: 1, drafts: 1, prs: 1 }]);
+    assert.match((await f.run("running", "--board", "board-one")).stderr, /--board is not valid with running/);
+  } finally { await f.close(); }
+});
+
+test("a server error reaches the terminal on one line, in running and in the watch footer", async () => {
+  const f = await fixture();
+  const nasty = createServer((req, res) => {
+    res.writeHead(req.url === "/api/status" ? 200 : 500, { "content-type": "application/json" });
+    res.end(JSON.stringify(req.url === "/api/status" ? { version: "1" } : { error: "Database locked\n\x1b[2J\x1b]0;owned\x07retry later" }));
+  });
+  await new Promise<void>(resolve => nasty.listen(0, "127.0.0.1", resolve));
+  try {
+    const result = await f.runAt(`http://127.0.0.1:${(nasty.address() as { port: number }).port}`, undefined, "running");
+    assert.equal(result.code, 1);
+    assert.equal(result.stderr, "bakery-cli: Bakery 500: Database locked retry later\n");
+  } finally { await new Promise<void>(resolve => nasty.close(() => resolve())); await f.close(); }
+  const { footer } = await import(new URL("../scripts/cli-style.mjs", import.meta.url).href);
+  const before = process.env.FORCE_COLOR;
+  process.env.FORCE_COLOR = "0";
+  try {
+    assert.equal(footer({ problem: "Bakery 500: Database locked\n\x1b[2Jretry later" }, 40), "Bakery 500: Database locked retry later");
+    assert.equal(footer({ problem: "x".repeat(60) }, 40).length, 40, "clipped to the pane");
+    assert.equal(footer({ updated: "10:00:00", scrolls: true }, 40), "10:00:00 · j/k scroll · q to quit");
+  } finally { if (before === undefined) delete process.env.FORCE_COLOR; else process.env.FORCE_COLOR = before; }
+});
+
+test("watch reads every key in a chunk of terminal input", async () => {
+  const { keyPresses } = await import(new URL("../scripts/cli-style.mjs", import.meta.url).href);
+  assert.deepEqual(keyPresses("jq"), ["j", "q"], "j then q typed together: both count");
+  assert.deepEqual(keyPresses("\x1b[B\x1b[A\x1bOBG\x1b[6~ "), ["\x1b[B", "\x1b[A", "\x1bOB", "G", "\x1b[6~", " "]);
+  assert.deepEqual(keyPresses(Buffer.from("k\x03")), ["k", "\x03"]);
+});
+
+test("running on a terminal fits a 40-column pane: two lines per item, coloured by kind", async () => {
+  const { renderRunning, runningView, runningScreen, elapsed } = await import(new URL("../scripts/cli-board.mjs", import.meta.url).href);
+  const { frame, width } = await import(new URL("../scripts/cli-style.mjs", import.meta.url).href);
+  const now = Date.parse("2026-11-24T10:00:00Z");
+  assert.deepEqual(["2026-11-24T09:59:18Z", "2026-11-24T09:48:00Z", "2026-11-24T08:55:00Z", "soon"].map(at => elapsed(at, now)), ["42s", "12m", "1h 5m", ""]);
+  const at = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
+  const strip = (lines: string[]) => lines.map(line => line.replace(/\x1b\[[\d;]*m/g, ""));
+  const active = [
+    { kind: "run", cardId: "a", repo: "/code/bakery", title: "Live 'what's running' view for a narrow terminal pane", startedAt: at(12), tool: "bash" },
+    { kind: "review", cardId: "b", repo: "/code/silk", title: "Fix flaky login test", startedAt: at(3), tool: "" },
+  ];
+  const cards = [
+    { id: "c", title: "Broken build", repo: "/code/silk", status: "failed", failureSummary: "Timed out: bash ran 31 min", updatedAt: "" },
+    { id: "d", title: "Retrying", repo: "/code/silk", status: "failed", startQueued: true, updatedAt: "" },
+  ];
+  assert.deepEqual(strip(renderRunning(runningView(active, cards, []), { width: 40, now })), [
+    "▍Running 2",
+    "  Live 'what's running' view for a narr…",
+    "  run · bakery · 12m · bash",
+    "  Fix flaky login test",
+    "  review · silk · 3m · starting",
+    "",
+    "▍Waiting for you 1",
+    "  Broken build",
+    "  failed · silk · Timed out: bash ran 3…",
+    "",
+    "▍Queued 1  1 run",
+  ]);
+
+  // A long repository name gives way to the time and the tool; wide characters count two columns; server text cannot
+  // move the cursor or clear the screen.
+  const odd = [
+    { kind: "run", cardId: "e", repo: "/code/an-extremely-long-repository-name-for-sure", title: "日本語のタイトルはとても長いのでここで切れるはずです", startedAt: at(75), tool: "read_many_files" },
+    { kind: "draft", cardId: "f", repo: "/code/x", title: "\x1b[2Jcleared\x1b]0;pwned\x07 and\nmoved", startedAt: at(1), tool: "Model\tis thinking" },
+  ];
+  const lines = renderRunning(runningView(odd, [], []), { width: 40, now });
+  const plain = strip(lines);
+  assert.equal(plain[2], "  run · an-extrem… · 1h 15m · read_many…", "the repository and the tool split what is left");
+  assert.equal(plain[3], "  cleared and moved");
+  assert.equal(plain[4], "  PR draft · x · 1m · Model is thinking");
+  assert.ok(plain.every((line: string) => width(line) <= 40), plain.join("\n"));
+  assert.ok(lines.every((line: string) => !/\x1b(?!\[[\d;]*m)|[\x00-\x09\x0b-\x1a\x7f]/.test(line)), "only the CLI's own colour codes reach the terminal");
+
+  // A short pane keeps the three counts pinned and scrolls the list, down to its last row.
+  const many = Array.from({ length: 5 }, (_, i) => ({ kind: "run", cardId: `r${i}`, repo: "/code/bakery", title: `Run ${i}`, startedAt: at(i), tool: "bash" }));
+  const screen = runningScreen(runningView(many, cards, []), { width: 40, rows: 8, now });
+  assert.deepEqual(strip(screen.head), ["Running 5 · Waiting 1 · Queued 1"]);
+  assert.deepEqual(strip(runningScreen(runningView(active, [], []), { width: 40, rows: 24, now }).head), [], "nothing is pinned when it all fits");
+  const top = frame(screen, 8, 0), bottom = frame(screen, 8, 1000);
+  assert.equal(top.lines.length, 7, "head and body fill the screen above the footer");
+  assert.ok(top.scrolls);
+  assert.equal(bottom.top, screen.body.length - 6, "scrolling stops at the last row");
+  assert.deepEqual(strip(bottom.lines.slice(-1)), ["▍Queued 1  1 run"]);
+  assert.equal(frame(screen, 8, -5).top, 0);
 });

@@ -8,6 +8,7 @@ import { Board, type Card } from "../server/board.js";
 import { loopGuards } from "../server/repo-limits.js";
 import { Worker } from "../server/worker.js";
 import { AutoPullRequest } from "../server/auto-pull-request.js";
+import { runningWork } from "../server/running.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 function fixture(mode: "github-pr" | "local" = "github-pr") {
@@ -72,6 +73,36 @@ test("a failed automatic push is recorded for a person and not retried for the s
     assert.ok(item.board.listCardEvents(card.id).some(event => /GitHub CLI unavailable/.test(event.reason)));
     await item.auto.tick();
     assert.deepEqual(item.opened, []);
+  } finally { item.close(); }
+});
+
+test("a card waiting for or having its pull request opened automatically is not waiting for you; a failed open is", async () => {
+  const { runningView } = await import(new URL("../scripts/cli-board.mjs", import.meta.url).href);
+  const item = fixture();
+  try {
+    item.board.setAutoPullRequest(item.repoBoard.id, true);
+    await later();
+    const card = item.reviewedCard();
+    let release!: () => void;
+    const pushing = new Promise<void>(resolve => { release = resolve; });
+    let reached!: () => void;
+    const reachedPush = new Promise<void>(resolve => { reached = resolve; });
+    const auto = new AutoPullRequest(item.board, () => "f".repeat(64), item.draft, async () => { reached(); await pushing; throw new Error("GitHub CLI unavailable"); });
+    const work = () => runningWork(item.board, { runs: [], reviews: [], drafts: [], opening: auto.inProgress, pullRequests: true });
+    const view = () => runningView(work(), item.board.listCards(), item.board.listBoards());
+    assert.deepEqual(work().map(entry => [entry.kind, entry.cardId, entry.queued]), [["pr", card.id, true]], "queued for the scheduler");
+    assert.deepEqual([view().waiting, view().queued.prs], [[], 1]);
+    const ticking = auto.tick();
+    await reachedPush;
+    assert.deepEqual(work().map(entry => [entry.kind, entry.queued, entry.tool]), [["pr", false, "pushing"]]);
+    assert.deepEqual([view().waiting, view().active.length], [[], 1]);
+    assert.equal(runningWork(item.board, { runs: [], reviews: [], drafts: [{ cardId: card.id, since: 1, step: "Model is thinking" }], opening: auto.inProgress, pullRequests: true })
+      .map(entry => `${entry.kind}:${entry.tool}`).join(), "pr:Model is thinking", "one row per card, showing its draft's step");
+    assert.deepEqual(runningWork(item.board, { runs: [], reviews: [], drafts: [], opening: new Map(), pullRequests: false }), [], "builds without pull requests open none");
+    release();
+    await ticking;
+    assert.deepEqual(work(), [], "a failed open is not retried for this run");
+    assert.deepEqual(view().waiting.map((entry: { id: string }) => entry.id), [card.id], "so the card asks for you again");
   } finally { item.close(); }
 });
 

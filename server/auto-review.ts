@@ -60,13 +60,17 @@ export class ReviewProgress {
   private turns = 0;
   private tools = new Map<string, number>();
   private narration = "";
+  /** The latest tool the reviewer called, or "" before its first. */
+  tool = "";
   constructor(private readonly startedAt: number) {}
   feed(line: string): void {
     let event: { type?: string; toolName?: unknown; message?: { role?: string; content?: unknown } };
     try { event = JSON.parse(line); } catch { return; }
     if (event.type === "turn_start") this.turns++;
-    if (event.type === "tool_execution_start" && typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName))
+    if (event.type === "tool_execution_start" && typeof event.toolName === "string" && /^[a-z][a-z0-9_-]{0,40}$/i.test(event.toolName)) {
+      this.tool = event.toolName;
       this.tools.set(event.toolName, (this.tools.get(event.toolName) ?? 0) + 1);
+    }
     if (event.type === "message_end" && event.message?.role === "assistant" && Array.isArray(event.message.content)) {
       const text = event.message.content.map((part: { type?: string; text?: unknown }) => part?.type === "text" && typeof part.text === "string" ? part.text : "").join("").trim();
       // The final message is the JSON verdict; it is not progress.
@@ -114,7 +118,7 @@ export function reviewerVerdict(stream: string): ReviewerVerdict {
 
 export class AutoReview {
   /** Reviews in progress, by run id. A board runs at most `autoReviewConcurrency` at once; boards do not share a limit. */
-  private activeReviews = new Map<string, { cardId: string; repo: string }>();
+  private activeReviews = new Map<string, { cardId: string; repo: string; tool: string }>();
   private reviewers = new Map<string, ChildProcess>();
   private draining = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -145,6 +149,16 @@ export class AutoReview {
   /** The cards being reviewed right now. */
   get activeCardIds(): string[] { return [...this.activeReviews.values()].map(item => item.cardId); }
   /**
+   * The reviewer agents running now, each with its latest tool ("" before its first). A review is listed only while
+   * its reviewer runs, not while the job drafts or pushes the pull request afterwards; its slot is held all along.
+   */
+  get inProgress(): { runId: string; cardId: string; tool: string }[] {
+    return [...this.reviewers.keys()].flatMap(runId => {
+      const item = this.activeReviews.get(runId);
+      return item ? [{ runId, cardId: item.cardId, tool: item.tool }] : [];
+    });
+  }
+  /**
    * Starts the oldest waiting reviews of each board that has a free slot, and resolves once those it started have
    * finished. Reviews started by an earlier tick keep running and keep their slots.
    */
@@ -166,7 +180,7 @@ export class AutoReview {
       // A review runs the repository's checks like a card run, so it takes a machine-wide agent slot. The rest wait for
       // a later tick. `process` claims the job before its first await, so the count below includes it next time round.
       if (this.board.atMachineCapacity()) break;
-      this.activeReviews.set(candidate.run.id, { cardId: candidate.card.id, repo: candidate.card.repo });
+      this.activeReviews.set(candidate.run.id, { cardId: candidate.card.id, repo: candidate.card.repo, tool: "" });
       started.push(this.process(candidate.card, candidate.run, candidate.board).finally(() => this.activeReviews.delete(candidate.run.id)));
     }
     await Promise.all(started);
@@ -275,6 +289,8 @@ export class AutoReview {
         pending += text;
         const lines = pending.split("\n"); pending = lines.pop() ?? "";
         for (const line of lines) progress.feed(line);
+        const active = this.activeReviews.get(runId);
+        if (active) active.tool = progress.tool;
         // A status line every few seconds is enough for the card to show the reviewer is alive and what it is doing.
         if (Date.now() - reportedAt >= 3000) { reportedAt = Date.now(); this.board.setAutoReviewProgress(runId, progress.text(Date.now())); }
       });

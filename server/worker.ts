@@ -509,12 +509,12 @@ export class Worker {
   get activeCount() { return this.active.size; }
   /** Each card's live activity, or null for a card whose run is not in progress or has not used a tool yet. */
   withLive<T extends { id: string }>(cards: T[]): (T & { live: LiveActivity | null })[] {
-    const byCard = new Map<string, LiveActivity>();
-    for (const [runId, live] of this.live) {
-      const run = this.active.has(runId) ? this.board.getRun(runId) : undefined;
-      if (run) byCard.set(run.cardId, live);
-    }
+    const byCard = new Map(this.activeRuns().flatMap(({ run, live }) => live ? [[run.cardId, live] as const] : []));
     return cards.map(card => ({ ...card, live: byCard.get(card.id) ?? null }));
+  }
+  /** The runs in progress, each with what its agent is doing; `live` is null before its first tool call. */
+  activeRuns(): { run: Run; live: LiveActivity | null }[] {
+    return [...this.active.keys()].flatMap(id => { const run = this.board.getRun(id); return run ? [{ run, live: this.live.get(id) ?? null }] : []; });
   }
   /** Ids of the runs in progress. */
   get activeRunIds(): string[] { return [...this.active.keys()]; }

@@ -15,8 +15,56 @@ export const c = {
 };
 
 const visible = text => text.replace(/\x1b\[[\d;]*m/g, "");
-export const pad = (text, width) => text + " ".repeat(Math.max(1, width - visible(text).length));
+export const pad = (text, cols) => text + " ".repeat(Math.max(1, cols - width(visible(text))));
 export const columns = () => process.stdout.columns || Number(process.env.COLUMNS) || 80;
+
+/**
+ * Text from the server made safe for one terminal line or one tab-separated field: escape sequences are dropped, and
+ * tabs, line breaks and other control characters become single spaces.
+ */
+export const plain = text => String(text ?? "")
+  .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-_])/g, "")
+  .replace(/[\s\x00-\x1f\x7f-\x9f]+/g, " ");
+
+const graphemes = new Intl.Segmenter();
+// East Asian wide and fullwidth characters and emoji take two columns; combining marks and format characters none.
+const wide = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]|\p{Emoji_Presentation}|\p{Extended_Pictographic}\ufe0f/u;
+const cells = grapheme => wide.test(grapheme) ? 2 : /^[\p{M}\p{Cf}]*$/u.test(grapheme) ? 0 : 1;
+/** Terminal columns plain text takes. */
+export function width(text) {
+  let total = 0;
+  for (const { segment } of graphemes.segment(text)) total += cells(segment);
+  return total;
+}
+/** Plain text cut to `cols` terminal columns, ending in … when cut. */
+export function clip(text, cols) {
+  if (width(text) <= cols) return text;
+  let out = "", used = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    if (used + cells(segment) > cols - 1) break;
+    out += segment; used += cells(segment);
+  }
+  return cols > 0 ? `${out}…` : "";
+}
+
+/** The keys in one chunk of terminal input: a fast typist or a pasted "jjq" arrives as one chunk. */
+export const keyPresses = data => String(data).match(/\x1b\[[\d;]*[~A-Za-z]|\x1bO[A-Za-z]|[\s\S]/gu) ?? [];
+
+/** `--watch`'s last line in `cols` columns: the problem from the last fetch, on one line, or when it updated and the keys. */
+export function footer({ problem = "", updated = "", scrolls = false }, cols) {
+  if (problem) return c.bad(clip(plain(problem).trim(), cols));
+  return c.dim(clip(`${scrolls ? updated : `updated ${updated}`} · ${scrolls ? "j/k scroll · " : ""}q to quit`, cols));
+}
+
+/**
+ * The part of a screen of `rows` lines that `--watch` draws above its footer: `head` stays put and `body` scrolls,
+ * starting at `offset` clamped so the last row can be reached but not passed. `top` is the clamped offset.
+ */
+export function frame({ head = [], body }, rows, offset) {
+  const room = Math.max(1, rows - head.length - 1);
+  const top = Math.max(0, Math.min(offset, body.length - room));
+  return { top, scrolls: body.length > room, lines: [...head, ...body.slice(top, top + room)] };
+}
 
 export function wrap(text, width) {
   const lines = [];
@@ -69,7 +117,7 @@ export function layout(lines) {
   const flush = () => {
     const rows = group.map(line => line.split("\t"));
     const widths = [];
-    for (const row of rows) row.slice(0, -1).forEach((text, i) => { widths[i] = Math.max(widths[i] ?? 0, text.length); });
+    for (const row of rows) row.slice(0, -1).forEach((text, i) => { widths[i] = Math.max(widths[i] ?? 0, width(text)); });
     for (const row of rows) out.push(row.map((text, i) => i < row.length - 1 ? pad(cell(text), widths[i] + 2) : cell(text)).join("").trimEnd());
     group = [];
   };

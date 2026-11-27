@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct BakeryApp: App {
+struct AliceApp: App {
     @StateObject private var store = AppStore()
     @Environment(\.scenePhase) private var phase
 

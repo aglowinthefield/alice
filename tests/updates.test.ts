@@ -12,7 +12,7 @@ function git(repo: string, ...args: string[]) {
 
 // A checkout whose origin/main is two commits ahead, as after the update timer fetched.
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-updates-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-updates-"));
   const repo = join(dir, "repo"), remote = join(dir, "remote.git"), other = join(dir, "other");
   mkdirSync(repo);
   git(dir, "init", "-q", "--bare", "-b", "main", remote);
@@ -57,7 +57,7 @@ test("asking to install with nothing pending is refused", () => {
 // origin/main stays put.
 function mergeLocally(repo: string, subject: string) {
   git(repo, "checkout", "-q", "-b", "card");
-  git(repo, "commit", "-q", "--allow-empty", "-m", `Bakery card: ${subject}`);
+  git(repo, "commit", "-q", "--allow-empty", "-m", `Alice card: ${subject}`);
   git(repo, "checkout", "-q", "main");
   git(repo, "merge", "-q", "--no-ff", "-m", `Merge card: ${subject}`, "card");
   git(repo, "branch", "-q", "-D", "card");
@@ -72,7 +72,7 @@ test("lists commits merged into main since startup, after any from origin/main",
     assert.equal(updates.state.commits.length, 0);
     mergeLocally(repo, "Approved card");
     updates.refresh();
-    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Bakery card: Approved card"], "the card once, without its merge commit");
+    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Alice card: Approved card"], "the card once, without its merge commit");
   } finally { close(); }
 });
 
@@ -82,13 +82,29 @@ test("combines origin/main updates with local merges, newest first", () => {
     const updates = new Updates(repo, async () => {}, () => {});
     mergeLocally(repo, "Approved card");
     updates.refresh();
-    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Fix typo", "Add pending updates notice", "Bakery card: Approved card"]);
+    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Fix typo", "Add pending updates notice", "Alice card: Approved card"]);
+  } finally { close(); }
+});
+
+// A card that went through rework lands several commits under the same subject, one per attempt.
+test("lists a card's rework commits once, under the newest", () => {
+  const { repo, close } = fixture();
+  try {
+    git(repo, "merge", "-q", "--ff-only", "origin/main");
+    const updates = new Updates(repo, async () => {}, () => {});
+    git(repo, "checkout", "-q", "-b", "card");
+    for (let attempt = 0; attempt < 3; attempt++) git(repo, "commit", "-q", "--allow-empty", "-m", "Alice card: Reworked card");
+    const newest = git(repo, "rev-parse", "--short", "HEAD");
+    git(repo, "checkout", "-q", "main");
+    git(repo, "merge", "-q", "--no-ff", "-m", "Merge card: Reworked card", "card");
+    updates.refresh();
+    assert.deepEqual(updates.state.commits, [{ sha: newest, subject: "Alice card: Reworked card" }]);
   } finally { close(); }
 });
 
 // The install builds into dist-next so a draining server keeps serving the UI that matches its API.
 test("a restarted server swaps the staged UI build into dist", () => {
-  const root = mkdtempSync(join(tmpdir(), "bakery-ui-"));
+  const root = mkdtempSync(join(tmpdir(), "alice-ui-"));
   try {
     assert.equal(promoteStagedUi(root), false);
     mkdirSync(join(root, "dist", "assets"), { recursive: true });
@@ -106,7 +122,7 @@ test("a restarted server swaps the staged UI build into dist", () => {
 
 // A checkout with a server that imports one src module, and an origin/main one commit ahead touching `path`.
 function changeFixture(path: string) {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-updates-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-updates-"));
   const repo = join(dir, "repo"), remote = join(dir, "remote.git"), other = join(dir, "other");
   mkdirSync(join(repo, "server"), { recursive: true });
   mkdirSync(join(repo, "src"));
@@ -168,9 +184,9 @@ test("a server change after a UI-only install still restarts", async () => {
     const updates = new Updates(repo, fastForward(repo), () => restarted++, () => {});
     await updates.apply();
     writeFileSync(join(repo, "server", "index.ts"), "export {};\n");
-    git(repo, "commit", "-qam", "Bakery card: server change");
+    git(repo, "commit", "-qam", "Alice card: server change");
     updates.refresh();
-    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Bakery card: server change"]);
+    assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Alice card: server change"]);
     assert.equal(updates.state.restart, true);
     await updates.apply();
     assert.equal(restarted, 1);
@@ -178,7 +194,7 @@ test("a server change after a UI-only install still restarts", async () => {
 });
 
 test("a live UI swap keeps the old build's chunks for pages still open on it", () => {
-  const root = mkdtempSync(join(tmpdir(), "bakery-ui-"));
+  const root = mkdtempSync(join(tmpdir(), "alice-ui-"));
   try {
     mkdirSync(join(root, "dist", "assets"), { recursive: true });
     writeFileSync(join(root, "dist", "index.html"), "old");
@@ -224,7 +240,7 @@ test("a failed automatic UI install is not retried until something new lands", a
     assert.equal(attempts, 1);
     assert.match(updates.state.error ?? "", /vite build failed/);
     writeFileSync(join(repo, "src", "style.css"), "body { color: red }\n");
-    git(repo, "commit", "-qam", "Bakery card: another style tweak");
+    git(repo, "commit", "-qam", "Alice card: another style tweak");
     await updates.poll();
     assert.equal(attempts, 2);
   } finally { close(); }

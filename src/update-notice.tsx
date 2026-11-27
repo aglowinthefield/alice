@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "./api.js";
+import { Button } from "./components/ui/button.js";
 
 type WaitingCard = { id: string; title: string; repo: string };
 type Updates = {
@@ -30,6 +32,39 @@ const installHint = (updates: Updates, activeRuns: number) =>
     : activeRuns > 0
       ? `Restarts after ${runs(activeRuns)} finish.`
       : "Nothing is running, so it restarts right away.";
+
+// Every card commit starts "Alice card: " ("Bakery card: " before the rename), which says nothing in a list of mostly card commits.
+const subjectText = (subject: string) => subject.replace(/^(?:Alice|Bakery) card: /, "");
+
+/** The pending commits, newest first: short hash in a fixed column so wrapped subjects line up. */
+function Changelog({
+  commits,
+  testId,
+  className,
+}: {
+  commits: Updates["commits"];
+  testId: string;
+  className?: string;
+}) {
+  return (
+    <ul
+      data-testid={testId}
+      className={`overflow-y-auto overscroll-contain ${className ?? ""}`}
+    >
+      {commits.map((commit) => (
+        <li
+          key={commit.sha}
+          className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 py-1"
+        >
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {commit.sha}
+          </span>
+          <span className="text-foreground">{subjectText(commit.subject)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 // Bottom-left notice for server updates: the pending commits as a changelog with a button to install them, then
 // the wait for active runs to finish before the server restarts to load the new code. A UI-only update needs no
@@ -79,18 +114,18 @@ export function UpdateNotice({
     return (
       <div
         role="status"
-        className="fixed bottom-3 left-3 z-50 lg:bottom-20 max-w-72 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground shadow-md"
+        className="fixed bottom-3 left-3 z-50 lg:bottom-20 flex items-center gap-3 rounded-lg border border-border bg-popover py-1.5 pr-1.5 pl-3 text-sm text-foreground shadow-lg"
       >
-        <span className="mr-2 inline-block size-1.5 rounded-full bg-status-review align-middle" />
-        Bakery's interface was updated.
-        <button
-          type="button"
+        <span className="size-2 shrink-0 rounded-full bg-status-review" />
+        Alice's interface was updated.
+        <Button
+          size="sm"
+          variant="outline"
           data-testid="update-notice-reload"
           onClick={() => window.location.reload()}
-          className="ml-2 cursor-pointer rounded border border-border px-2 py-0.5 text-foreground hover:bg-accent"
         >
           Reload
-        </button>
+        </Button>
       </div>
     );
   }
@@ -115,10 +150,13 @@ export function UpdateNotice({
   const cards = down || !status?.draining ? [] : (status.cards ?? []);
   const expandable = pending || cards.length > 0;
   const error = requestError ?? updates?.error;
+  // Only work in progress loops; a waiting update is a still mark.
+  const busy = down || !!status?.draining || !!updates?.installing;
+  const Chevron = open ? ChevronDown : ChevronUp;
   return (
     <div
       role="status"
-      className="fixed bottom-3 left-3 z-50 lg:bottom-20 max-w-72 rounded-md border border-border bg-card text-xs text-muted-foreground shadow-md"
+      className={`fixed bottom-3 left-3 z-50 lg:bottom-20 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border bg-popover text-sm text-foreground shadow-lg ${open && expandable ? "w-[28rem]" : ""}`}
     >
       <button
         type="button"
@@ -126,10 +164,18 @@ export function UpdateNotice({
         aria-expanded={expandable ? open : undefined}
         disabled={!expandable}
         onClick={() => setOpen((value) => !value)}
-        className="w-full px-3 py-2 text-left enabled:cursor-pointer enabled:hover:text-foreground"
+        className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left enabled:cursor-pointer enabled:hover:bg-accent"
       >
-        <span className="mr-2 inline-block size-1.5 animate-pulse rounded-full bg-status-review align-middle" />
-        {text}
+        <span
+          className={`size-2 shrink-0 rounded-full bg-status-review ${busy ? "motion-safe:animate-pulse" : ""}`}
+        />
+        <span className="flex-1">{text}</span>
+        {expandable && (
+          <Chevron
+            aria-hidden
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+        )}
       </button>
       {pending && error && (
         <p className="border-t border-border px-3 py-2 whitespace-pre-wrap text-destructive">
@@ -141,46 +187,39 @@ export function UpdateNotice({
           data-testid="update-notice-changelog"
           className="border-t border-border"
         >
-          <ul className="max-h-48 overflow-y-auto px-3 py-2">
-            {updates!.commits.map((commit) => (
-              <li key={commit.sha} className="truncate" title={commit.subject}>
-                <span className="mr-2 font-mono opacity-60">{commit.sha}</span>
-                {commit.subject}
-              </li>
-            ))}
-          </ul>
-          <div className="border-t border-border px-3 py-2">
-            <button
-              type="button"
-              onClick={install}
-              className="cursor-pointer rounded border border-border px-2 py-1 text-foreground hover:bg-accent"
-            >
-              {installLabel(updates!)}
-            </button>
-            {onOpenSettings && (
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                className="ml-2 cursor-pointer px-2 py-1 hover:text-foreground"
-              >
-                Details
-              </button>
-            )}
-            <p className="mt-1">{installHint(updates!, status!.activeRuns)}</p>
+          <Changelog
+            commits={updates!.commits}
+            testId="update-notice-changelog-list"
+            className="max-h-[min(20rem,50vh)] px-3 py-2"
+          />
+          <div className="border-t border-border px-3 py-2.5">
+            <p className="mb-2 text-xs text-muted-foreground">
+              {installHint(updates!, status!.activeRuns)}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={install}>
+                {installLabel(updates!)}
+              </Button>
+              {onOpenSettings && (
+                <Button size="sm" variant="ghost" onClick={onOpenSettings}>
+                  Open in settings
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
       {open && cards.length > 0 && (
         <ul
           data-testid="update-notice-cards"
-          className="border-t border-border px-1 py-1"
+          className="border-t border-border p-1"
         >
           {cards.map((card) => (
             <li key={card.id}>
               <button
                 type="button"
                 onClick={() => onOpenCard?.(card)}
-                className="block w-full truncate rounded px-2 py-1 text-left hover:bg-accent hover:text-foreground"
+                className="block w-full truncate rounded-md px-2 py-1.5 text-left hover:bg-accent"
               >
                 {card.title}
               </button>
@@ -213,7 +252,7 @@ export function UpdatesPanel() {
     return (
       <p className="text-sm text-muted-foreground">
         {failed
-          ? "Bakery is not responding. It may be restarting."
+          ? "Alice is not responding. It may be restarting."
           : "Loading…"}
       </p>
     );
@@ -268,26 +307,14 @@ export function UpdatesPanel() {
             <p className="font-medium">
               {commits.length} update{commits.length === 1 ? "" : "s"} available
             </p>
-            <ul
-              data-testid="settings-changelog"
-              className="mt-3 max-h-72 overflow-y-auto"
-            >
-              {commits.map((commit) => (
-                <li key={commit.sha} className="py-0.5">
-                  <span className="mr-2 font-mono text-xs opacity-60">
-                    {commit.sha}
-                  </span>
-                  {commit.subject}
-                </li>
-              ))}
-            </ul>
-            <button
-              type="button"
-              onClick={install}
-              className="mt-4 cursor-pointer rounded border border-border px-3 py-1.5 hover:bg-accent"
-            >
+            <Changelog
+              commits={commits}
+              testId="settings-changelog"
+              className="mt-3 max-h-72"
+            />
+            <Button className="mt-4" size="sm" onClick={install}>
               {installLabel(updates)}
-            </button>
+            </Button>
             <p className="mt-2 text-xs text-muted-foreground">
               {installHint(updates, status.activeRuns)}
             </p>

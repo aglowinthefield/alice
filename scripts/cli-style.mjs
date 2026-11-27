@@ -1,4 +1,4 @@
-// Terminal styling for bakery-cli. Layout and colour only on a terminal, so scripts and agents that pipe the output
+// Terminal styling for the alice CLI. Layout and colour only on a terminal, so scripts and agents that pipe the output
 // keep the plain tab-separated lines. NO_COLOR drops the colour but keeps the layout; FORCE_COLOR wins over both.
 
 const forced = () => process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== "";
@@ -8,8 +8,9 @@ export const useColor = (stream = process.stdout) => forced() ? process.env.FORC
 export const paint = (code, stream = process.stdout) => text => useColor(stream) ? `\x1b[${code}m${text}\x1b[0m` : text;
 
 // The terminal's own 16 colours, so the theme picks shades that read on a light or a dark background.
+// Help is yellow like the crust, with arguments dimmed (house-style references/cli.md).
 export const c = {
-  bold: paint("1"), dim: paint("2"), head: paint("1;35"), cmd: paint("35"), arg: paint("33"),
+  bold: paint("1"), dim: paint("2"), head: paint("1;33"), cmd: paint("33"), arg: paint("2"),
   ok: paint("32"), warn: paint("33"), bad: paint("31"), info: paint("36"), muted: paint("2"),
 };
 

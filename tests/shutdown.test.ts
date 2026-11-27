@@ -20,14 +20,14 @@ async function freePort(): Promise<number> {
 // restarts it, and the tab keeps talking to a server whose database is closed.
 // Windows cannot deliver SIGTERM (child.kill() ends the process outright), so there the same shutdown is asked for over IPC.
 test("a shutdown request exits the server even while a chat event stream is open", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-shutdown-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-shutdown-"));
   const repo = join(home, "code", "alpha"), dataDir = join(home, "data");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_SENTINEL: "0" },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_SENTINEL: "0" },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";

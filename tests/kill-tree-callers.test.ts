@@ -36,7 +36,7 @@ async function checkDescendant(pi: ReturnType<typeof hangingPi>) {
 }
 
 const withDir = async (fn: (dir: string) => Promise<void>) => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-kill-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-kill-"));
   try { await fn(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 };
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "./api.js";
-import type { BakerySettings } from "./model.js";
+import type { AliceSettings } from "./model.js";
 import { settingsSections, type SettingsSection } from "./route.js";
 import { themeFamilies, themeModes, themeParts } from "./themes.js";
 import { UpdatesPanel } from "./update-notice.js";
@@ -24,14 +24,14 @@ const titles: Record<SettingsSection, { label: string; blurb: string }> = {
   },
   server: {
     label: "Server",
-    blurb: "The Bakery server this desktop app is connected to.",
+    blurb: "The Alice server this desktop app is connected to.",
   },
 };
 
 /** The desktop app marks the page; the browser has no server to switch. */
 const inDesktopApp = () => "desktop" in document.documentElement.dataset;
 
-/** A full page: a category sidebar on the left, the open category on the right. Preferences live in Bakery's local database. */
+/** A full page: a category sidebar on the left, the open category on the right. Preferences live in Alice's local database. */
 export function SettingsPage({
   section,
   onSection,
@@ -44,10 +44,10 @@ export function SettingsPage({
 }: {
   section: SettingsSection;
   onSection: (next: SettingsSection) => void;
-  settings: BakerySettings | null;
+  settings: AliceSettings | null;
   busy: boolean;
   error: string;
-  saveSettings: (patch: Partial<BakerySettings>) => void;
+  saveSettings: (patch: Partial<AliceSettings>) => void;
   setError: (message: string) => void;
   modelFields: ReactNode;
 }) {
@@ -132,10 +132,10 @@ export function SettingsPage({
                       Send anonymous usage counts
                       <span className="mt-1 block text-xs text-muted-foreground">
                         Counts of runs, merges, pull requests and errors, tagged
-                        with the Bakery version, your OS and a random install
-                        ID, go to the endpoint this server was set up with. No
-                        code, prompts, card text, paths or hostnames. Every
-                        field is listed in docs/telemetry.md.
+                        with the Alice version, your OS and a random install ID,
+                        go to the endpoint this server was set up with. No code,
+                        prompts, card text, paths or hostnames. Every field is
+                        listed in docs/telemetry.md.
                       </span>
                     </span>
                   </label>
@@ -144,7 +144,52 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">Cards</legend>
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Machine
+                  </legend>
+                  <label className="mt-3 flex items-center gap-2">
+                    Agents at once, all boards
+                    <select
+                      aria-label="Agents at once, all boards"
+                      value={settings?.maxActiveAgents ?? 0}
+                      onChange={(event) =>
+                        saveSettings({
+                          maxActiveAgents: Number(event.target.value),
+                        })
+                      }
+                      className="rounded-md border border-border bg-background px-2 py-1"
+                    >
+                      <option value={0}>
+                        Automatic
+                        {settings?.maxActiveAgents === 0 &&
+                        settings.activeAgentsLimit
+                          ? ` (${settings.activeAgentsLimit})`
+                          : ""}
+                      </option>
+                      {Array.from({ length: 16 }, (_, index) => index + 1).map(
+                        (count) => (
+                          <option key={count} value={count}>
+                            {count}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </label>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Card runs and agent reviews across every board, since each
+                    ends with the repository&apos;s tests. Automatic work waits
+                    for a slot; a run you start yourself always starts.
+                    {typeof settings?.activeAgents === "number" &&
+                      ` ${settings.activeAgents} running now.`}
+                  </p>
+                </fieldset>
+                <fieldset
+                  className="mt-6 border-t border-border pt-5 text-sm"
+                  disabled={!settings || busy}
+                >
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Cards
+                  </legend>
                   <label className="mt-3 flex cursor-pointer items-center gap-2">
                     <input
                       type="checkbox"
@@ -161,7 +206,7 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">
+                  <legend className="float-left mb-3 w-full font-medium">
                     Card details layout
                   </legend>
                   <div className="mt-3 flex gap-5">
@@ -197,7 +242,9 @@ export function SettingsPage({
             {section === "appearance" && (
               <>
                 <fieldset className="text-sm" disabled={!settings || busy}>
-                  <legend className="pt-5 font-medium">Theme</legend>
+                  <legend className="float-left mb-3 w-full pt-5 font-medium">
+                    Theme
+                  </legend>
                   {(() => {
                     const { family, mode } = themeParts(
                       settings?.theme ?? "default",
@@ -262,7 +309,9 @@ export function SettingsPage({
                   className="mt-6 border-t border-border pt-5 text-sm"
                   disabled={!settings || busy}
                 >
-                  <legend className="pt-5 font-medium">Density</legend>
+                  <legend className="float-left mb-3 w-full font-medium">
+                    Density
+                  </legend>
                   <div className="mt-3 flex gap-5">
                     {(["compact", "default", "cozy"] as const).map(
                       (density) => (
@@ -357,7 +406,7 @@ function VersionFooter() {
       data-testid="settings-footer-version"
       className="mt-8 border-t border-border pt-4 text-xs text-muted-foreground"
     >
-      Bakery {info.version}
+      Alice {info.version}
       {info.commit && <span className="ml-2 font-mono">{info.commit}</span>}
     </p>
   );
@@ -390,14 +439,14 @@ function DiscordWebhookField({
         }}
       />
       <span className="mt-1 block text-xs text-muted-foreground">
-        Bakery posts to this channel when a run finishes. Leave empty to turn it
-        off (BAKERY_DISCORD_WEBHOOK_URL is used if set).
+        Alice posts to this channel when a run finishes. Leave empty to turn it
+        off (ALICE_DISCORD_WEBHOOK_URL is used if set).
       </span>
     </label>
   );
 }
 
-/** Web Push for this browser: a notification when a card becomes your turn or fails, with or without a Bakery tab open. */
+/** Web Push for this browser: a notification when a card becomes your turn or fails, with or without a Alice tab open. */
 function PushNotificationsField({
   onError,
 }: {
@@ -440,8 +489,8 @@ function PushNotificationsField({
         Notify this browser when a card needs you
         <span className="mt-1 block text-xs text-muted-foreground">
           {supported
-            ? "When a card becomes your turn in Review or fails, even with no Bakery tab open. Clicking one opens the card. Each browser turns this on separately."
-            : "Notifications need Bakery on HTTPS or localhost. See \u201cHTTPS on a tailnet\u201d in docs/reference.md."}
+            ? "When a card becomes your turn in Review or fails, even with no Alice tab open. Clicking one opens the card. Each browser turns this on separately."
+            : "Notifications need Alice on HTTPS or localhost. See \u201cHTTPS on a tailnet\u201d in docs/reference.md."}
         </span>
       </span>
     </label>

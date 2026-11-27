@@ -27,11 +27,11 @@ function call(port: number, host: string, method = "GET", origin?: string): Prom
 }
 
 async function withServer(env: Record<string, string>, run: (port: number) => Promise<void>) {
-  const home = mkdtempSync(join(tmpdir(), "bakery-remote-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-remote-"));
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), ...env },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ...env },
     stdio: "ignore",
   });
   try {
@@ -44,11 +44,11 @@ async function withServer(env: Record<string, string>, run: (port: number) => Pr
   } finally { child.kill(); }
 }
 
-test("remote hostnames are rejected unless listed in BAKERY_ALLOWED_HOSTS", async () => {
+test("remote hostnames are rejected unless listed in ALICE_ALLOWED_HOSTS", async () => {
   await withServer({}, async port => {
     assert.equal(await call(port, "mochi:4317"), 403);
   });
-  await withServer({ BAKERY_ALLOWED_HOSTS: "mochi, mochi.tail1234.ts.net" }, async port => {
+  await withServer({ ALICE_ALLOWED_HOSTS: "mochi, mochi.tail1234.ts.net" }, async port => {
     assert.equal(await call(port, "mochi:4317"), 200);
     assert.equal(await call(port, "MOCHI.tail1234.ts.net"), 200);
     assert.equal(await call(port, "evil.example"), 403);

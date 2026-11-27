@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./theme-palettes.css";
+@import "./fonts/inter.css";
 /* Density scales Tailwind's spacing unit and type scale together. Every p-*, gap-*, size-* and text-* utility reads these. */
 :root { --density-space: 1; --density-text: 1; }
 :root[data-density="compact"] { --density-space: 0.8; --density-text: 0.93; }
@@ -323,12 +324,16 @@
 * { box-sizing: border-box; }
 .repo-badge { color: var(--repo-color); }
 body { margin: 0; min-width: 320px; background: var(--background); color: var(--foreground); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+/* Settings legends float so a fieldset's top rule runs straight above them; what follows starts below. */
+fieldset > legend + * { clear: both; }
 @layer base { button, input, textarea { font: inherit; } }
 /* Native selects pin the arrow to the edge; draw our own with room on the right. */
 select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-repeat: no-repeat; background-position: right .6rem center; background-size: .7rem; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
 ::selection { background: var(--selection); color: var(--foreground); }
 ::-webkit-scrollbar { height: 8px; width: 8px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 12px; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* The command palette's field is the whole dialog's subject; the dialog's border already shows where typing goes. */
+[data-palette-input]:focus-visible { outline: none; }
 /* Diff and description code syntax follows the active palette; diff line colors still mark additions and removals. */
 :is([data-change], .markdown :where(pre)) :is(.hljs-keyword, .hljs-doctag, .hljs-template-tag, .hljs-type) { color: var(--syntax-keyword); }
 :is([data-change], .markdown :where(pre)) :is(.hljs-title, .hljs-title.class_, .hljs-title.function_) { color: var(--syntax-entity); }
@@ -377,7 +382,7 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
 .markdown input[type="checkbox"] { margin-right: .4em; accent-color: var(--primary); }
 .markdown li:has(> input[type="checkbox"]), .markdown li.task-list-item { list-style: none; }
 /* Card activity: a light travels round the border while an agent works on the card, the border breathes slowly
-   while it waits on something outside Bakery (CI, GitHub), and turns amber when a running agent has gone quiet. */
+   while it waits on something outside Alice (CI, GitHub), and turns amber when a running agent has gone quiet. */
 @property --activity-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
 @keyframes activity-orbit { to { --activity-angle: 360deg; } }
 @keyframes activity-breathe { 50% { border-color: color-mix(in srgb, var(--status-review) 70%, transparent); } }

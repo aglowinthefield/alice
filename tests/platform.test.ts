@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { command, killTree, posixShell } from "../server/platform.js";
 
 function withDir(fn: (dir: string) => void) {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-platform-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-platform-"));
   try {
     fn(dir);
   } finally {

@@ -43,14 +43,14 @@ jobs:
       matrix:
         # Windows runs only on the branch of the card making the suite pass there (1eeec26c), so other PRs aren't sent
         # back for its known failures. Put windows-latest back in the plain list once that card merges.
-        os: ${{ fromJSON(github.head_ref == 'bakery/1eeec26c-f631-4c9c-8e8d-559d80c983dd' && '["ubuntu-latest","macos-latest","windows-latest"]' || needs.plan.outputs.os) }}
+        os: ${{ fromJSON((github.head_ref == 'alice/1eeec26c-f631-4c9c-8e8d-559d80c983dd' || github.head_ref == 'bakery/1eeec26c-f631-4c9c-8e8d-559d80c983dd') && '["ubuntu-latest","macos-latest","windows-latest"]' || needs.plan.outputs.os) }}
     steps:
       # Keep LF line endings on Windows so `oxfmt --check` in the build matches Linux.
       - run: git config --global core.autocrlf false
       # Tests create temporary Git repositories and commit in them.
       - run: |
-          git config --global user.name "Bakery CI"
-          git config --global user.email "ci@bakery.invalid"
+          git config --global user.name "Alice CI"
+          git config --global user.email "ci@alice.invalid"
           git config --global init.defaultBranch main
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

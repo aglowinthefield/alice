@@ -8,7 +8,7 @@ import { Board } from "../server/board.js";
 import { cardHistory } from "../server/card-history.js";
 
 const withBoard = (fn: (board: Board, dir: string) => void) => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try { const board = new Board(join(dir, "board.sqlite")); try { fn(board, dir); } finally { board.close(); } }
   finally { rmSync(dir, { recursive: true, force: true }); }
 };
@@ -38,7 +38,7 @@ test("a failed run records its error, and a status change made outside a named p
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id);
     board.finish(run.id, "failed", "Pi exited (1)");
-    board.noteCard(card.id, "The agent reviewer sent this back, but Bakery could not start the new attempt: limit");
+    board.noteCard(card.id, "The agent reviewer sent this back, but Alice could not start the new attempt: limit");
     const events = board.listCardEvents(card.id);
     assert.equal(events.at(-2)?.reason, "Attempt 1 failed: Pi exited (1)");
     assert.deepEqual([events.at(-1)?.toStatus, events.at(-1)?.reason.slice(0, 20)], [null, "The agent reviewer s"]);

@@ -1,8 +1,13 @@
 import type { SemanticTitleRules } from "./pr-title.js";
 import type { ThemeName } from "./themes.js";
 import type { UsageFields } from "./usage.js";
-import type { AgentModels, ThinkingLevel } from "../server/agent-models.js";
+import type {
+  AgentModels,
+  BoardAgentModels,
+  ThinkingLevel,
+} from "../server/agent-models.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
+import type { RunKind } from "./run-kinds.js";
 
 export type Status =
   | "triage"
@@ -25,13 +30,13 @@ export type Board = {
   integrationConfigured?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
-  /** A sync problem Bakery is retrying (a failed fetch); pickup is not paused. */
+  /** A sync problem Alice is retrying (a failed fetch); pickup is not paused. */
   integrationWarning?: string;
   /** When GitHub sync last completed. */
   integrationSyncedAt?: string | null;
   /** The operator picked the integration mode; detection leaves it alone. */
   integrationChosen?: boolean;
-  /** Whether GitHub main only accepts pull requests; null until Bakery could check. */
+  /** Whether GitHub main only accepts pull requests; null until Alice could check. */
   githubMainProtected?: boolean | null;
   /** What the GitHub main check found, or why it could not run. */
   integrationNote?: string;
@@ -42,6 +47,8 @@ export type Board = {
   autoPullRequestEnabled?: boolean;
   autoReviewEnabled: boolean;
   autoReviewEnabledAt: string | null;
+  /** Spend limits (daily starts, cost budget, review diff caps) apply only when on; off by default. */
+  limitsEnabled?: boolean;
   autoReviewConcurrency?: number;
   autoReviewMaxFiles?: number;
   autoReviewMaxPatchChars?: number;
@@ -55,7 +62,7 @@ export type Board = {
   pickupCostBudget?: number | null;
   cost24h?: number;
   autoPickupBudgetReached?: boolean;
-  agentModels?: AgentModels;
+  agentModels?: BoardAgentModels;
   /** Per status; `review` counts only Review cards that need you, `reviewWaiting` the rest. */
   cardCounts?: Partial<Record<CountKey, number>>;
   /** Cards created outside this UI that the operator has not opened the board to see yet. */
@@ -68,7 +75,7 @@ export type Board = {
 export type AutoReviewJob = {
   cardId: string;
   runId: string;
-  state: "running" | "needs_human" | "merged" | "pull_request";
+  state: "running" | "needs_human" | "approved" | "merged" | "pull_request";
   details: string;
   fingerprint: string;
   startedAt: string;
@@ -81,7 +88,7 @@ export type AutoReviewJob = {
   /** JSON list of `{ path, line?, comment }` the agent reviewer sent the card back with; empty when none. */
   changes: string;
 } & UsageFields;
-export type BakerySettings = {
+export type AliceSettings = {
   confirmRunStart: boolean;
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
@@ -91,7 +98,12 @@ export type BakerySettings = {
   agentModels?: AgentModels;
   discordWebhookUrl?: string;
   telemetryEnabled?: boolean;
-  /** False when the server has no BAKERY_TELEMETRY_ENDPOINT; the toggle is then hidden. */
+  /** Agents at once across every board; 0 means automatic. */
+  maxActiveAgents?: number;
+  /** The limit in force (automatic resolved) and the agents running now. */
+  activeAgentsLimit?: number;
+  activeAgents?: number;
+  /** False when the server has no ALICE_TELEMETRY_ENDPOINT; the toggle is then hidden. */
   telemetryAvailable?: boolean;
 };
 export type ReviewComment = {
@@ -164,6 +176,24 @@ export const priorityTone = (value: number) =>
       : value > 0
         ? "text-amber-400"
         : "text-muted-foreground";
+/**
+ * The search behind the command palette and the TUI's /: an item matches when its label and keywords hold every
+ * word of the query. Labels that start with the first word come first; the rest keep their order.
+ */
+export const searchRank = <T extends { label: string; keywords?: string }>(
+  items: T[],
+  query: string,
+) => {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return items;
+  const found = items.filter((item) => {
+    const text = `${item.label} ${item.keywords ?? ""}`.toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+  const lead = (item: T) =>
+    item.label.toLowerCase().startsWith(terms[0]) ? 0 : 1;
+  return found.sort((a, b) => lead(a) - lead(b));
+};
 // Stable sort: equal priorities keep the server's existing order.
 export const byPriority = <T extends { priority?: number }>(items: T[]) =>
   [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -205,7 +235,8 @@ export type Card = {
   title: string;
   body: string;
   repo: string;
-  source: "manual";
+  /** Where the card came from: ui, cli, plan, follow-up, sentinel, pr-comment, api, an agent name, or manual (unknown, older cards). */
+  source: string;
   idempotencyKey?: string | null;
   /** Set on a job card made by a sentinel: the sentinel, its run, and the finding's stable key. */
   sentinelId?: string | null;
@@ -223,14 +254,16 @@ export type Card = {
   reviewRounds: number;
   runAgent: string;
   reviewAgent: string;
-  /** The latest run ended with a `bakery-plan` block: this card produced a plan, not code. */
+  /** The latest run ended with a `alice-plan` block: this card produced a plan, not code. */
   planOnly?: boolean;
   usageIncomplete?: number;
+  /** Spend on every run after the first attempt; null when there were none. */
+  reworkCost?: number | null;
   /** Cards on the same board that must be Done or archived before this one starts. */
   dependsOn?: string[];
   /** True while any card in dependsOn is not Done or archived. */
   blocked?: boolean;
-  /** A PR link attached by the operator; overrides the bakery/<id> branch lookup. */
+  /** A PR link attached by the operator; overrides the alice/<id> branch lookup. */
   prOverrideUrl?: string | null;
   prNumber?: number | null;
   prUrl?: string | null;
@@ -242,9 +275,9 @@ export type Card = {
    * as of the last fetch. "local" means merged into local main but not pushed.
    */
   originMain?: "pushed" | "local";
-  /** Times Bakery sent this card back because its PR failed CI. */
+  /** Times Alice sent this card back because its PR failed CI. */
   ciReworks?: number;
-  /** Bakery merged this card into local main (local integration), not through a PR. */
+  /** Alice merged this card into local main (local integration), not through a PR. */
   locallyMerged?: boolean;
   /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
   reviewWait?: ReviewWait | null;
@@ -252,8 +285,10 @@ export type Card = {
   reviewQueue?: { position: number; of: number } | null;
   /** On a Review card that is your turn: what the next step is, once the server knows; see `reviewActionLabels`. */
   reviewAction?: ReviewAction | null;
-  /** A start was asked for during a restart drain and runs after the restart. */
+  /** A start is queued: asked for during a restart drain, or refused by the run limit (`startQueuedForSlot`). */
   startQueued?: boolean;
+  /** The queued start waits for a run on the card's board to finish, not for a restart. */
+  startQueuedForSlot?: boolean;
   /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
   attachmentCount?: number;
   /** A Failed card's reason in a few words; the latest attempt's error has the full text. */
@@ -275,11 +310,24 @@ export type CountKey = Status | "reviewWaiting";
 export const countKey = (card: Card): CountKey =>
   card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
-export type ReviewAction = "pr_ready" | "accept_findings";
+/**
+ * `agent_approved`: the agent reviewer approved the latest attempt and only your Approve is left.
+ * `needs_you`: the agent reviewer handed the attempt to you with a finding or a failed check.
+ */
+export type ReviewAction =
+  | "pr_ready"
+  | "accept_findings"
+  | "agent_approved"
+  | "needs_you";
 export const reviewActionLabels: Record<ReviewAction, string> = {
   pr_ready: "PR ready",
   accept_findings: "Accept findings",
+  agent_approved: "Agent approved",
+  needs_you: "Needs you",
 };
+/** An agent reviewer approved the card; it waits only for your Approve, not for you to fix something. */
+export const agentApproved = (card: Card) =>
+  needsYourReview(card) && card.reviewAction === "agent_approved";
 /** The next step on a Review card you can act on, or "" while it is waiting or the step is not known yet. */
 export const reviewActionText = (card: Card): string =>
   needsYourReview(card) && card.reviewAction
@@ -304,7 +352,7 @@ export const needsYourReview = (card: Card) =>
 export const quietAfterMs = 5 * 60_000;
 /**
  * Whether work is happening on the card right now: an agent is `working`, the card is `waiting` on something
- * outside Bakery, or a running agent has gone `quiet`. Null when nothing is in flight.
+ * outside Alice, or a running agent has gone `quiet`. Null when nothing is in flight.
  */
 export function cardActivity(
   card: Card,
@@ -404,6 +452,8 @@ export type Run = {
   failureKind?: string | null;
   /** Id of the failed run whose rejected session this run replaced, or null. */
   recoveryOf?: string | null;
+  /** Why the run happened; see src/run-kinds.ts. */
+  kind?: RunKind;
 } & UsageFields;
 
 /** A file attached to a card, or to one of its discussion messages (`messageId`). */
@@ -527,3 +577,50 @@ export type SentinelOverview = {
   runs: SentinelRun[];
   jobs: Card[];
 };
+
+// What each status asks of you on Today. Statuses not listed (Triage, Ready, Archived) stay on their boards.
+export const needsYouLabels: Partial<Record<Status, string>> = {
+  review: "Review",
+  failed: "Failed",
+  interrupted: "Interrupted",
+};
+export const needsYouStatuses = Object.keys(needsYouLabels) as Status[];
+const oldestFirst = (a: Card, b: Card) =>
+  a.updatedAt.localeCompare(b.updatedAt);
+
+/**
+ * Review cards in the order the queue walks them: the longest-waiting first. Cards an agent, CI or GitHub
+ * still has are left out until they need you.
+ */
+export const reviewOrder = (cards: Card[]) =>
+  cards.filter(needsYourReview).sort(oldestFirst);
+
+/**
+ * Today's lists across every board, for the web page and the terminal alike. `attention` needs you (Review, then
+ * Failed and Interrupted, oldest first); `approved` waits only for your Approve, so it stays out of attention;
+ * `running` is in flight, an agent's review included; `finished` is Done since `since`, newest first.
+ */
+export function todaySections(cards: Card[], since: string) {
+  const attention = cards
+    .filter(
+      (card) =>
+        card.status in needsYouLabels &&
+        (card.status !== "review" ||
+          (needsYourReview(card) && !agentApproved(card))),
+    )
+    .sort(
+      (a, b) =>
+        needsYouStatuses.indexOf(a.status) -
+          needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
+    );
+  const approved = cards.filter(agentApproved).sort(oldestFirst);
+  const running = cards.filter(
+    (card) =>
+      card.status === "running" ||
+      (card.status === "review" && card.reviewWait),
+  );
+  const finished = cards
+    .filter((card) => card.status === "done" && card.updatedAt > since)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { attention, approved, running, finished };
+}

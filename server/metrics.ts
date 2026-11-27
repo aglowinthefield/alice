@@ -1,7 +1,7 @@
 import { parseTime, type StatsInput } from "./stats.js";
 
 /**
- * Prometheus metrics for the operator's own monitoring, served on GET /metrics when BAKERY_METRICS=1.
+ * Prometheus metrics for the operator's own monitoring, served on GET /metrics when ALICE_METRICS=1.
  * Unlike the anonymous telemetry, these carry repository paths and model names, so they never leave the server unless
  * something scrapes it. Every counter is derived from SQLite on each scrape, so totals survive restarts and a run
  * counts once it has finished. docs/metrics.md lists every metric.
@@ -70,22 +70,22 @@ export function renderMetrics(input: StatsInput, live: LiveCounts, version: stri
     { labels: { ...row.labels, le: "+Inf" }, value: row.count },
   ]);
   const families: Family[] = [
-    { name: "bakery_info", help: "Bakery's version.", type: "gauge", samples: [{ labels: { version }, value: 1 }] },
-    { name: "bakery_runs_total", help: "Finished agent runs, by outcome: review, failed or interrupted.", type: "counter", samples: runs.samples },
-    { name: "bakery_run_duration_seconds", help: "Wall time of finished agent runs.", type: "histogram", samples: histogram },
-    { name: "bakery_run_cost_dollars_total", help: "Model spend of finished agent runs, in US dollars.", type: "counter", samples: cost.samples },
-    { name: "bakery_run_tokens_total", help: "Tokens used by finished agent runs.", type: "counter", samples: tokens.samples },
-    { name: "bakery_build_cache_tasks_total", help: "Turbo tasks in finished runs.", type: "counter", samples: cacheTasks.samples },
-    { name: "bakery_build_cache_hits_total", help: "Turbo tasks served from cache in finished runs.", type: "counter", samples: cacheHits.samples },
-    { name: "bakery_build_cache_saved_seconds_total", help: "Build time Turbo's cache saved in finished runs.", type: "counter", samples: cacheSaved.samples },
-    { name: "bakery_agent_reviews_total", help: "Finished agent reviews, by outcome.", type: "counter", samples: reviews.samples },
-    { name: "bakery_agent_review_cost_dollars_total", help: "Model spend of agent reviews, in US dollars.", type: "counter", samples: reviewCost.samples },
-    { name: "bakery_card_review_rounds_total", help: "Times an operator requested changes on a card's run.", type: "counter", samples: reviewRounds.samples },
-    { name: "bakery_card_ci_reworks_total", help: "Times a card went back to its agent to fix CI.", type: "counter", samples: ciReworks.samples },
-    { name: "bakery_cards", help: "Cards per lane.", type: "gauge", samples: cards.samples },
-    { name: "bakery_active_runs", help: "Agent runs going now.", type: "gauge", samples: [{ labels: {}, value: live.runs }] },
-    { name: "bakery_active_agent_reviews", help: "Agent reviews going now.", type: "gauge", samples: [{ labels: {}, value: live.reviews }] },
-    { name: "bakery_active_pull_request_drafts", help: "Pull request drafts going now.", type: "gauge", samples: [{ labels: {}, value: live.pullRequests }] },
+    { name: "alice_info", help: "Alice's version.", type: "gauge", samples: [{ labels: { version }, value: 1 }] },
+    { name: "alice_runs_total", help: "Finished agent runs, by outcome: review, failed or interrupted.", type: "counter", samples: runs.samples },
+    { name: "alice_run_duration_seconds", help: "Wall time of finished agent runs.", type: "histogram", samples: histogram },
+    { name: "alice_run_cost_dollars_total", help: "Model spend of finished agent runs, in US dollars.", type: "counter", samples: cost.samples },
+    { name: "alice_run_tokens_total", help: "Tokens used by finished agent runs.", type: "counter", samples: tokens.samples },
+    { name: "alice_build_cache_tasks_total", help: "Turbo tasks in finished runs.", type: "counter", samples: cacheTasks.samples },
+    { name: "alice_build_cache_hits_total", help: "Turbo tasks served from cache in finished runs.", type: "counter", samples: cacheHits.samples },
+    { name: "alice_build_cache_saved_seconds_total", help: "Build time Turbo's cache saved in finished runs.", type: "counter", samples: cacheSaved.samples },
+    { name: "alice_agent_reviews_total", help: "Finished agent reviews, by outcome.", type: "counter", samples: reviews.samples },
+    { name: "alice_agent_review_cost_dollars_total", help: "Model spend of agent reviews, in US dollars.", type: "counter", samples: reviewCost.samples },
+    { name: "alice_card_review_rounds_total", help: "Times an operator requested changes on a card's run.", type: "counter", samples: reviewRounds.samples },
+    { name: "alice_card_ci_reworks_total", help: "Times a card went back to its agent to fix CI.", type: "counter", samples: ciReworks.samples },
+    { name: "alice_cards", help: "Cards per lane.", type: "gauge", samples: cards.samples },
+    { name: "alice_active_runs", help: "Agent runs going now.", type: "gauge", samples: [{ labels: {}, value: live.runs }] },
+    { name: "alice_active_agent_reviews", help: "Agent reviews going now.", type: "gauge", samples: [{ labels: {}, value: live.reviews }] },
+    { name: "alice_active_pull_request_drafts", help: "Pull request drafts going now.", type: "gauge", samples: [{ labels: {}, value: live.pullRequests }] },
   ];
   return families.map(family => {
     const sampleName = family.type === "histogram" ? `${family.name}_bucket` : family.name;

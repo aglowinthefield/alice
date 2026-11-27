@@ -4,11 +4,11 @@ import type { PrLock } from "./pr-lock.js";
 
 /**
  * What a sentinel watches. `pr-health`: the owner's open PRs that conflict or fail CI, on a timer. `pr-requests`:
- * `/bakery` comments on any open PR. A github-pr board has one of each.
+ * `/alice` comments on any open PR. A github-pr board has one of each.
  */
 export type SentinelKind = "pr-health" | "pr-requests";
 export const sentinelKinds: SentinelKind[] = ["pr-health", "pr-requests"];
-export const sentinelNames: Record<SentinelKind, string> = { "pr-health": "Broken pull requests", "pr-requests": "/bakery requests" };
+export const sentinelNames: Record<SentinelKind, string> = { "pr-health": "Broken pull requests", "pr-requests": "/alice requests" };
 export const defaultSentinelIntervals: Record<SentinelKind, number> = { "pr-health": 5 * 60_000, "pr-requests": 60_000 };
 /**
  * A persistent monitor, not a card: it has no lane or status and is never reviewed or merged. `enabled` false is
@@ -21,7 +21,7 @@ export type SentinelRecord = { id: string; boardId: string; kind: SentinelKind; 
  * so none was made (deduplication). `withdrawn`: the finding went away before its card started.
  */
 export type SentinelFinding = { key: string; cardId: string; outcome: "created" | "open" | "withdrawn" };
-/** One execution of a sentinel. `interrupted` means Bakery stopped while it ran. */
+/** One execution of a sentinel. `interrupted` means Alice stopped while it ran. */
 export type SentinelRun = { id: string; sentinelId: string; status: "running" | "succeeded" | "failed" | "interrupted"; startedAt: string; finishedAt: string | null; findings: SentinelFinding[]; summary: string; error: string | null };
 type SentinelRow = Omit<SentinelRecord, "enabled"> & { enabled: number };
 type RunRow = Omit<SentinelRun, "findings"> & { findings: string };
@@ -51,7 +51,7 @@ export class SentinelStore {
       CREATE INDEX IF NOT EXISTS sentinel_runs_by_sentinel ON sentinel_runs(sentinelId, startedAt);
     `);
     // One store is made per process, so a run still marked running was cut off by a restart.
-    db.prepare("UPDATE sentinel_runs SET status='interrupted', finishedAt=?, error='Bakery stopped during this run' WHERE status='running'").run(new Date().toISOString());
+    db.prepare("UPDATE sentinel_runs SET status='interrupted', finishedAt=?, error='Alice stopped during this run' WHERE status='running'").run(new Date().toISOString());
   }
 
   private toSentinel(row: SentinelRow | undefined): SentinelRecord | undefined { return row && { ...row, enabled: !!row.enabled }; }
@@ -130,7 +130,7 @@ export class SentinelStore {
 
   /**
    * Before sentinel records, a job card was recognised by its idempotency key (`sentinel:` for a broken PR, `request:`
-   * for a `/bakery` comment). This gives each such card its board's sentinel, a fixed legacy run and a finding key, and
+   * for a `/alice` comment). This gives each such card its board's sentinel, a fixed legacy run and a finding key, and
    * changes nothing else: ids, status, attempts, PR locks and any running agent stay as they are, so nothing is started
    * twice. It only touches cards without a sentinel, in one transaction, so re-running it after a crash is harmless.
    */
@@ -185,14 +185,14 @@ export class SentinelStore {
   markReleased(repo: string, prNumber: number, releasedAt: string): void {
     this.db.prepare("UPDATE pr_locks SET releasedAt=?, state='released' WHERE repo=? AND prNumber=?").run(releasedAt, repo, prNumber);
   }
-  /** Comments up to this time have been read for `/bakery` requests; undefined until the repository is first looked at. */
+  /** Comments up to this time have been read for `/alice` requests; undefined until the repository is first looked at. */
   requestCursor(repo: string): string | undefined {
     return (this.db.prepare("SELECT since FROM pr_request_cursor WHERE repo=?").get(repo) as { since: string } | undefined)?.since;
   }
   setRequestCursor(repo: string, since: string): void {
     this.db.prepare("INSERT INTO pr_request_cursor(repo, since) VALUES (?, ?) ON CONFLICT(repo) DO UPDATE SET since=excluded.since").run(repo, since);
   }
-  /** Marks an attempt's card as made for a `/bakery` request, not to fix a broken PR: the sentinel's limits and withdrawal leave it alone. */
+  /** Marks an attempt's card as made for a `/alice` request, not to fix a broken PR: the sentinel's limits and withdrawal leave it alone. */
   markRequestCard(cardId: string): void { this.db.prepare("INSERT OR IGNORE INTO pr_request_cards(cardId) VALUES (?)").run(cardId); }
   isRequestCard(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM pr_request_cards WHERE cardId=?").get(cardId); }
   /** Request cards of this repo with the PR each is for. */

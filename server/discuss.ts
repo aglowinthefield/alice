@@ -10,7 +10,7 @@ const maxHistory = 12;
 export function discussionPrompt(card: Card, run: Run | undefined, history: DiscussionMessage[], message: string, files = ""): string {
   const past = history.slice(-maxHistory).map(item => `${item.role === "user" ? "Operator" : "You"}: ${item.body}`).join("\n\n");
   return [
-    "You are discussing a Bakery card with the operator. This is a conversation about the work, not a work run.",
+    "You are discussing an Alice card with the operator. This is a conversation about the work, not a work run.",
     "Answer questions, explain what was done and why, and suggest next steps. You may read files and run read-only commands to check facts.",
     "Do NOT edit, create or delete files, commit, push, or change the card. If the operator wants changes, tell them to request changes or run the card again.",
     `Card: ${card.title} (status: ${card.status})`,

@@ -38,7 +38,7 @@ test("keyboard shortcuts: n, j/k, ?, cmd+enter", async () => {
   try {
     const page = await browser.newPage();
     await page.addInitScript(() =>
-      localStorage.setItem("bakery-view", "board"),
+      localStorage.setItem("alice-view", "board"),
     );
     let posted: any = null;
     await page.route("**/api/**", async (route) => {

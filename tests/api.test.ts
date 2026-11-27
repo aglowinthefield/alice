@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { request as httpRequest } from "node:http";
@@ -9,6 +9,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyAgentModels } from "../server/agent-models.js";
 
+/**
+ * Resolves once the server answers, and fails at once if it exits first. A cold `tsx` start on a busy CI runner
+ * (macOS, four test files at a time) can take more than 5 seconds, so the bound is a backstop well under the test
+ * timeout, not a speed requirement.
+ */
+async function serverStarted(url: string, child: ChildProcess, output: () => string): Promise<void> {
+  const backstop = Date.now() + 60_000;
+  while (true) {
+    try { await fetch(`${url}/api/boards`); return; }
+    catch {
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Server exited before it started: ${output()}`);
+      if (Date.now() > backstop) throw new Error(`Server did not start within 60 seconds: ${output()}`);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+}
 async function freePort(): Promise<number> {
   const listener = createServer();
   await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
@@ -18,8 +34,16 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
+/** Settings without the machine's live agent count and core-dependent limit, which the agents test checks. */
+function prefs(data: Record<string, unknown>) {
+  const { activeAgents, activeAgentsLimit, ...rest } = data;
+  assert.equal(typeof activeAgents, "number");
+  assert.equal(typeof activeAgentsLimit, "number");
+  return rest;
+}
+
 test("repository boards expand home paths, inherit roots, and isolate cards", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-api-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-api-"));
   const alpha = join(home, "code", "alpha"), beta = join(home, "code", "beta"), gamma = join(home, "code", "gamma");
   mkdirSync(alpha, { recursive: true }); mkdirSync(beta); mkdirSync(gamma);
   mkdirSync(join(home, "code", "alpine"));
@@ -28,7 +52,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port) },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -39,14 +63,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 30_000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     // /api/status reports package.json's version and the short Git commit the server started on.
     const status = (await request("/status")).data;
     assert.equal(status.version, JSON.parse(readFileSync("package.json", "utf8")).version);
@@ -56,7 +73,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     for (const [host, origin, expected] of [
       ["127.0.0.1:4317", "http://127.0.0.1:4317", 200],
       ["localhost:4317", "http://localhost:4317", 200],
-      ["bakery.localhost:49000", "http://bakery.localhost:49000", 200],
+      ["alice.localhost:49000", "http://alice.localhost:49000", 200],
       ["127.0.0.1:4317", "http://127.0.0.1:5173", 200],
       ["127.0.0.1:4317", "http://127.0.0.1:49000", 403],
       ["127.0.0.1:4317", "https://untrusted.example", 403],
@@ -84,7 +101,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     // The Logs view: the server's own output, including a debug line for each failed request.
     assert.equal((await request("/logs?after=x")).status, 400);
     const logs = (await request("/logs")).data as { startedAt: string; entries: { seq: number; level: string; message: string }[] };
-    assert.ok(logs.entries.some(entry => entry.level === "info" && entry.message === `Bakery listening on http://127.0.0.1:${port}`));
+    assert.ok(logs.entries.some(entry => entry.level === "info" && entry.message === `Alice listening on http://127.0.0.1:${port}`));
     assert.ok(logs.entries.some(entry => entry.level === "debug" && entry.message === "GET /api/logs?after=x -> 400: after must be a whole number"));
     assert.deepEqual((await request(`/logs?after=${logs.entries.at(-1)!.seq}`)).data.entries, []);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Fal")).data, ["~/code/alpha/", "~/code/alpine/"]);
@@ -97,7 +114,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha/subfolder")}`)).status, 400);
     assert.equal((await request(`/path-suggestions?path=${"a".repeat(1025)}`)).status, 400);
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
+    assert.deepEqual(prefs((await request("/settings")).data), { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.equal((await request("/settings", "PATCH", { confirmRunStart: "false" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { notifyOnReview: "true" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { discordWebhookUrl: "https://example.com/hook" })).status, 400);
@@ -109,12 +126,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/settings", "PATCH", { density: "spacious" })).status, 400);
     assert.equal((await request("/settings", "PATCH", { density: "compact" })).data.density, "compact");
     assert.equal((await request("/settings", "PATCH", { density: "default" })).data.density, "default");
-    assert.deepEqual((await request("/settings", "PATCH", { confirmRunStart: true })).data, { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { notifyOnReview: true })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "compline" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings", "PATCH", { theme: "light" })).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
-    assert.deepEqual((await request("/settings")).data, { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { confirmRunStart: true })).data), { confirmRunStart: true, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { notifyOnReview: true })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { cardDetailsLayout: "side" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { theme: "compline" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings", "PATCH", { theme: "light" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    assert.deepEqual(prefs((await request("/settings")).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync.native(alpha));
@@ -219,11 +236,23 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Long", body: "", idempotencyKey: "k".repeat(201) })).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Blank", body: "", idempotencyKey: " " })).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Number", body: "", idempotencyKey: 7 })).status, 400);
+    assert.equal(card.source, "api", "a caller that names no source is recorded as api");
+    assert.equal(keyed.data.source, "api");
+    for (const source of ["Hermes", "", "a b", 7, "x".repeat(41)])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Bad", body: "", source })).data.error, /Source must be a lower-case name/);
+    for (const source of ["manual", "plan", "sentinel", "pr-comment"])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Claimed", body: "", source })).data.error, /set by Alice itself/);
     assert.match((await request(`/boards/${first.id}/cards/${card.id}/start`, "POST")).data.error, /Move.*Ready/);
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.deepEqual(await request(`/boards/${first.id}/cards/${card.id}/push-progress`), { status: 200, data: null }, "card details poll push progress");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "running" })).status, 400);
+    // The check the CLI prints before Ready reads the card's current text and never blocks the move itself.
+    const readyCheck = async () => ((await request(`/boards/${first.id}/cards/${card.id}/ready-check`)).data.flags as { rule: string }[]).map(flag => flag.rule);
+    assert.deepEqual(await readyCheck(), ["no-acceptance"]);
+    await request(`/boards/${first.id}/cards/${card.id}`, "PATCH", { title: "Alpha", body: "Verify on a physical iPhone.\n\n## Acceptance\n- It works.", priority: 0 });
+    assert.deepEqual(await readyCheck(), ["person-only"]);
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
+    assert.deepEqual(await readyCheck(), [], "only Triage cards are checked");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "triage" })).data.status, "triage");
     assert.equal((await request(`/boards/${first.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
     assert.equal((await request(`/boards/${first.id}/cards/archive`, "POST", { cardIds: [card.id] })).status, 400);
@@ -262,6 +291,9 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Typed", body: "", origin: "ui" })).data.source, "ui");
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Agent", body: "", source: "hermes" })).data.source, "hermes");
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Follow-up", body: "", source: "follow-up", idempotencyKey: "follow-up:run:0" })).data.source, "follow-up");
   } catch (error) {
     // A reset connection says nothing about why the server went away, so keep what it printed and how it ended.
     throw new Error(`${error instanceof Error ? error.stack : error}\nserver exit=${child.exitCode} signal=${child.signalCode} stderr: ${output}`, { cause: error });
@@ -275,7 +307,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
 });
 
 test("Pi model settings validate per phase and the model list comes from pi --list-models", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-api-models-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-api-models-"));
   const repo = join(home, "repo"), fakePi = join(home, "pi-fake"), calls = join(home, "calls.txt");
   execFileSync("git", ["init", "-q", repo]);
   writeFileSync(fakePi, `#!/bin/sh
@@ -287,7 +319,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -298,14 +330,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 30_000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     writeFileSync(join(home, "fail"), "");
     const failed = await request("/models");
     assert.equal(failed.status, 200);
@@ -329,6 +354,11 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
     assert.deepEqual(updated.data.agentModels, { ...emptyAgentModels(), conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
     assert.deepEqual((await request("/boards")).data.find((item: { id: string }) => item.id === board.id).agentModels, updated.data.agentModels);
     assert.deepEqual((await request("/settings")).data.agentModels, global);
+    assert.equal((await request("/settings", "PATCH", { agentModels: { retry: { model: "anthropic/claude-opus-4-1" } } })).status, 400);
+    const ladder = await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { retry: { model: "anthropic/claude-opus-4-1", thinking: "" } } });
+    assert.equal(ladder.status, 200);
+    assert.deepEqual(ladder.data.agentModels, { ...emptyAgentModels(), retry: { model: "anthropic/claude-opus-4-1", thinking: "" } });
+    assert.equal("retry" in (await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { retry: { model: "", thinking: "" } } })).data.agentModels, false);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
@@ -339,7 +369,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
 });
 
 test("POST start while the server drains answers 202 queued and does not start a run", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-drain-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-drain-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -347,7 +377,7 @@ test("POST start while the server drains answers 202 queued and does not start a
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port) },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
@@ -358,14 +388,7 @@ test("POST start while the server drains answers 202 queued and does not start a
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 30_000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Queued", body: "" })).data;
     assert.equal((await request(`/boards/${board.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
@@ -388,7 +411,7 @@ test("POST start while the server drains answers 202 queued and does not start a
 });
 
 test("card lists report the live tool and turn of a running card, and null once it finishes", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-live-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-live-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -408,7 +431,7 @@ ${event({ type: "agent_settled", aborted: false })}
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -419,14 +442,7 @@ ${event({ type: "agent_settled", aborted: false })}
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 30_000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Live", body: "" })).data;
     const lists = async () => [
@@ -460,7 +476,7 @@ ${event({ type: "agent_settled", aborted: false })}
 });
 
 test("requesting changes starts the next attempt at once and sends the comments to Pi", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-reqchanges-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-reqchanges-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -474,7 +490,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -485,14 +501,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 30_000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Rework", body: "" })).data;
     const base = `/boards/${board.id}/cards/${card.id}`;
@@ -523,7 +532,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
 });
 
 test("requesting changes while the pushed PR waits on GitHub keeps the comments and starts nothing, even during a drain", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-reqwait-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-reqwait-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -534,7 +543,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "", db: DatabaseSync | undefined;
@@ -545,14 +554,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 30_000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const toReview = async (title: string) => {
       const card = (await request(`/boards/${board.id}/cards`, "POST", { title, body: "" })).data;
@@ -566,7 +568,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       }
       return { card, base };
     };
-    db = new DatabaseSync(join(home, "data", "bakery.sqlite"));
+    db = new DatabaseSync(join(home, "data", "alice.sqlite"));
     const first = await toReview("Waiting"), second = await toReview("Draining");
     db!.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
     const requestWhileWaiting = async ({ card, base }: { card: { id: string }; base: string }) => {

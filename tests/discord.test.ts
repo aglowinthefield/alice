@@ -8,7 +8,7 @@ import { Board } from "../server/board.js";
 import { Discord } from "../server/discord.js";
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-discord-")), repo = join(dir, "repo");
+  const dir = mkdtempSync(join(tmpdir(), "alice-discord-")), repo = join(dir, "repo");
   mkdirSync(repo); execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"]);
   const board = new Board(join(dir, "board.sqlite")); board.addRepo(repo);
   const run = (status: "review" | "failed" | "interrupted") => {

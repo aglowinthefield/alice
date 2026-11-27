@@ -1,25 +1,32 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // @ts-expect-error plain .mjs module without types
-import { cardActions, clipAnsi, createTui, keyNames } from "../scripts/cli-tui.mjs";
+import { cardActions, createTui, keyNames } from "../scripts/cli-tui.mjs";
+// @ts-expect-error plain .mjs module without types
+import { width } from "../scripts/cli-screen.mjs";
 
 type Call = [string, string, unknown?];
 const board = { id: "b1", repo: "/repo", integration: "local", autoPickupEnabled: false };
 const card = (id: string, status: string, extra: object = {}) => ({ id: `${id}-0000`, title: `${id} card`, status, attempts: 1, ...extra });
 
-function fixture(cards: object[], options: { board?: object; review?: object; fail?: string; flags?: object[] } = {}) {
+type Options = { board?: object; review?: object; fail?: string; flags?: object[]; columns?: number; rows?: number; boards?: object[]; conflicts?: object[]; byBoard?: Record<string, object[]>; today?: boolean };
+function fixture(cards: object[], options: Options = {}) {
   const calls: Call[] = [];
   const opened: string[] = [];
   const api = async (method: string, path: string, input?: unknown) => {
     calls.push([method, path, input]);
-    if (options.fail && path.endsWith(options.fail)) throw new Error("Bakery 409: Card is already running");
-    if (path.endsWith("/cards")) return cards;
+    if (options.fail && path.endsWith(options.fail)) throw new Error("Alice 409: Card is already running");
+    if (path === "/api/boards") return options.boards ?? {};
+    if (path.endsWith("/conflicts")) return path.startsWith("/api/boards/b1/") ? options.conflicts ?? [] : [];
+    const boardCards = /^\/api\/boards\/([\w-]+)\/cards$/.exec(path);
+    if (boardCards) return options.byBoard?.[boardCards[1]] ?? cards;
+    if (path === "/api/cards") return cards;
     if (path.endsWith("/ready-check") && options.flags) return { flags: options.flags };
     if (path.endsWith("/review")) return options.review ?? { files: [{ path: "a.ts" }], fingerprint: "f".repeat(64) };
-    if (path.endsWith("/runs")) return [{ attempt: 2, status: "failed", agent: "pi", error: "Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout", report: null }];
+    if (path.endsWith("/runs")) return [{ attempt: 2, status: "failed", agent: "pi", error: "Pi exited (143); Alice sent SIGTERM: 60-minute run timeout", report: null }];
     return {};
   };
-  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: 100, rows: 12 }), open: (url: string) => opened.push(url), webUrl: (id: string) => `http://bakery/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
+  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: options.columns ?? 100, rows: options.rows ?? 12 }), open: (url: string) => opened.push(url), today: options.today, webUrl: (id: string, boardId: string) => `http://alice/board/${boardId}/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
   const posts = () => calls.filter(([method]) => method === "POST");
   const screen = () => tui.render().map((line: string) => line.replace(/\x1b\[[\d;?]*[a-zA-Z]/g, "")).join("\n");
   return { tui, calls, posts, opened, screen };
@@ -30,7 +37,8 @@ test("keys split out of one chunk of terminal input", () => {
   assert.deepEqual(keyNames("\x1b[A\x1b[Bq"), ["up", "down", "q"]);
   assert.deepEqual(keyNames("\x1b"), ["escape"]);
   assert.deepEqual(keyNames("\x03"), ["interrupt"]);
-  assert.equal(clipAnsi("\x1b[31mabcdef\x1b[0m", 3), "\x1b[31mabc\x1b[0m");
+  assert.deepEqual(keyNames("\t]"), ["tab", "]"]);
+  assert.deepEqual(keyNames("\x1b[<0;5;3M\x1b[<0;5;3mj"), ["mouse:0:5:3:M", "mouse:0:5:3:m", "j"], "mouse reports split out too");
 });
 
 test("a card offers the web card's actions for its state", () => {
@@ -76,16 +84,12 @@ test("Ready on a flagged card lists the flags and moves only on y", async () => 
   assert.deepEqual(f.posts(), [["POST", "/api/boards/b1/cards/t-0000/status", { status: "ready" }]]);
 });
 
-test("Ready asks only when pickup could start it; Triage and stop go through", async () => {
-  const quiet = fixture([card("t", "triage", { attempts: 0 })]);
-  await quiet.tui.refresh();
-  await quiet.tui.key("r");
-  assert.deepEqual(quiet.posts(), [["POST", "/api/boards/b1/cards/t-0000/status", { status: "ready" }]]);
+test("Ready goes straight through, even with pickup on; stop asks", async () => {
   const pickup = fixture([card("t", "triage", { attempts: 0 })], { board: { autoPickupEnabled: true } });
   await pickup.tui.refresh();
   await pickup.tui.key("r");
-  assert.equal(pickup.posts().length, 0);
-  assert.match(pickup.screen(), /Pickup is on/);
+  assert.deepEqual(pickup.posts(), [["POST", "/api/boards/b1/cards/t-0000/status", { status: "ready" }]]);
+  assert.doesNotMatch(pickup.screen(), /y\/N/);
   const running = fixture([card("run", "running")]);
   await running.tui.refresh();
   await running.tui.key("x");
@@ -108,7 +112,7 @@ test("approve reads the review: findings, a new PR in the browser, an open PR, o
   assert.equal(newPr.posts().length, 0);
   assert.match(newPr.screen(), /Press o to finish it in the browser/);
   await newPr.tui.key("o");
-  assert.deepEqual(newPr.opened, ["http://bakery/card/m-0000"]);
+  assert.deepEqual(newPr.opened, ["http://alice/board/b1/card/m-0000"]);
 
   const openPr = fixture([card("m", "review", { prState: "OPEN", prNumber: 9 })], { board: { integration: "github-pr" } });
   await openPr.tui.refresh();
@@ -130,26 +134,208 @@ test("a refused action shows the server's reason", async () => {
   await f.tui.refresh();
   await f.tui.key("s");
   await f.tui.key("y");
-  assert.match(f.screen(), /Bakery 409: Card is already running/);
+  assert.match(f.screen(), /Alice 409: Card is already running/);
 });
 
-test("the selection scrolls into view, lanes jump, and details show the latest attempt", async () => {
-  const cards = [...Array.from({ length: 15 }, (_, i) => card(`r${String(i).padStart(2, "0")}`, "ready")), card("f", "failed")];
-  const f = fixture(cards);
+test("lanes sit side by side; j and k move within a lane, h and l between lanes", async () => {
+  const cards = [...Array.from({ length: 6 }, (_, i) => card(`r0${i}`, "ready")), card("m", "review"), card("f", "failed")];
+  const f = fixture(cards, { columns: 120, rows: 16 });
   await f.tui.refresh();
-  assert.equal(f.tui.render().length, 12, "the screen fills the terminal exactly");
-  assert.match(f.screen(), /▸ r00-0000/);
-  await f.tui.key("l");
-  assert.match(f.screen(), /▸ f-0000 {2}f card/, "the selected card scrolled into view");
-  await f.tui.key("h");
-  assert.match(f.screen(), /▸ r00-0000/);
+  const lines = f.tui.render();
+  assert.equal(lines.length, 16, "the screen fills the terminal exactly");
+  assert.match(f.screen(), /Ready +6 .*Review +1 .*Failed +1/, "the lanes share one header row");
+  assert.match(f.screen(), /┃ ◎ r00 card/, "the first card is selected");
+  await f.tui.key("j");
+  assert.match(f.screen(), /┃ ◎ r01 card/);
   await f.tui.key("G");
-  await f.tui.key("enter");
-  const details = f.screen();
-  assert.match(details, /f card\nf-0000 · failed/);
-  assert.match(details, /Attempt 2 · failed · pi\nPi exited \(143\); Bakery sent SIGTERM: 60-minute run timeout/);
-  await f.tui.key("escape");
-  assert.match(f.screen(), /▸ f-0000/);
+  assert.match(f.screen(), /↑ \d more[\s\S]*┃ ◎ r05 card/, "the lane scrolls to keep the selected card on screen");
+  await f.tui.key("l");
+  assert.match(f.screen(), /┃ ◉ m card/);
+  await f.tui.key("l");
+  assert.match(f.screen(), /┃ ✗ f card/);
+  await f.tui.key("h");
+  await f.tui.key("h");
+  assert.match(f.screen(), /┃ ◎ r05 card/, "a lane reopens on the card you last had there");
   await f.tui.key("q");
   assert.equal(f.tui.state.quit, true);
+});
+
+test("a tile shows its card's one live fact, and wide titles keep the grid aligned", async () => {
+  const now = Date.parse("2026-11-24T10:00:00Z");
+  const f = fixture([
+    card("run", "running", { live: { tool: "bash", turn: 3, since: new Date(now).toISOString() }, lastActivityAt: new Date(now).toISOString() }),
+    card("w", "ready", { title: "🍰 emoji 🍰 title 漢字", blocked: true, dependsOn: ["run-0000"] }),
+    card("x", "failed", { failureSummary: "Timed out" }),
+  ], { columns: 140 });
+  await f.tui.refresh();
+  assert.match(f.screen(), /bash · turn 3/);
+  assert.match(f.screen(), /waiting on 1/);
+  assert.match(f.screen(), /Timed out/);
+  assert.equal(f.tui.animating(), true, "a running card animates its spinner");
+  for (const line of f.tui.render()) assert.equal(width(line.replace(/\x1b\[[\d;]*m/g, "")), 140, line);
+});
+
+test("a pull request board splits Review like the web board", async () => {
+  const f = fixture([card("a", "review", { reviewWait: "agent_review" }), card("g", "review", { reviewWait: "github" }), card("y", "review")], { board: { integration: "github-pr" }, columns: 160 });
+  await f.tui.refresh();
+  assert.match(f.screen(), /Review +1 .*Agent reviewing +1 .*Waiting on GitHub +1/);
+});
+
+test("enter opens the card as a dialog with its latest attempt; tab shows every attempt", async () => {
+  const f = fixture([card("f", "failed", { body: "Goal: fix it.\n- run `npm test`", attachmentCount: 2 })], { rows: 24 });
+  await f.tui.refresh();
+  await f.tui.key("enter");
+  const overview = f.screen();
+  assert.match(overview, /✗ f card/);
+  assert.match(overview, /• run npm test/, "the body's markdown keeps its bullets");
+  assert.match(overview, /⇩ 2 attachments/);
+  assert.match(overview, /Latest attempt +2 · failed/);
+  assert.match(overview, /Pi exited \(143\); Alice sent SIGTERM: 60-minute run timeout/);
+  await f.tui.key("tab");
+  assert.match(f.screen(), /Attempt 2 · failed · pi/);
+  await f.tui.key("escape");
+  assert.match(f.screen(), /┃ ✗ f card/);
+});
+
+test("/ finds a card by title or id, opens it, and leaves the board on it", async () => {
+  const cards = [card("a", "ready", { title: "Fix the login page" }), card("b", "review", { title: "Add a login audit" }), card("c", "archived", { title: "Old login spike" }), card("d", "triage", { title: "Unrelated" })];
+  const f = fixture(cards, { columns: 120, rows: 20 });
+  await f.tui.refresh();
+  await f.tui.key("/");
+  assert.match(f.screen(), /Type to find a card on this board/);
+  for (const name of "login qx") await f.tui.key(name);
+  assert.match(f.screen(), /No cards match/);
+  for (let i = 0; i < 3; i++) await f.tui.key("backspace");
+  const found = f.screen();
+  assert.match(found, /3 cards/);
+  assert.match(found, /◎ Fix the login page +Ready/);
+  assert.match(found, /· Old login spike +Archive/, "Archive is searched even while its lane is hidden");
+  assert.doesNotMatch(found, /Unrelated card/);
+  await f.tui.key("down");
+  await f.tui.key("down");
+  await f.tui.key("enter");
+  assert.match(f.screen(), /Archive {3}/, "enter opens the card");
+  await f.tui.key("escape");
+  assert.match(f.screen(), /┃ · Old login spike/, "the board shows the Archive lane with the found card selected");
+
+  await f.tui.key("/");
+  for (const name of "b-00") await f.tui.key(name);
+  assert.match(f.screen(), /1 card\b/, "ids match too");
+  await f.tui.key("escape");
+  assert.equal(f.tui.state.mode, "board");
+  assert.equal(f.posts().length, 0);
+});
+
+test("/ on Today finds cards on every board, and keys in the dialog act on the found card", async () => {
+  const boards = [board, { id: "b2", repo: "/code/other", integration: "local" }];
+  const all = [card("mine", "review", { repo: "/repo", updatedAt: "2026-11-24T09:00:00Z" }), card("far", "ready", { repo: "/code/other", title: "Faraway ready card", attempts: 0 })];
+  const f = fixture(all, { boards, today: true, columns: 120, rows: 20 });
+  await f.tui.refresh();
+  await f.tui.key("/");
+  for (const name of "faraway") await f.tui.key(name);
+  assert.match(f.screen(), /Faraway ready card +Ready · other/);
+  await f.tui.key("enter");
+  await f.tui.key("t");
+  assert.deepEqual(f.posts(), [["POST", "/api/boards/b2/cards/far-0000/status", { status: "triage" }]], "t acts on the found card, not Today's selection");
+});
+
+test("a long question wraps instead of losing its y/N", async () => {
+  const f = fixture([card("f", "failed", { title: "A card title long enough that the paid-run question runs past the edge of a narrow terminal" })], { columns: 60 });
+  await f.tui.refresh();
+  await f.tui.key("s");
+  assert.match(f.screen(), /y\/N/);
+});
+
+test("the sidebar lists the boards; a number opens one, and the header shows its spend and conflicts", async () => {
+  const boards = [
+    { ...board, cost24h: 1.5, cardCounts: { review: 2, failed: 1 } },
+    { id: "b2", repo: "/code/other", integration: "local", cost24h: 0.25, cardCounts: { running: 1 } },
+  ];
+  const f = fixture([card("a", "ready")], { boards, conflicts: [{ cardId: "x" }, { cardId: "y" }], byBoard: { b2: [card("z", "triage", { repo: "/code/other" })] }, columns: 150, rows: 14 });
+  await f.tui.refresh();
+  assert.match(f.screen(), /0 Today +3 /, "Today counts what needs you on every board");
+  assert.match(f.screen(), /1 repo +2 /);
+  assert.match(f.screen(), /2 other/);
+  assert.match(f.screen(), /✗ 2 merge conflicts +\$1\.50 in 24h/);
+  await f.tui.key("2");
+  assert.match(f.screen(), /┃ ○ z card/);
+  assert.match(f.screen(), /\$0\.25 in 24h/);
+  assert.doesNotMatch(f.screen(), /merge conflict/, "the conflicts are the board's own");
+  await f.tui.key("b");
+  assert.doesNotMatch(f.screen(), /0 Today/, "b hides the sidebar");
+});
+
+test("Today lists what is running, what needs you and what is approved across boards, and acts on each card's board", async () => {
+  const boards = [board, { id: "b2", repo: "/code/other", integration: "local" }];
+  const all = [
+    card("old", "review", { updatedAt: "2026-11-20T10:00:00Z" }),
+    card("new", "review", { updatedAt: "2026-11-24T09:00:00Z", repo: "/code/other" }),
+    card("burnt", "failed", { updatedAt: "2026-11-19T10:00:00Z", failureSummary: "Timed out" }),
+    card("ok", "review", { reviewAction: "agent_approved", updatedAt: "2026-11-23T10:00:00Z" }),
+    card("run", "running", { updatedAt: "2026-11-24T09:59:00Z" }),
+    card("t", "triage", { updatedAt: "2026-11-24T09:00:00Z" }),
+  ].map(item => ({ repo: "/repo", ...item }));
+  const f = fixture(all, { boards, today: true, columns: 120, rows: 20 });
+  await f.tui.refresh();
+  const lines = f.screen().split("\n").map((line: string) => line.trim());
+  const order = ["Running", "◐ run card", "Needs you", "◉ old card", "◉ new card", "✗ burnt card", "Approved, only your Approve is left", "◉ ok card"];
+  assert.deepEqual(order.map(text => lines.findIndex((line: string) => line.startsWith(text) || line.startsWith(`▸ ${text}`))).every((at, i, list) => at >= 0 && (!i || at > list[i - 1])), true, f.screen());
+  assert.doesNotMatch(f.screen(), /\bt card/, "Triage stays on its board");
+  assert.match(f.screen(), /3 need you/);
+  await f.tui.key("j");
+  await f.tui.key("j");
+  assert.match(f.screen(), /▸ ◉ new card/);
+  await f.tui.key("enter");
+  assert.deepEqual(f.calls.at(-1), ["GET", "/api/boards/b2/cards/new-0000/runs", undefined], "the dialog reads the card's own board");
+  await f.tui.key("escape");
+  await f.tui.key("s");
+  await f.tui.key("y");
+  assert.deepEqual(f.posts(), [["POST", "/api/boards/b2/cards/new-0000/start", undefined]]);
+  await f.tui.key("0");
+  assert.match(f.screen(), /repo +1 triage/, "0 goes back to the board");
+});
+
+/** Presses the left button (or another) on the first place `text` shows on screen. */
+async function click(f: ReturnType<typeof fixture>, text: string, button = 0) {
+  const lines = f.screen().split("\n"), y = lines.findIndex((line: string) => line.includes(text));
+  assert.ok(y >= 0, `"${text}" is not on screen:\n${f.screen()}`);
+  await f.tui.key(`mouse:${button}:${lines[y].indexOf(text) + 1}:${y + 1}:M`);
+}
+
+test("a click selects a card and a second opens it; tabs, outside the dialog, the wheel and footer keys click too", async () => {
+  const f = fixture([card("r00", "ready"), card("r01", "ready"), card("m", "review")], { columns: 120, rows: 18 });
+  await f.tui.refresh();
+  await click(f, "m card");
+  assert.match(f.screen(), /┃ ◉ m card/);
+  assert.equal(f.tui.state.mode, "board", "the first click only selects");
+  await click(f, "m card");
+  assert.equal(f.tui.state.mode, "details");
+  await click(f, "Attempts 1");
+  assert.match(f.screen(), /Attempt 2 · failed · pi/);
+  await f.tui.key("mouse:0:1:1:M");
+  assert.equal(f.tui.state.mode, "board", "a click outside the dialog closes it");
+  await click(f, "r00 card");
+  await click(f, "r00 card", 65);
+  assert.match(f.screen(), /┃ ◎ r01 card/, "the wheel moves down the lane");
+  await click(f, " run again");
+  assert.match(f.screen(), /Start a paid Pi run on “r01 card”/);
+  await f.tui.key("mouse:0:1:1:M");
+  assert.match(f.screen(), /Cancelled/, "a click answers no");
+  assert.equal(f.posts().length, 0);
+  await f.tui.key("mouse:0:1:1:m");
+  assert.match(f.screen(), /Cancelled/, "a release does nothing");
+});
+
+test("the sidebar and Today's rows click", async () => {
+  const boards = [board, { id: "b2", repo: "/code/other", integration: "local" }];
+  const f = fixture([card("a", "review", { repo: "/repo", updatedAt: "2026-11-20T10:00:00Z" }), card("b", "failed", { repo: "/repo", updatedAt: "2026-11-21T10:00:00Z" })], { boards, columns: 150, rows: 16 });
+  await f.tui.refresh();
+  await click(f, "2 other");
+  assert.match(f.screen(), /other +0 triage/);
+  await click(f, "0 Today");
+  assert.match(f.screen(), /Needs you/);
+  await click(f, "b card");
+  assert.match(f.screen(), /▸ ✗ b card/);
+  await click(f, "b card");
+  assert.equal(f.tui.state.mode, "details");
 });

@@ -1,4 +1,4 @@
-// The version this copy of Bakery reports: package.json's version plus the short Git hash when it is a checkout.
+// The version this copy of Alice reports: package.json's version plus the short Git hash when it is a checkout.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -13,7 +13,7 @@ function git(repo: string, ...args: string[]) {
 }
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-origin-main-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-origin-main-"));
   const repo = join(dir, "repo"), remote = join(dir, "remote.git"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(dir, "init", "-q", "--bare", "-b", "main", remote);
@@ -30,7 +30,7 @@ function fixture() {
   const card = board.createCard({ title: "Ship it", body: "", repo });
   board.setStatus(card.id, "ready");
   const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
-  git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+  git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
   board.attach(run.id, process.pid, worktree);
   board.finish(run.id, "review");
   writeFileSync(join(worktree, "README.md"), "original\nreviewed\n");

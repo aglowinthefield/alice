@@ -11,7 +11,7 @@ import { Chats, applyPiEvent, chatSystemPrompt, parseTopic, replyText, topicProm
 import type { ChatPart } from "../server/board.js";
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-chat-"));
   const board = new Board(join(dir, "board.sqlite"));
   const repoBoard = board.addRepo(dir);
   return { dir, board, repoBoard, done: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
@@ -44,8 +44,8 @@ test("the system prompt names the board, its CLI and its cards, busiest first", 
   const { board, repoBoard, dir, done } = fixture();
   try {
     const a = board.createCard({ title: "Alpha", body: "", repo: dir }), b = board.createCard({ title: "Beta", body: "", repo: dir, dependsOn: [a.id] });
-    const prompt = chatSystemPrompt(repoBoard, board.listCards(dir), "node /x/bakery-cli.mjs");
-    for (const text of [repoBoard.id, dir, "node /x/bakery-cli.mjs <command> --board", `${a.id} [triage] Alpha`, `${b.id} [triage] Beta (blocked; after ${a.id})`]) assert.ok(prompt.includes(text), text);
+    const prompt = chatSystemPrompt(repoBoard, board.listCards(dir), "node /x/alice.mjs");
+    for (const text of [repoBoard.id, dir, "node /x/alice.mjs <command> --board", `${a.id} [triage] Alpha`, `${b.id} [triage] Beta (blocked; after ${a.id})`]) assert.ok(prompt.includes(text), text);
   } finally { done(); }
 });
 
@@ -156,7 +156,7 @@ echo '{"type":"agent_settled","aborted":false}'`);
 });
 
 test("chats saved before the picker move to the cheap chat default", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-chat-"));
   try {
     const path = join(dir, "board.sqlite");
     new Board(path).close();
@@ -326,7 +326,7 @@ test("a topic reply is cut to a few plain words", () => {
 });
 
 test("writeTopic asks Pi for one tool-free turn and returns the topic", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-topic-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-topic-"));
   try {
     writeFileSync(join(dir, "reply"), reply("Board cleanup"));
     const pi = fakePi(dir, `echo "$@" > "${dir}/args"\ncat "${dir}/reply"`);
@@ -369,7 +369,7 @@ test("the first message names the chat once, and a failed name is retried on the
 });
 
 test("a database from before topics and unread counts gains them on its chats", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-chat-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-chat-"));
   try {
     const old = new DatabaseSync(join(dir, "board.sqlite"));
     old.exec("CREATE TABLE chats (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, title TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); INSERT INTO chats VALUES ('c1', 'b1', 'Old chat', 't', 't')");
@@ -398,7 +398,7 @@ test("deleting a chat removes its messages and its Pi session file", () => {
 });
 
 test("the API reports each board's unread chat total, and a looking view clears it", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-chat-api-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-chat-api-"));
   const repo = join(home, "repo");
   mkdirSync(repo);
   execFileSync("git", ["init", "-q", repo]);
@@ -409,7 +409,7 @@ test("the API reports each board's unread chat total, and a looking view clears 
   await new Promise<void>(resolve => listener.close(() => resolve()));
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: pi },
+    env: { ...process.env, HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: pi },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";

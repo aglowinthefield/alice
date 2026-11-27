@@ -23,7 +23,7 @@ If Alice binds to another address with `ALICE_HOST`, scrape that address. Its ho
 
 Each scrape reads the runs, agent reviews and cards in Alice's database, so the totals survive restarts. A run counts once it finishes, with its cost, tokens and duration.
 
-Sentinel jobs are left out of the totals, as on the Statistics page, but the gauges of work going now include them. Deleting a card removes its runs from the totals, which Prometheus reads as a counter reset.
+Deleting a card removes its runs from the totals, which Prometheus reads as a counter reset.
 
 ## Every metric
 

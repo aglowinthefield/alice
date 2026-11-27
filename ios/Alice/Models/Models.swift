@@ -49,7 +49,6 @@ struct Card: Codable, Identifiable, Hashable {
     var reviewAgent: String?
     var planOnly: Bool?
     var idempotencyKey: String?
-    var sentinelId: String?
     var dependsOn: [String]?
     var blocked: Bool?
     var prNumber: Int?
@@ -72,7 +71,6 @@ struct Card: Codable, Identifiable, Hashable {
 
     var attemptCount: Int { attempts ?? 0 }
     var needsYourReview: Bool { status == .review && reviewWait == nil }
-    var isSentinelJob: Bool { sentinelId != nil }
     var repoName: String { Repo.name(repo) }
 
     enum Activity { case working, waiting, quiet }

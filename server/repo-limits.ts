@@ -25,9 +25,6 @@ export const loopGuards = {
   autoPullRequestPushes: 3,
   /** Minutes before each automatic retry of a temporary provider failure; one entry per retry. */
   autoRetryDelaysMinutes: [1, 5, 15],
-  /** Sentinel attempts per pull request, and open sentinel cards per board. */
-  sentinelAttempts: 3,
-  openSentinelCards: 5,
   /** A run is stopped after this long. */
   runTimeoutMinutes: 60,
 } as const;

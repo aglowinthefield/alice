@@ -7,7 +7,7 @@ import { parseTime, type StatsInput } from "./stats.js";
  * counts once it has finished. docs/metrics.md lists every metric.
  */
 
-/** One run, agent review or pull request draft going now, sentinel jobs included. `startedAt` is in Unix milliseconds. */
+/** One run, agent review or pull request draft going now. `startedAt` is in Unix milliseconds. */
 export type ActiveWork = { kind: "run" | "agent_review" | "pr_draft"; repo: string; cardId: string; title: string; startedAt: number };
 /** What is going now: the counts behind the `alice_active_*` totals, and each piece of work for the Running now table. */
 export type Live = { runs: number; reviews: number; pullRequests: number; work: ActiveWork[] };

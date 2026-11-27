@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { Board, type Card } from "./board.js";
+import { Board, isSentinelJob, type Card } from "./board.js";
 import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
@@ -58,6 +58,12 @@ function worktreeProblem(facts: WorktreeFacts, repo: string, worktree: string, c
 /** `work` names the reviewed run and its tree. Unlike `fingerprint`, it ignores where local main is. */
 export type ReviewSummary = { fingerprint: string; work: string; paths: string[]; patchChars: number | null; unsupported: boolean };
 export type ReviewDiff = { fingerprint: string; files: { path: string; patch: string }[] };
+/** What Approve all did: the cards it merged in order, the card it stopped at and why, and the cards still in Review. */
+export type ApproveAllResult = {
+  merged: { id: string; title: string }[];
+  stopped: { id: string; title: string; reason: string } | null;
+  remaining: { id: string; title: string }[];
+};
 export class IntegrationConflictError extends Error {
   readonly code = "merge_conflict";
   constructor(readonly cardId: string, readonly files: string[], readonly details: string) {
@@ -840,6 +846,59 @@ export class Integration {
     } finally {
       // Only remove Bakery's temporary integration checkout. Keep the card worktree on every failure.
       try { git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }
+    }
+  }
+
+  /** A local board's agent-approved Review cards, oldest first: the queue Approve all walks, in the Today page's order. */
+  agentApprovedQueue(repo: string): Card[] {
+    return this.board.listCards(repo)
+      .filter(card => card.reviewAction === "agent_approved" && !isSentinelJob(card))
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.id.localeCompare(b.id));
+  }
+
+  private approvingAll = new Set<string>();
+  /**
+   * Approves the agent-approved cards among `cardIds` (the ones the person confirmed) oldest first, through `approve`.
+   * It stops at the first card that conflicts, fails or whose work changed since the agent reviewed it, notes the
+   * reason on that card, and leaves it and every later card in Review. Cards that are not agent-approved are never
+   * touched. It yields between cards so the server keeps answering while a long queue merges.
+   */
+  async approveAgentApproved(repo: string, cardIds: string[]): Promise<ApproveAllResult> {
+    if (this.board.integrationFor(repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve all only merges on local boards");
+    if (this.approvingAll.has(repo)) throw new Error("Approve all is already running on this board");
+    this.approvingAll.add(repo);
+    try {
+      const confirmed = new Set(cardIds);
+      const queue = this.agentApprovedQueue(repo).filter(card => confirmed.has(card.id));
+      const result: ApproveAllResult = { merged: [], stopped: null, remaining: [] };
+      for (const [index, queued] of queue.entries()) {
+        if (index) await new Promise(resolve => setImmediate(resolve));
+        const reason = this.approveIfStillReviewed(queued.id);
+        if (reason === null) { result.merged.push({ id: queued.id, title: queued.title }); continue; }
+        this.board.noteCard(queued.id, `Approve all stopped at this card and left it in Review: ${reason}`);
+        result.stopped = { id: queued.id, title: queued.title, reason };
+        result.remaining = queue.slice(index).map(card => ({ id: card.id, title: card.title }));
+        break;
+      }
+      return result;
+    } finally { this.approvingAll.delete(repo); }
+  }
+  /** Approves one card from the Approve all queue. Returns null once it merged, or why it did not. */
+  private approveIfStillReviewed(cardId: string): string | null {
+    const card = this.board.getCard(cardId);
+    if (!card || card.reviewAction !== "agent_approved") return "It is no longer agent-approved";
+    try {
+      const job = this.board.getAutoReviewJob(this.board.listRuns(card.id)[0].id);
+      const now = this.reviewState(card);
+      // Main moving (an earlier card in this queue merging) changes the fingerprint but not the reviewed work.
+      // Reviews recorded before `work` existed can only be matched on the fingerprint.
+      const unchanged = job?.work ? job.work === now.work : job?.fingerprint === now.fingerprint;
+      if (!unchanged) return "Its work changed since the agent reviewed it; review the diff and approve it yourself";
+      const done = this.approve(card, now.fingerprint);
+      return done.status === "done" ? null : `Approve left it ${done.status}`;
+    } catch (error) {
+      if (error instanceof IntegrationConflictError) return `${error.message}: ${error.files.slice(0, 10).join(", ")}${error.files.length > 10 ? ", …" : ""}`;
+      return error instanceof Error ? error.message : String(error);
     }
   }
 }

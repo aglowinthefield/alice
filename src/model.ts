@@ -307,6 +307,12 @@ export const reviewActionLabels: Record<ReviewAction, string> = {
 /** An agent reviewer approved the card; it waits only for your Approve, not for you to fix something. */
 export const agentApproved = (card: Card) =>
   needsYourReview(card) && card.reviewAction === "agent_approved";
+/** What Approve all did on a local board: the cards it merged, where it stopped and why, and the cards left in Review. */
+export type ApproveAllResult = {
+  merged: { id: string; title: string }[];
+  stopped: { id: string; title: string; reason: string } | null;
+  remaining: { id: string; title: string }[];
+};
 /** The next step on a Review card you can act on, or "" while it is waiting or the step is not known yet. */
 export const reviewActionText = (card: Card): string =>
   needsYourReview(card) && card.reviewAction

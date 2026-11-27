@@ -72,6 +72,12 @@ async function fixture(boards: object[] = [board]) {
     else if (/^\/api\/boards\/board-one\/cards\/card-one\/dependencies\/[\w-]+$/.test(path) && req.method === "DELETE") data = { ...cards[0], dependsOn: [], blocked: false };
     else if (path === `/api/boards/${board.id}/sentinels`) data = [{ sentinel: { id: "sen-one", kind: "pr-health", enabled: true, intervalMs: 300000, nextRunAt: "2026-01-01T00:05:00Z" }, runs: [{ status: "succeeded", startedAt: "2026-01-01T00:00:00Z" }], jobs: [] }];
     else if (path === "/api/sentinels/sen-one" && req.method === "PATCH") data = { id: "sen-one", kind: "pr-health", enabled: (input as { enabled: boolean }).enabled, nextRunAt: "2026-01-01T00:05:00Z" };
+    else if (path === `/api/boards/${board.id}/approve-approved` && req.method === "GET") data = [{ id: "card-a", title: "First" }, { id: "card-b", title: "Second" }, { id: "card-c", title: "Third" }];
+    else if (path === `/api/boards/${board.id}/approve-approved` && req.method === "POST") data = {
+      merged: [{ id: "card-a", title: "First" }],
+      stopped: { id: "card-b", title: "Second", reason: "Changes conflict with current main: second.txt" },
+      remaining: [{ id: "card-b", title: "Second" }, { id: "card-c", title: "Third" }],
+    };
     else if (path === `/api/boards/${board.id}/conflicts`) data = [{ cardId: "card-one", details: "merge conflict" }];
     else if (path === `/api/boards/${board.id}/settings` && req.method === "PATCH") data = { ...board, ...(input as object) };
     else if (path === `/api/boards/${board.id}/auto-pickup/reset-limit` && req.method === "POST") data = { ...board, autoPickupStarts: 0, autoPickupNextAt: null };
@@ -449,6 +455,20 @@ test("purge-attachments needs --yes and reports what each card lost", async () =
     assert.equal(purged.code, 0, purged.stderr);
     assert.match(purged.stdout, /^card-old\tpurged 2 files, 10 bytes$/m);
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => [r.path, r.input]), [[`/api/boards/${board.id}/cards/purge-attachments`, { cardIds: ["card-old"] }]]);
+  } finally { await f.close(); }
+});
+
+test("approve-approved names the count and merges nothing without --yes, then reports where it stopped", async () => {
+  const f = await fixture();
+  try {
+    const asked = await f.run("approve-approved");
+    assert.notEqual(asked.code, 0);
+    assert.match(asked.stderr, /merges 3 agent-approved cards into local main, oldest first:\n  card-a\tFirst\n  card-b\tSecond\n  card-c\tThird\nRepeat with --yes/);
+    assert.equal(f.requests.filter(r => r.method === "POST").length, 0);
+    const approved = await f.run("approve-approved", "--yes");
+    assert.equal(approved.code, 1, "stopping early is a failure");
+    assert.equal(approved.stdout, "card-a\tmerged\tFirst\ncard-b\tstopped\tSecond\tChanges conflict with current main: second.txt\ncard-c\tstill in review\tThird\n");
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => [r.path, r.input]), [[`/api/boards/${board.id}/approve-approved`, { cardIds: ["card-a", "card-b", "card-c"] }]]);
   } finally { await f.close(); }
 });
 

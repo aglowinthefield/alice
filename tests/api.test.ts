@@ -184,6 +184,11 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const firstAfter = (await request("/boards")).data.find((item: { id: string }) => item.id === first.id);
     assert.equal(firstAfter.autoReviewEnabled, true);
     assert.deepEqual((await request(`/boards/${first.id}/cards/nonexistent/auto-review`)).status, 404);
+    // Approve all lists the agent-approved queue and merges only cards named in the confirmation.
+    assert.deepEqual(await request(`/boards/${first.id}/approve-approved`), { status: 200, data: [] });
+    assert.equal((await request(`/boards/${first.id}/approve-approved`, "POST", { cardIds: [] })).status, 400);
+    assert.deepEqual(await request(`/boards/${first.id}/approve-approved`, "POST", { cardIds: ["not-approved"] }), { status: 200, data: { merged: [], stopped: null, remaining: [] } });
+    assert.equal((await request(`/boards/missing/approve-approved`)).status, 404);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: false })).data.autoReviewEnabled, false);
     const otherAfter = (await request("/boards")).data.find((item: { id: string }) => item.id === second.id);
     assert.equal(otherAfter.autoReviewEnabled, true);

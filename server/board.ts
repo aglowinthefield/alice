@@ -150,7 +150,7 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; work: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches";
@@ -396,6 +396,9 @@ export class Board {
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
     if (!jobColumns.has("changes")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN changes TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("requeued")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN requeued INTEGER NOT NULL DEFAULT 0");
+    // The run and tree the reviewer saw (`run:tree`). Unlike the fingerprint it ignores main, so Approve all can tell
+    // "main moved" from "the work changed". Older reviews keep '' and fall back to the fingerprint.
+    if (!jobColumns.has("work")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN work TEXT NOT NULL DEFAULT ''");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
     for (const [table, columns] of [["runs", runColumns], ["auto_review_jobs", jobColumns]] as const)
       for (const definition of usageDefinitions.split(", "))
@@ -1044,13 +1047,13 @@ export class Board {
       if (!candidate) throw new Error("Auto-review is not eligible for this card");
       // A requeued job keeps its row, so the interrupted attempt's spend and agent still count.
       this.db.prepare(`INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,cost) VALUES (?,?,'running',?,0,0,0,0,0)
-        ON CONFLICT(runId) DO UPDATE SET state='running', details='', fingerprint='', startedAt=excluded.startedAt, finishedAt=NULL, requeued=0 WHERE requeued=1`).run(cardId, runId, now());
+        ON CONFLICT(runId) DO UPDATE SET state='running', details='', fingerprint='', work='', startedAt=excluded.startedAt, finishedAt=NULL, requeued=0 WHERE requeued=1`).run(cardId, runId, now());
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[]): void {
-    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
-      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", runId);
+  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[], work = ""): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, work=?, finishedAt=?, changes=? WHERE runId=? AND state='running'")
+      .run(state, details.slice(0, 4000), fingerprint, work, now(), changes ? JSON.stringify(changes) : "", runId);
   }
   /** What a running review is doing now; shown in the Reviews tab until it finishes. */
   setAutoReviewProgress(runId: string, details: string): void {

@@ -112,6 +112,7 @@ import {
   agentApproved,
   reviewActionText,
   reviewWaitText,
+  type ApproveAllResult,
   type BakerySettings,
   type Board,
   type Card,
@@ -1283,6 +1284,10 @@ export function App() {
   // An error belongs to the board it happened on, so switching board or view dismisses it.
   useEffect(() => setError(""), [view, boardId]);
   const currentBoard = boards.find((item) => item.id === boardId);
+  // A board-level action, so it counts every agent-approved card, not only those a search shows.
+  const approvedOnBoard = cards.filter(
+    (card) => card.repo === currentBoard?.repo && agentApproved(card),
+  );
   function editBoard(item: Board) {
     setError("");
     setRepoPath(item.repo);
@@ -1393,6 +1398,33 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  };
+  // Approve all: merges the agent-approved cards you confirmed, oldest first, and stops at the first that cannot merge.
+  const approveAgentApproved = async (target: Board, approved: Card[]) => {
+    const count = `${approved.length} agent-approved card${approved.length === 1 ? "" : "s"}`;
+    if (
+      !(await confirmAction(
+        `Merge ${count} into local main, oldest first? Bakery stops at the first card that conflicts, fails or changed since the agent reviewed it, and leaves it and the rest in Review.`,
+        {
+          title: `Approve ${count}?`,
+          confirmLabel: `Approve ${approved.length}`,
+        },
+      ))
+    )
+      return;
+    let stopped = "";
+    await action(async () => {
+      const result = await api<ApproveAllResult>(
+        `/boards/${target.id}/approve-approved`,
+        {
+          method: "POST",
+          body: JSON.stringify({ cardIds: approved.map((card) => card.id) }),
+        },
+      );
+      if (result.stopped)
+        stopped = `Approve all merged ${result.merged.length} of ${result.merged.length + result.remaining.length} and stopped at "${result.stopped.title}": ${result.stopped.reason}. ${result.remaining.length === 1 ? "It stays" : `It and ${result.remaining.length - 1} more stay`} in Review.`;
+    });
+    if (stopped) setError(stopped);
   };
   const resetPickupLimit = async (target: Board) => {
     if (!target.autoPickupEnabled) return;
@@ -2645,6 +2677,25 @@ export function App() {
                         <span className="ml-auto rounded-md bg-secondary px-2 py-0.5 font-mono text-xs text-muted-foreground">
                           {laneCards.length}
                         </span>
+                        {column.id === "review" &&
+                          currentBoard &&
+                          currentBoard.integration !== "github-pr" &&
+                          approvedOnBoard.length > 0 && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              title="Merge every agent-approved card, oldest first"
+                              onClick={() =>
+                                void approveAgentApproved(
+                                  currentBoard,
+                                  approvedOnBoard,
+                                )
+                              }
+                              className="rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                            >
+                              Approve {approvedOnBoard.length}
+                            </button>
+                          )}
                         {canSelect && !selecting && (
                           <button
                             type="button"

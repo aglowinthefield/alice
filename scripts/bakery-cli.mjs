@@ -205,7 +205,7 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, "approve-approved": 0, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw unknown(command);
   if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
@@ -231,7 +231,7 @@ async function main() {
   if ((command === "depend" || command === "undepend") && !opts.on.length) throw new Error(`${command} requires --on CARD_ID`);
   [...opts.after, ...opts.on].forEach(cardId);
   if (command !== "pickup" && (opts.concurrency !== undefined || opts.limit !== undefined || opts.budget !== undefined)) throw new Error("--concurrency, --limit and --budget are only valid with pickup");
-  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "purge-attachments" || command === "service")) throw new Error("--yes is only valid with ready, start, recover, pickup, purge-attachments or service");
+  if (opts.yes && !(command === "ready" || command === "pickup" || command === "start" || command === "recover" || command === "approve-approved" || command === "purge-attachments" || command === "service")) throw new Error("--yes is only valid with ready, start, recover, pickup, approve-approved, purge-attachments or service");
   if (opts.host !== undefined && !(command === "service" && args[0] === "install")) throw new Error("--host is only valid with service install");
   if (command === "service") {
     if (!SERVICE_ACTIONS.includes(args[0])) throw new Error(`Unknown service action: ${args[0]}. Use one of ${SERVICE_ACTIONS.join(", ")}.\n${usageLine(command)}`);
@@ -384,6 +384,20 @@ async function main() {
   } else if (command === "close") {
     const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", {});
     print(card, opts.json, [cardLine(card)]);
+  } else if (command === "approve-approved") {
+    const queue = await request(origin, `${path}/approve-approved`);
+    if (!queue.length) { print({ merged: [], stopped: null, remaining: [] }, opts.json, ["No agent-approved cards are waiting for Approve"]); return; }
+    const count = `${queue.length} agent-approved card${queue.length === 1 ? "" : "s"}`;
+    if (!opts.yes) throw new Error(`Approve all merges ${count} into local main, oldest first:\n${queue.map(item => `  ${item.id}\t${item.title}`).join("\n")}\nRepeat with --yes to approve ${queue.length === 1 ? "it" : "them"}.`);
+    // Only the cards listed above are sent, so one approved meanwhile waits for the next run. Merges can take minutes.
+    const result = await request(origin, `${path}/approve-approved`, "POST", { cardIds: queue.map(item => item.id) }, 30 * 60_000);
+    const later = result.remaining.filter(item => item.id !== result.stopped?.id);
+    print(result, opts.json, [
+      ...result.merged.map(item => `${item.id}\tmerged\t${item.title}`),
+      ...(result.stopped ? [`${result.stopped.id}\tstopped\t${result.stopped.title}\t${result.stopped.reason}`] : []),
+      ...later.map(item => `${item.id}\tstill in review\t${item.title}`),
+    ]);
+    if (result.stopped) process.exitCode = 1;
   } else if (command === "archive" || command === "restore") {
     const cards = await request(origin, `${path}/cards/${command === "archive" ? "archive" : "unarchive"}`, "POST", { cardIds: args });
     print(cards, opts.json, cards.map(cardLine));

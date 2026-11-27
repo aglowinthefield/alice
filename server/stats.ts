@@ -1,12 +1,24 @@
 // Aggregates what Bakery already records per card (runs, agent reviews, usage) for the Statistics page.
-export type StatsRun = { repo: string; cardId: string; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };
-export type StatsReview = { repo: string; state: string; agent: string; startedAt: string; finishedAt: string | null; cost: number | null };
-export type StatsCard = { repo: string; status: string; createdAt: string; updatedAt: string; attempts: number; reviewRounds: number; ciReworks: number };
+import type { RunKind } from "../src/run-kinds.js";
+
+/** `kind` is why the run happened (src/run-kinds.ts); every kind but "first" is rework. `timedOut` is 1 when Bakery killed it at the run timeout. */
+export type StatsRun = { repo: string; id: string; cardId: string; attempt: number; kind: RunKind; timedOut: number; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };
+/** `sendBack` is the reviewer's reason and requested changes when it sent the card back to the implementer, else null. */
+export type StatsReview = { repo: string; cardId: string; sendBack: string | null; state: string; agent: string; startedAt: string; finishedAt: string | null; cost: number | null };
+export type StatsCard = { repo: string; id: string; title: string; status: string; createdAt: string; updatedAt: string; attempts: number; reviewRounds: number; ciReworks: number };
 export type StatsInput = { runs: StatsRun[]; reviews: StatsReview[]; cards: StatsCard[] };
 export type StatsOptions = { days: number | null; repo: string | null; now?: number };
 
 export type DayPoint = { date: string; succeeded: number; failed: number; interrupted: number; cost: number; created: number; done: number; reviewCost: number };
 export type GroupRow = { name: string; runs: number; failed: number; cost: number; tokens: number; avgMinutes: number | null };
+export type SendBackReason = "verification" | "visual" | "writeup" | "code";
+export type ChurnCard = { id: string; title: string; runs: number; attempts: number; cost: number };
+/** One board's week (Monday, UTC). `cost` is run plus agent review spend; `reworkCost` is runs after the first attempt. */
+export type ChurnRow = {
+  repo: string; week: string; runs: number; cards: number; runsPerCard: number | null;
+  cost: number; reworkCost: number; reworkShare: number | null; reworkByKind: Partial<Record<RunKind, number>>;
+  sendBacks: number; sendBackReasons: Record<SendBackReason, number>; timeouts: number; topCards: ChurnCard[];
+};
 export type Stats = {
   days: number | null;
   summary: { cardsCreated: number; cardsDone: number; runs: number; successRate: number | null; cost: number; tokens: number; avgRunMinutes: number | null; avgLeadHours: number | null; autoShare: number | null; reviewRounds: number; ciReworks: number; agentReviews: number; agentReviewsMerged: number };
@@ -17,7 +29,22 @@ export type Stats = {
   byAgent: GroupRow[];
   byRepo: GroupRow[];
   cardStatus: { status: string; count: number }[];
+  /** Newest week first; within a week, the busiest board first. */
+  churn: ChurnRow[];
 };
+
+// Keywords from the reviewer's reason and requested changes. A send-back can match several; "code" also takes those that match none.
+const reasonPatterns: [Exclude<SendBackReason, "code">, RegExp][] = [
+  ["verification", /\b(verif\w*|tests?|tested|testing|checks?|lint\w*|typecheck\w*|tsc|ci|reproduc\w*|evidence)\b/i],
+  ["visual", /\b(screenshots?|visual\w*|ui|layout|render\w*|devices?|ios|android|mobile|simulator|viewport|dark mode|light mode|contrast)\b/i],
+  ["writeup", /\b(pr (body|description|title|write-?up)|pull request (body|description|title)|write-?up|report|changelog|follow-?ups?|commit message)\b/i],
+];
+const codePattern = /\b(code|bugs?|logic|functions?|refactor\w*|regressions?|edge cases?|types?|errors?|handl\w*)\b/i;
+export function classifySendBack(text: string): SendBackReason[] {
+  const reasons: SendBackReason[] = reasonPatterns.filter(([, pattern]) => pattern.test(text)).map(([reason]) => reason);
+  if (!reasons.length || codePattern.test(text)) reasons.push("code");
+  return reasons;
+}
 
 // SQLite's datetime('now') has no zone; read it as UTC like the ISO strings.
 export const parseTime = (value: string | null): number | null => {
@@ -26,6 +53,11 @@ export const parseTime = (value: string | null): number | null => {
   return Number.isNaN(time) ? null : time;
 };
 const dayKey = (time: number) => new Date(time).toISOString().slice(0, 10);
+/** The Monday (UTC) that starts the week holding `time`. */
+export const weekKey = (time: number) => {
+  const day = Date.parse(dayKey(time));
+  return dayKey(day - ((new Date(day).getUTCDay() + 6) % 7) * 86_400_000);
+};
 const sum = (values: (number | null)[]) => values.reduce<number>((total, value) => total + (value ?? 0), 0);
 const average = (values: number[]) => values.length ? sum(values) / values.length : null;
 const runMinutes = (run: { startedAt: string; finishedAt: string | null }) => {
@@ -42,6 +74,48 @@ function group(runs: StatsRun[], key: (run: StatsRun) => string): GroupRow[] {
     cost: sum(items.map(run => run.cost)), tokens: sum(items.map(runTokens)),
     avgMinutes: average(items.map(runMinutes).filter((value): value is number => value !== null)),
   })).sort((a, b) => b.cost - a.cost || b.runs - a.runs);
+}
+
+function churn(runs: StatsRun[], reviews: StatsReview[], cards: StatsCard[]): ChurnRow[] {
+  type Bucket = ChurnRow & { cardRuns: Map<string, { runs: number; cost: number }> };
+  const buckets = new Map<string, Bucket>();
+  const bucket = (repo: string, startedAt: string) => {
+    const time = parseTime(startedAt);
+    if (time === null) return undefined;
+    const week = weekKey(time), key = `${repo}\t${week}`;
+    let row = buckets.get(key);
+    if (!row) {
+      row = { repo, week, runs: 0, cards: 0, runsPerCard: null, cost: 0, reworkCost: 0, reworkShare: null, reworkByKind: {}, sendBacks: 0,
+        sendBackReasons: { verification: 0, visual: 0, writeup: 0, code: 0 }, timeouts: 0, topCards: [], cardRuns: new Map() };
+      buckets.set(key, row);
+    }
+    return row;
+  };
+  for (const run of runs) {
+    const row = bucket(run.repo, run.startedAt);
+    if (!row) continue;
+    const cost = run.cost ?? 0;
+    row.runs++; row.cost += cost; row.timeouts += run.timedOut ? 1 : 0;
+    if (run.kind !== "first") { row.reworkCost += cost; row.reworkByKind[run.kind] = (row.reworkByKind[run.kind] ?? 0) + cost; }
+    const card = row.cardRuns.get(run.cardId) ?? { runs: 0, cost: 0 };
+    card.runs++; card.cost += cost;
+    row.cardRuns.set(run.cardId, card);
+  }
+  for (const review of reviews) {
+    const row = bucket(review.repo, review.startedAt);
+    if (!row) continue;
+    row.cost += review.cost ?? 0;
+    if (review.sendBack === null) continue;
+    row.sendBacks++;
+    for (const reason of classifySendBack(review.sendBack)) row.sendBackReasons[reason]++;
+  }
+  const byId = new Map(cards.map(card => [card.id, card]));
+  return [...buckets.values()].map(({ cardRuns, ...row }) => ({
+    ...row, cards: cardRuns.size, runsPerCard: cardRuns.size ? row.runs / cardRuns.size : null,
+    reworkShare: row.cost > 0 ? row.reworkCost / row.cost : null,
+    topCards: [...cardRuns].map(([id, item]) => ({ id, title: byId.get(id)?.title ?? id, attempts: byId.get(id)?.attempts ?? item.runs, ...item }))
+      .sort((a, b) => b.runs - a.runs || b.cost - a.cost || a.id.localeCompare(b.id)).slice(0, 3),
+  })).sort((a, b) => b.week.localeCompare(a.week) || b.runs - a.runs || b.cost - a.cost || a.repo.localeCompare(b.repo));
 }
 
 export function buildStats(input: StatsInput, options: StatsOptions): Stats {
@@ -104,5 +178,6 @@ export function buildStats(input: StatsInput, options: StatsOptions): Stats {
     byAgent: group(runs, run => run.agent || "Unknown"),
     byRepo: group(runs, run => run.repo),
     cardStatus: [...statusCounts].map(([status, count]) => ({ status, count })),
+    churn: churn(runs, reviews, cards),
   };
 }

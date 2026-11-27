@@ -9,7 +9,7 @@ import { renderMetrics } from "../server/metrics.js";
 import type { StatsRun } from "../server/stats.js";
 
 const run = (overrides: Partial<StatsRun>): StatsRun => ({
-  repo: "/code/app", cardId: "c1", status: "review", startedBy: "operator", agent: "anthropic/opus", ciFix: 0,
+  repo: "/code/app", id: "r1", cardId: "c1", attempt: 1, kind: "first", timedOut: 0, status: "review", startedBy: "operator", agent: "anthropic/opus", ciFix: 0,
   startedAt: "2026-01-01 10:00:00", finishedAt: "2026-01-01 10:04:00", cost: 1.5, inputTokens: 100, outputTokens: 20,
   cacheReadTokens: 300, cacheWriteTokens: 5, cacheTasks: 4, cacheHits: 3, cacheSavedMs: 90_000, ...overrides,
 });
@@ -23,8 +23,8 @@ const sample = (text: string, series: string) => {
 test("finished runs become counters and a duration histogram; running ones wait until they finish", () => {
   const text = renderMetrics({
     runs: [run({}), run({ cardId: "c2", cost: 0.5, finishedAt: "2026-01-01 10:20:00" }), run({ status: "failed", agent: "", cost: null }), run({ status: "running", finishedAt: null, cost: 9 })],
-    reviews: [{ repo: "/code/app", state: "merged", agent: "x", startedAt: "2026-01-01 11:00:00", finishedAt: "2026-01-01 11:01:00", cost: 0.25 }, { repo: "/code/app", state: "running", agent: "x", startedAt: "2026-01-01 11:00:00", finishedAt: null, cost: 7 }],
-    cards: [{ repo: "/code/app", status: "ready", createdAt: "", updatedAt: "", attempts: 1, reviewRounds: 2, ciReworks: 1 }, { repo: "/code/app", status: "ready", createdAt: "", updatedAt: "", attempts: 0, reviewRounds: 0, ciReworks: 0 }],
+    reviews: [{ repo: "/code/app", cardId: "c1", sendBack: null, state: "merged", agent: "x", startedAt: "2026-01-01 11:00:00", finishedAt: "2026-01-01 11:01:00", cost: 0.25 }, { repo: "/code/app", cardId: "c1", sendBack: null, state: "running", agent: "x", startedAt: "2026-01-01 11:00:00", finishedAt: null, cost: 7 }],
+    cards: [{ repo: "/code/app", id: "c1", title: "One", status: "ready", createdAt: "", updatedAt: "", attempts: 1, reviewRounds: 2, ciReworks: 1 }, { repo: "/code/app", id: "c2", title: "Two", status: "ready", createdAt: "", updatedAt: "", attempts: 0, reviewRounds: 0, ciReworks: 0 }],
   }, { runs: 1, reviews: 0, pullRequests: 2 }, "1.2.3");
 
   assert.equal(sample(text, 'bakery_info{version="1.2.3"}'), 1);
@@ -49,7 +49,7 @@ test("finished runs become counters and a duration histogram; running ones wait 
 });
 
 test("label values are escaped", () => {
-  const text = renderMetrics({ runs: [], reviews: [], cards: [{ repo: 'C:\\code\\"odd"\nrepo', status: "ready", createdAt: "", updatedAt: "", attempts: 0, reviewRounds: 0, ciReworks: 0 }] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1");
+  const text = renderMetrics({ runs: [], reviews: [], cards: [{ repo: 'C:\\code\\"odd"\nrepo', id: "c1", title: "Odd", status: "ready", createdAt: "", updatedAt: "", attempts: 0, reviewRounds: 0, ciReworks: 0 }] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1");
   assert.equal(sample(text, 'bakery_cards{repo="C:\\\\code\\\\\\"odd\\"\\nrepo",status="ready"}'), 1);
 });
 

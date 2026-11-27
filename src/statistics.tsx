@@ -13,8 +13,10 @@ import {
 import { api } from "./api.js";
 import { repoName } from "./repo-appearance.js";
 import { formatCost } from "./usage.js";
+import { formatRoute } from "./route.js";
+import { runKindLabels, runKindOrder } from "./run-kinds.js";
 import type { Board } from "./model.js";
-import type { GroupRow, Stats } from "../server/stats.js";
+import type { ChurnRow, GroupRow, Stats } from "../server/stats.js";
 import {
   Card,
   CardContent,
@@ -225,6 +227,142 @@ function Breakdown({
             </tbody>
           </table>
         </>
+      )}
+    </Panel>
+  );
+}
+
+const reasonColumns = [
+  { key: "verification", label: "Verification" },
+  { key: "visual", label: "Visual or device" },
+  { key: "writeup", label: "PR write-up" },
+  { key: "code", label: "Code" },
+] as const;
+
+// In-app navigation, as a notification click does: main.tsx follows popstate.
+function openCard(event: React.MouseEvent<HTMLAnchorElement>) {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0)
+    return;
+  event.preventDefault();
+  history.pushState(null, "", event.currentTarget.getAttribute("href"));
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+function Churn({ rows, boards }: { rows: ChurnRow[]; boards: Board[] }) {
+  const boardIds = new Map(boards.map((item) => [item.repo, item.id]));
+  const head = "py-1 pl-3 text-right font-normal";
+  return (
+    <Panel
+      title="Churn"
+      description="Per board and week. Rework is spend on runs after a card's first attempt, as a share of run and agent review spend. A send-back can match more than one reason."
+    >
+      {rows.length === 0 ? (
+        <div className="py-6 text-center text-sm text-muted-foreground">
+          No runs in this range.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" data-testid="churn">
+            <thead className="text-left text-muted-foreground">
+              <tr>
+                <th className="py-1 font-normal">Week of</th>
+                <th className="py-1 pl-3 font-normal">Board</th>
+                <th className={head}>Runs</th>
+                <th className={head}>Runs per card</th>
+                <th className={head}>Rework</th>
+                <th className={head}>Send-backs</th>
+                {reasonColumns.map((column) => (
+                  <th key={column.key} className={head}>
+                    {column.label}
+                  </th>
+                ))}
+                <th className={head}>Timeouts</th>
+                <th className="py-1 pl-4 font-normal">Most attempts</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono tabular-nums">
+              {rows.map((row) => {
+                const boardId = boardIds.get(row.repo);
+                const split = runKindOrder
+                  .filter((kind) => row.reworkByKind[kind] !== undefined)
+                  .map(
+                    (kind) =>
+                      `${runKindLabels[kind]}: ${formatCost(row.reworkByKind[kind]!)}`,
+                  );
+                return (
+                  <tr
+                    key={`${row.week}-${row.repo}`}
+                    className="border-t border-border align-top"
+                  >
+                    <td className="py-1.5 whitespace-nowrap">
+                      {day(row.week)}
+                    </td>
+                    <td
+                      className="max-w-40 truncate py-1.5 pl-3 font-sans"
+                      title={row.repo}
+                    >
+                      {repoName(row.repo)}
+                    </td>
+                    <td className="py-1.5 pl-3 text-right">{row.runs}</td>
+                    <td className="py-1.5 pl-3 text-right">
+                      {row.runsPerCard === null
+                        ? "—"
+                        : row.runsPerCard.toFixed(1)}
+                    </td>
+                    <td
+                      className="py-1.5 pl-3 text-right"
+                      title={`${formatCost(row.reworkCost)} of ${formatCost(row.cost)}${split.length ? `\n${split.join("\n")}` : ""}`}
+                    >
+                      {percent(row.reworkShare)}
+                    </td>
+                    <td className="py-1.5 pl-3 text-right">{row.sendBacks}</td>
+                    {reasonColumns.map((column) => (
+                      <td key={column.key} className="py-1.5 pl-3 text-right">
+                        {row.sendBackReasons[column.key]}
+                      </td>
+                    ))}
+                    <td className="py-1.5 pl-3 text-right">{row.timeouts}</td>
+                    <td className="py-1.5 pl-4 font-sans">
+                      <ul className="space-y-0.5">
+                        {row.topCards.map((card) => (
+                          <li key={card.id} className="flex gap-2">
+                            {boardId ? (
+                              <a
+                                className="max-w-64 truncate underline decoration-muted-foreground underline-offset-2 hover:decoration-current"
+                                href={formatRoute({
+                                  view: "board",
+                                  boardId,
+                                  cardId: card.id,
+                                })}
+                                title={card.title}
+                                onClick={openCard}
+                              >
+                                {card.title}
+                              </a>
+                            ) : (
+                              <span
+                                className="max-w-64 truncate"
+                                title={card.title}
+                              >
+                                {card.title}
+                              </span>
+                            )}
+                            <span
+                              className="shrink-0 font-mono text-muted-foreground"
+                              title={`${card.runs} runs this week, ${card.attempts} attempts in all`}
+                            >
+                              {card.runs}/{card.attempts}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </Panel>
   );
@@ -575,6 +713,7 @@ export function Statistics({ boards }: { boards: Board[] }) {
                 label={repoName}
               />
             </div>
+            <Churn rows={stats.churn} boards={boards} />
           </>
         )}
       </div>

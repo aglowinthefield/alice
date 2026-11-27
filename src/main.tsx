@@ -5,6 +5,7 @@ import {
   Archive,
   CircleCheck,
   CirclePause,
+  Repeat,
   CircleX,
   Eye,
   Inbox,
@@ -47,6 +48,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
+import { ConflictHotspots } from "./conflict-hotspots.js";
 import {
   Dialog,
   DialogContent,
@@ -145,7 +147,11 @@ import {
   type PaletteItem,
 } from "./command-palette.js";
 import { themeNames, themes } from "./themes.js";
-import { ReadyCheckHost, checkBeforeReady } from "./ready-check.js";
+import {
+  ReadyCheckHost,
+  checkBeforeReady,
+  turnIntoPlans,
+} from "./ready-check.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1539,10 +1545,15 @@ export function App() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead.
+  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead, and Turn into
+  // a plan rewrites the wide ones as planning cards before the move.
   const readyAfterCheck = async (moving: Card[]) => {
     const check = await checkBeforeReady(moving);
     if (check.choice === "edit") setEditing(check.card);
+    if (check.choice === "plan")
+      return (
+        !!boardId && (await action(() => turnIntoPlans(boardId, check.cards)))
+      );
     return check.choice === "ready";
   };
   const moveSelected = async () => {
@@ -2724,6 +2735,28 @@ export function App() {
             </Button>
           </div>
         )}
+        {!selected && currentBoard && view === "board" && (
+          <ConflictHotspots
+            key={currentBoard.id}
+            hotspots={currentBoard.conflictHotspots ?? []}
+            busy={busy}
+            onDismiss={(file) => {
+              const target = currentBoard;
+              void action(async () => {
+                await api(`/boards/${target.id}/conflict-hotspots/dismiss`, {
+                  method: "POST",
+                  body: JSON.stringify({ file }),
+                });
+                updateBoard({
+                  ...target,
+                  conflictHotspots: (target.conflictHotspots ?? []).filter(
+                    (item) => item.file !== file,
+                  ),
+                });
+              });
+            }}
+          />
+        )}
         {moveNotice && (
           <div
             role="status"
@@ -3735,8 +3768,10 @@ export function App() {
                       Pushes the card branch and opens its pull request when a
                       run reaches Review, without waiting for Approve. Only runs
                       that finish after you turn this on are pushed. With
-                      auto-review on, the agent reviewer&apos;s approval opens
-                      it instead.
+                      auto-review on, the agent reviewer goes first: its
+                      approval opens the pull request, a card it sends back
+                      reruns, and a card it hands to a person (or that is out of
+                      reruns) gets a draft pull request with its findings.
                     </span>
                   </span>
                 </label>
@@ -4069,9 +4104,11 @@ export function App() {
                 worktrees and runs the repository's checks itself. It can send a
                 card back to its implementer. When it approves, a pull-request
                 board opens the pull request; on a local board the card waits
-                for your Approve. Nothing merges into main without you.
-                Auto-review alone does not start Ready cards; enable Auto pickup
-                above.
+                for your Approve. Nothing merges into main without you. With
+                automatic pull requests on, a card the reviewer hands to a
+                person still gets a draft pull request with its findings, and
+                the reviewer never blocks it. Auto-review alone does not start
+                Ready cards; enable Auto pickup above.
               </p>
               <label className="mt-3 flex items-center gap-2 text-xs">
                 Agent reviews at the same time
@@ -4439,7 +4476,7 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
     </span>
   );
 }
-/** Says a Review card is your turn, who has it if not, or how long a running agent has been quiet. */
+/** Says a Review card is your turn, who has it if not, or that a running agent may be stuck or has been quiet. */
 function ActivityBadge({
   card,
   activity,
@@ -4500,6 +4537,17 @@ function ActivityBadge({
       >
         <Eye size={10} aria-hidden />
         {reviewActionText(card) || "Your turn"}
+      </span>
+    );
+  if (card.status === "running" && card.stuck)
+    return (
+      <span
+        data-testid="activity-badge"
+        title={`The run ${card.stuck}. Alice asked the agent to step back; check the attempt log, and stop the run if it keeps going in circles.`}
+        className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
+      >
+        <Repeat size={10} aria-hidden />
+        May be stuck
       </span>
     );
   if (activity !== "quiet" || !card.lastActivityAt) return null;

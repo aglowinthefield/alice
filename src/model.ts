@@ -71,7 +71,19 @@ export type Board = {
   chatUnread?: number;
   /** Sentinel jobs that are running or queued to start. Done jobs never count. */
   sentinelsInProgress?: number;
+  /** Files that keep conflicting on this board and have not been dismissed since their last conflict. */
+  conflictHotspots?: ConflictHotspot[];
 };
+/** A file that conflicted on `cards` distinct cards within `conflictHotspotDays`. */
+export type ConflictHotspot = {
+  file: string;
+  cards: number;
+  cardIds: string[];
+  lastAt: string;
+};
+/** A file conflicting on this many cards within `conflictHotspotDays` gets a board notice. */
+export const conflictHotspotCards = 3;
+export const conflictHotspotDays = 14;
 export type AutoReviewJob = {
   cardId: string;
   runId: string;
@@ -295,6 +307,8 @@ export type Card = {
   failureSummary?: string | null;
   /** Last time the latest run's agent reported anything. */
   lastActivityAt?: string | null;
+  /** On a Running card: why its run may be going in circles, such as repeating one tool call; null while it looks fine. */
+  stuck?: string | null;
   /** Automatic retries (of 3) spent after temporary provider failures since the card's last successful run. */
   autoRetries?: number;
   /** When auto-pickup retries this Ready card after a temporary provider failure; null when none is waiting. */
@@ -309,7 +323,7 @@ export type CountKey = Status | "reviewWaiting";
 /** The `cardCounts` bucket a card falls in. */
 export const countKey = (card: Card): CountKey =>
   card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export type ReviewWait = "agent_review" | "ci_fix" | "github" | "rerun_queued";
 /**
  * `agent_approved`: the agent reviewer approved the latest attempt and only your Approve is left.
  * `needs_you`: the agent reviewer handed the attempt to you with a finding or a failed check.
@@ -337,6 +351,7 @@ export const reviewWaitLabels: Record<ReviewWait, string> = {
   agent_review: "Agent reviewing",
   ci_fix: "CI fix queued",
   github: "Waiting on GitHub",
+  rerun_queued: "Rerun queued",
 };
 /** The label for a Review card's wait; a queued agent review says where it stands. */
 export const reviewWaitText = (card: Card): string =>

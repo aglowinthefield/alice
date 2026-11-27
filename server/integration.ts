@@ -4,9 +4,10 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Board, type Card } from "./board.js";
-import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
+import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub, postPullRequestComment } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
+import { githubMarkdown } from "./github-markdown.js";
 import { githubRepo } from "./github-url.js";
 import { commitIdentityArgs } from "./git-identity.js";
 import { featureOffMessage } from "../src/features.js";
@@ -656,8 +657,10 @@ export class Integration {
    * the agent reviewer's approval on a board with auto-review on. Only "operator" means a person reviewed it.
    * `prechecked` waits for the hook check that started when the run reached Review (see `checkHooks`) and returns
    * the commit whose pre-push hook passed, or null; pushing exactly that commit skips the hook.
+   * `handoff` is the agent reviewer's findings when it left the card for a person: a new PR then opens as a draft and
+   * the findings are posted on it.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator", prechecked?: () => Promise<string | null>): Promise<Card> {
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator", prechecked?: () => Promise<string | null>, handoff?: string): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integrationConfigured === "github-pr" && !this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
@@ -716,7 +719,14 @@ export class Integration {
       step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
       const why = { "operator": "changes the operator reviewed and approved in Alice", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Alice's agent reviewer approved, pushed automatically without human review", "auto-pull-request": "changes pushed automatically when the run reached Review, without human review" }[pushedBy];
       const pushed = state === "push" ? { sha: candidate, why } : null;
-      const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body });
+      const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body }, handoff);
+      // A failed findings comment is kept and retried by the GitHub sync rather than lost.
+      if (handoff && !pr.handoffPosted) this.board.setHandoffPending(run.id, true);
+      // Explicit approval is the person's decision on a handoff draft: it becomes ready for review.
+      if (pushedBy === "operator" && this.board.autoReviewHandoff(run.id) !== null) {
+        await github.ready(slug, pr.number);
+        this.board.resolveHandoff(run.id);
+      }
       this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
       this.board.recordPullRequestPush(card.id, run.id);
       return this.board.getCard(card.id)!;
@@ -761,18 +771,25 @@ export class Integration {
    * The open PR from `alice/<id>`, or a new one with `content` (default: the card title and body) plus the footer and
    * run summary. `pushed` is what Alice just pushed, commented on an open PR; null when nothing was pushed.
    */
-  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string } | null, content?: { title: string; body: string }): Promise<{ number: number; url: string }> {
+  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string } | null, content?: { title: string; body: string }, handoff?: string): Promise<{ number: number; url: string; handoffPosted: boolean }> {
     const branch = cardBranch(card.repo, card.id);
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
     const summary = (output || "").trim().slice(-3000);
     const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
     if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Alice pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
+    let handoffPosted = true;
     if (!url) {
-      url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
+      // The findings go in the body so they exist the moment the draft does; a separate comment could fail and never be retried.
+      const body = pullRequestBody(content?.body ?? card.body, card, { output });
+      url = await github.create(slug, branch, content?.title ?? cardTitle(card), handoff ? `${body}\n\n---\n\n${githubMarkdown(handoff)}` : body, !!handoff);
       this.delivered("pr", undefined);
+    } else if (handoff && existing?.state === "OPEN") {
+      // An existing pull request gets the findings as a comment; if it fails, the caller records it as pending.
+      try { await postPullRequestComment(github, slug, existing.number, handoff); }
+      catch (error) { console.error(`Could not post the reviewer's findings on ${slug}#${existing.number}: ${error instanceof Error ? error.message : String(error)}`); handoffPosted = false; }
     }
-    return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url };
+    return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url, handoffPosted };
   }
 
   /**

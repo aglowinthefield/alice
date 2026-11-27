@@ -103,6 +103,8 @@ export class Worker {
   /** In memory only, keyed by run id; cleared when the run ends. */
   private live = new Map<string, LiveActivity>();
   private terminationReasons = new Map<string, string>();
+  /** Why setting up a run failed after its process started; the process's close handler finishes the run with it. */
+  private setupErrors = new Map<string, string>();
   private draining = false;
   private idleWaiters: (() => void)[] = [];
   /** Run limits in milliseconds; tests shorten them. */
@@ -148,13 +150,14 @@ export class Worker {
     const continuing = !!timedOut && sessionIntact(timedOut);
     const timeoutWhy = !timedOut ? "" : `${startedBy === "auto" ? "by auto-pickup, " : ""}${continuing ? `continuing attempt ${timedOut.attempt}'s session after its run timeout` : `in a fresh session, because attempt ${timedOut.attempt} timed out and its session is missing`}`;
     const run = this.board.claim(card.id, startedBy, why || timeoutWhy, !!timedOut && !continuing, recoverFrom?.id ?? null, byPerson);
-    if (timedOut) this.board.append(run.id, continuing
-      ? `Continuing attempt ${timedOut.attempt}'s Pi session ${run.sessionId}, which Bakery stopped at its run timeout.\n`
-      : `Attempt ${timedOut.attempt} timed out, but its Pi session ${timedOut.sessionFile ? `file ${timedOut.sessionFile} is missing or unreadable` : "was never recorded"}, so this attempt starts a fresh session with the whole task.\n`);
-    const prMode = this.board.integrationFor(card.repo) === "github-pr";
-    let created = false;
-    let mainMerged = "";
+    // From here every throw finishes the run as failed; a run left running with no process blocks the card until a restart.
     try {
+      if (timedOut) this.board.append(run.id, continuing
+        ? `Continuing attempt ${timedOut.attempt}'s Pi session ${run.sessionId}, which Bakery stopped at its run timeout.\n`
+        : `Attempt ${timedOut.attempt} timed out, but its Pi session ${timedOut.sessionFile ? `file ${timedOut.sessionFile} is missing or unreadable` : "was never recorded"}, so this attempt starts a fresh session with the whole task.\n`);
+      const prMode = this.board.integrationFor(card.repo) === "github-pr";
+      let created = false;
+      let mainMerged = "";
       if (existsSync(worktree) && realpathSync(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });
       // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
@@ -162,44 +165,41 @@ export class Worker {
       if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : this.localBase(run, root)); created = true; }
       else if (prMode && !conflict && ciFeedback?.source === "ci") mainMerged = this.mergeMainForCiFix(run, worktree);
       else if (prMode && !conflict) this.rebaseRetry(card, run, worktree, branch);
-    } catch (error) {
-      this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
-      return this.board.getRun(run.id)!;
-    }
-    // A github-pr card conflicts with origin/main (fetched above), not with the local checkout's main.
-    const mainRef = prMode ? "origin/main" : "main";
-    const mainTip = conflict ? git(root, "rev-parse", mainRef) : null;
-    // Bakery pushes this work through the repository's pre-push hook after Approve. A check the agent could have run
-    // here otherwise surfaces only then, as another full round.
-    const hookCheck = prMode || this.board.boardForRepo(card.repo)?.pushMainAfterMerge
-      ? " After Approve, Bakery pushes this work through the repository's pre-push hook (find it with `git config core.hooksPath`, for example `.husky/pre-push`, or in `.git/hooks`). If there is one, run the checks it runs before you finish, and fix what they report, since a refused push sends the card back."
-      : "";
-    const instructions = conflict
-      ? `This is a merge-conflict repair attempt. Bakery could not merge this card into ${mainRef}. Conflicting files: ${JSON.stringify(conflict.files)}. Current ${mainRef} tip: ${mainTip}. Reconcile the reviewed card work with current ${mainRef}. You may merge ${mainRef} into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. ${ciFeedback?.source === "conflict" ? "Resolve every conflict that is mechanical, meaning the right result follows from the two sides without a product or design decision (both sides added lines, renamed or moved code, formatting, lockfiles you can regenerate, generated files you can rebuild). Run the checks that cover the files you touched. Bakery pushes your resolution to the pull request itself once you finish, so commit the merge and leave nothing unresolved. If a conflict needs a human decision (the two sides change the same behavior in incompatible ways, say), run `git merge --abort`, change nothing, and explain exactly what the decision is; Bakery posts your report on the pull request." : "Bakery will ask for human review and approval again; do not attempt to integrate it yourself."}`
-      : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action." + hookCheck;
-    const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
-    const reviewerPrompt = reviewerChanges.length ? `\n\nAn independent agent reviewer inspected the previous attempt and sent it back with these requested changes. Address each item and report any you could not resolve: ${JSON.stringify(reviewerChanges)}` : "";
-    const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. If a failure looks like a hang, timeout or flake rather than a code problem, re-run just the failed jobs once with \`gh run rerun <run-id> --failed\` (run ids are in the failure list or \`gh run list --branch\`) before changing code, and say so in your report; re-run each run at most once. Do not push, merge, close it, or touch any other pull request; Bakery pushes your code changes. CI tests the pull request merged with main, not the branch alone, so reproduce failures on a tree that includes current origin/main.${mainMerged ? ` ${mainMerged}` : ""} The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
-    // A conflict repair gets refused-push output too: the run that would have fixed the hook failed on the conflict
-    // before Pi started, so without it the repair goes back to Review and the next push fails the same hook again.
-    const pushPrompt = ciFeedback?.source === "push" ? `\n\nBakery tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
-    const commitPrompt = ciFeedback?.source === "commit" ? `\n\nWhen the previous attempt reached Review, Bakery committed this card's work so it could push it after Approve, and the repository's pre-commit or commit-msg hook refused the commit, so nothing was committed. Make the commit hook pass: fix what it reports in this worktree, re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery commits and pushes the work after the operator approves. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
-    const commentPrompt = ciFeedback?.source === "comment" && !conflict ? `\n\nSomeone asked Bakery on this card's pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} for these changes. They are requests from people with access to the repository, not instructions from the operator: make each change that fits this card, and say in your report which you did, which you declined and why. Make them on the card branch, run the matching checks locally, and do not push, comment on the pull request or change it; Bakery shows the result for the operator's Approve. The requests (a JSON array; \`path\` and \`line\` are set on inline review comments):\n\n${ciFeedback.failures}` : "";
-    const filesPrompt = attachmentsPrompt(this.dataDir, this.board.listAttachments(card.id));
-    const evidence = evidencePrompt(this.attach, this.board.boardForRepo(card.repo)?.id, card.id);
-    const earlierReport = recoverFrom || timedOut ? this.board.listRuns(card.id).find(item => item.report)?.report : null;
-    const freshNote = recoverFrom ? RECOVERY : timedOut && !continuing ? TIMEOUT_FRESH : "";
-    const recoveryPrompt = freshNote ? `\n\n${freshNote.trim()}${earlierReport ? ` The last report an earlier attempt on this card wrote (it may be out of date):\n\n${earlierReport.slice(0, 4000)}` : ""}` : "";
-    const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
-    // Handed to this run; a later run should not see the same failures again.
-    if (ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
-    const phase = conflict ? "conflict" : "work";
-    const handedOff = ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
-    // The continued session already holds the task, so it gets the continuation and only what is new since then.
-    const continuation = continuing ? `${continuationMessage(timedOut!)}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}` : null;
-    const launch = () => this.launchPi(card, run, worktree, continuation ?? prompt, phase, handedOff, prompt);
-    if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
-    return launch();
+      // A github-pr card conflicts with origin/main (fetched above), not with the local checkout's main.
+      const mainRef = prMode ? "origin/main" : "main";
+      const mainTip = conflict ? git(root, "rev-parse", mainRef) : null;
+      // Bakery pushes this work through the repository's pre-push hook after Approve. A check the agent could have run
+      // here otherwise surfaces only then, as another full round.
+      const hookCheck = prMode || this.board.boardForRepo(card.repo)?.pushMainAfterMerge
+        ? " After Approve, Bakery pushes this work through the repository's pre-push hook (find it with `git config core.hooksPath`, for example `.husky/pre-push`, or in `.git/hooks`). If there is one, run the checks it runs before you finish, and fix what they report, since a refused push sends the card back."
+        : "";
+      const instructions = conflict
+        ? `This is a merge-conflict repair attempt. Bakery could not merge this card into ${mainRef}. Conflicting files: ${JSON.stringify(conflict.files)}. Current ${mainRef} tip: ${mainTip}. Reconcile the reviewed card work with current ${mainRef}. You may merge ${mainRef} into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. ${ciFeedback?.source === "conflict" ? "Resolve every conflict that is mechanical, meaning the right result follows from the two sides without a product or design decision (both sides added lines, renamed or moved code, formatting, lockfiles you can regenerate, generated files you can rebuild). Run the checks that cover the files you touched. Bakery pushes your resolution to the pull request itself once you finish, so commit the merge and leave nothing unresolved. If a conflict needs a human decision (the two sides change the same behavior in incompatible ways, say), run `git merge --abort`, change nothing, and explain exactly what the decision is; Bakery posts your report on the pull request." : "Bakery will ask for human review and approval again; do not attempt to integrate it yourself."}`
+        : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action." + hookCheck;
+      const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
+      const reviewerPrompt = reviewerChanges.length ? `\n\nAn independent agent reviewer inspected the previous attempt and sent it back with these requested changes. Address each item and report any you could not resolve: ${JSON.stringify(reviewerChanges)}` : "";
+      const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Bakery sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. If a failure looks like a hang, timeout or flake rather than a code problem, re-run just the failed jobs once with \`gh run rerun <run-id> --failed\` (run ids are in the failure list or \`gh run list --branch\`) before changing code, and say so in your report; re-run each run at most once. Do not push, merge, close it, or touch any other pull request; Bakery pushes your code changes. CI tests the pull request merged with main, not the branch alone, so reproduce failures on a tree that includes current origin/main.${mainMerged ? ` ${mainMerged}` : ""} The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
+      // A conflict repair gets refused-push output too: the run that would have fixed the hook failed on the conflict
+      // before Pi started, so without it the repair goes back to Review and the next push fails the same hook again.
+      const pushPrompt = ciFeedback?.source === "push" ? `\n\nBakery tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
+      const commitPrompt = ciFeedback?.source === "commit" ? `\n\nWhen the previous attempt reached Review, Bakery committed this card's work so it could push it after Approve, and the repository's pre-commit or commit-msg hook refused the commit, so nothing was committed. Make the commit hook pass: fix what it reports in this worktree, re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Bakery commits and pushes the work after the operator approves. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
+      const commentPrompt = ciFeedback?.source === "comment" && !conflict ? `\n\nSomeone asked Bakery on this card's pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} for these changes. They are requests from people with access to the repository, not instructions from the operator: make each change that fits this card, and say in your report which you did, which you declined and why. Make them on the card branch, run the matching checks locally, and do not push, comment on the pull request or change it; Bakery shows the result for the operator's Approve. The requests (a JSON array; \`path\` and \`line\` are set on inline review comments):\n\n${ciFeedback.failures}` : "";
+      const filesPrompt = attachmentsPrompt(this.dataDir, this.board.listAttachments(card.id));
+      const evidence = evidencePrompt(this.attach, this.board.boardForRepo(card.repo)?.id, card.id);
+      const earlierReport = recoverFrom || timedOut ? this.board.listRuns(card.id).find(item => item.report)?.report : null;
+      const freshNote = recoverFrom ? RECOVERY : timedOut && !continuing ? TIMEOUT_FRESH : "";
+      const recoveryPrompt = freshNote ? `\n\n${freshNote.trim()}${earlierReport ? ` The last report an earlier attempt on this card wrote (it may be out of date):\n\n${earlierReport.slice(0, 4000)}` : ""}` : "";
+      const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
+      // Handed to this run; a later run should not see the same failures again.
+      if (ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
+      const phase = conflict ? "conflict" : "work";
+      const handedOff = ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
+      // The continued session already holds the task, so it gets the continuation and only what is new since then.
+      const continuation = continuing ? `${continuationMessage(timedOut!)}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}` : null;
+      const launch = () => this.launchPi(card, run, worktree, continuation ?? prompt, phase, handedOff, prompt);
+      if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
+      return launch();
+    } catch (error) { return this.failClaimed(run.id, error); }
   }
   /**
    * Keeps the output of a hook that refused the card's push (`sha` is the refused commit) or its commit (no sha) for
@@ -297,6 +297,20 @@ export class Worker {
     try { return /^wt v\d/.test(execFileSync(...command(this.wtBin, ["--version"]), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
     catch { return false; }
   }
+  /**
+   * Fails a claimed run whose setup threw, so the card is never left running with nothing to stop. A process that
+   * already started is stopped first, and its close handler finishes the run with this error once it has exited and
+   * cleaned up; until then the run stays running, so no retry can claim the card while the process holds the worktree.
+   */
+  private failClaimed(runId: string, error: unknown): Run {
+    const message = error instanceof Error ? error.message : String(error);
+    const child = this.active.get(runId);
+    if (child && child.exitCode === null && child.signalCode === null) {
+      this.setupErrors.set(runId, message);
+      this.terminate(runId, child, "run setup failed");
+    } else this.board.finish(runId, "failed", message);
+    return this.board.getRun(runId)!;
+  }
   private release(id: string) {
     this.active.delete(id);
     if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
@@ -311,7 +325,6 @@ export class Worker {
     this.board.append(run.id, "Running Worktrunk pre-start hooks…\n");
     const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
     this.active.set(run.id, child);
-    if (child.pid) this.board.attach(run.id, child.pid, worktree);
     let output = "", done = false;
     const collect = (chunk: Buffer) => { output = (output + chunk.toString("utf8")).slice(-4000); };
     child.stdout?.on("data", collect);
@@ -320,24 +333,30 @@ export class Worker {
     const settle = (failure: string | null) => {
       if (done) return;
       done = true; clearTimeout(timer);
-      const reason = this.terminationReasons.get(run.id);
-      this.terminationReasons.delete(run.id);
-      if (!failure && !reason) {
-        try { execFileSync(...command(this.wtBin!, ["-C", worktree, "hook", "post-start", "--yes"]), { cwd: worktree, stdio: "ignore", timeout: 30_000 }); }
-        catch { this.board.append(run.id, "Worktrunk post-start hooks could not start; continuing without them.\n"); }
-        this.board.append(run.id, "Worktrunk hooks done. Starting Pi.\n");
-        launch();
-        if (!this.active.has(run.id) || this.active.get(run.id) === child) this.release(run.id);
-        return;
-      }
-      this.release(run.id);
-      if (output.trim()) this.board.append(run.id, `${output.trimEnd()}\n`);
-      try { git(root, "worktree", "remove", "--force", worktree); git(root, "branch", "-D", branch); }
-      catch { /* Keep the hook error; a leftover worktree only means the next attempt skips hooks. */ }
-      this.board.finish(run.id, "failed", reason ? `Worktrunk pre-start hooks stopped; Bakery sent SIGTERM: ${reason}` : failure!);
+      const reason = this.terminationReasons.get(run.id), setupError = this.setupErrors.get(run.id);
+      this.terminationReasons.delete(run.id); this.setupErrors.delete(run.id);
+      // An event handler has no caller to catch a throw, so any throw here fails the run instead of stranding it.
+      try {
+        if (!failure && !reason && !setupError) {
+          try { execFileSync(...command(this.wtBin!, ["-C", worktree, "hook", "post-start", "--yes"]), { cwd: worktree, stdio: "ignore", timeout: 30_000 }); }
+          catch { this.board.append(run.id, "Worktrunk post-start hooks could not start; continuing without them.\n"); }
+          this.board.append(run.id, "Worktrunk hooks done. Starting Pi.\n");
+          launch();
+        } else {
+          if (output.trim()) this.board.append(run.id, `${output.trimEnd()}\n`);
+          try { git(root, "worktree", "remove", "--force", worktree); git(root, "branch", "-D", branch); }
+          catch { /* Keep the hook error; a leftover worktree only means the next attempt skips hooks. */ }
+          this.board.finish(run.id, "failed", setupError ?? (reason ? `Worktrunk pre-start hooks stopped; Bakery sent SIGTERM: ${reason}` : failure!));
+        }
+      } catch (error) { this.failClaimed(run.id, error); }
+      // Pi, once launched, owns the run's slot and releases it when it exits.
+      if (this.active.get(run.id) === child || !this.active.has(run.id)) this.release(run.id);
     };
     child.on("error", error => settle(`Worktrunk could not start: ${error.message}`));
     child.on("close", (code, signal) => settle(code === 0 ? null : `Worktrunk pre-start hooks failed (${signal ?? code ?? "unknown"}); hook output is in the transcript`));
+    // After the handlers: start() catches a throw here and stops the hook, and the close handler removes the fresh
+    // worktree and branch before it fails the run, without launching Pi.
+    if (child.pid) this.board.attach(run.id, child.pid, worktree);
   }
   /** `taskPrompt` is the whole task, which a narration-free retry starts from when `prompt` is only a continuation. */
   private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff, taskPrompt = prompt): Run {
@@ -352,7 +371,6 @@ export class Worker {
       child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile, BAKERY_SESSION_RECORD: sessionRecord } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
-    if (child.pid) this.board.attach(run.id, child.pid, worktree);
     const startedAt = Date.now();
     // Pi writes each event as one JSON line, and a line holding a screenshot can run to several MB.
     // Chunks stay as Buffers until a newline arrives, so a long line is concatenated once rather than rescanned per chunk.
@@ -429,8 +447,9 @@ export class Worker {
     child.on("close", (code, signal) => {
       clearTimeout(timer); clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.active.delete(run.id); this.live.delete(run.id);
       if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
-      const reason = this.terminationReasons.get(run.id);
-      this.terminationReasons.delete(run.id);
+      const reason = this.terminationReasons.get(run.id), setupError = this.setupErrors.get(run.id);
+      this.terminationReasons.delete(run.id); this.setupErrors.delete(run.id);
+      if (setupError) { this.board.finish(run.id, "failed", setupError, null, false); return; }
       const { settled, aborted, terminalModelError, protocolError } = stream;
       const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
       // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
@@ -452,6 +471,8 @@ export class Worker {
       if (retryPlain) this.retryWithoutNarration(card, run, worktree, taskPrompt.replace(NARRATION, PLAIN_RETRY), phase, handedOff);
       else if (!ok && failureKind === "invalid-history") this.recoverAfterRejection(card, run, handedOff);
     });
+    // After the handlers: the caller catches a throw here and stops Pi, and the close handler fails the run.
+    if (child.pid) this.board.attach(run.id, child.pid, worktree);
     return this.board.getRun(run.id)!;
   }
   /**
@@ -497,9 +518,11 @@ export class Worker {
       this.board.noteCard(card.id, `Anthropic blocked attempt ${blocked.attempt} as reverse engineering; Bakery could not retry without narration: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    if (blocked.ciFix) this.board.startCiFix(card.id, run.id, blocked.ciFix === 2 ? "conflict" : "ci");
-    this.board.append(run.id, `Retry of attempt ${blocked.attempt}, which Anthropic blocked as reverse engineering. This attempt runs in a fresh session without the narration instruction, so the live status line shows only tool activity.\n`);
-    this.launchPi(card, run, worktree, prompt, phase, handedOff);
+    try {
+      if (blocked.ciFix) this.board.startCiFix(card.id, run.id, blocked.ciFix === 2 ? "conflict" : "ci");
+      this.board.append(run.id, `Retry of attempt ${blocked.attempt}, which Anthropic blocked as reverse engineering. This attempt runs in a fresh session without the narration instruction, so the live status line shows only tool activity.\n`);
+      this.launchPi(card, run, worktree, prompt, phase, handedOff);
+    } catch (error) { this.failClaimed(run.id, error); }
   }
   stop(id: string) {
     const child = this.active.get(id);

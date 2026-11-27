@@ -657,6 +657,76 @@ test("stopping a run during Worktrunk pre-start hooks fails it without starting 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a throw after the run is claimed fails it with the error, and the next run can start", async () => {
+  const { dir, fakePi, board, card } = worktrunkFixture();
+  try {
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    const worker = new Worker(board, join(dir, "data"), fakePi);
+    const listAttachments = board.listAttachments;
+    board.listAttachments = () => { throw new Error("attachments unreadable"); };
+    const failed = worker.start(board.getCard(card.id)!);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.error, "attachments unreadable");
+    assert.equal(board.getCard(card.id)?.status, "failed");
+    assert.equal(worker.activeCount, 0);
+    board.listAttachments = listAttachments;
+    const retry = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(retry.id)?.status === "review");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a throw finishing Worktrunk hooks fails the run instead of escaping the hook's close handler", async () => {
+  const { dir, fakePi, fakeWt, board, card } = worktrunkFixture();
+  try {
+    const worker = new Worker(board, join(dir, "data"), fakePi, fakeWt);
+    const append = board.append.bind(board);
+    board.append = (id, chunk) => { if (chunk.includes("Worktrunk hooks done")) throw new Error("transcript write failed"); append(id, chunk); };
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(run.id)?.status === "failed");
+    assert.equal(board.getRun(run.id)!.error, "transcript write failed");
+    assert.equal(worker.activeCount, 0);
+    board.append = append;
+    const retry = worker.start(board.getCard(card.id)!);
+    await waitFor(() => board.getRun(retry.id)?.status === "review");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const step of ["Pi", "Worktrunk"] as const) {
+  test(`a failed attach after spawning ${step} stops it, holds the card until it has exited, then fails with the error`, async () => {
+    const { dir, repo, fakePi, fakeWt, log, board, card } = worktrunkFixture();
+    try {
+      // No hook runs before the retry in the Pi case, so its Pi must settle without one.
+      writeFileSync(fakePi, `#!/bin/sh\necho pi >> '${log}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+      // The process would outlive every wait below unless Bakery stops it.
+      const slow = join(dir, "slow");
+      writeFileSync(slow, `#!/bin/sh\n[ "$1" = --version ] && { echo "wt v0.81.0"; exit 0; }\necho slow >> '${log}'\nexec sleep 60\n`);
+      chmodSync(slow, 0o755);
+      const worker = step === "Pi" ? new Worker(board, join(dir, "data"), slow) : new Worker(board, join(dir, "data"), fakePi, slow);
+      const attach = board.attach.bind(board);
+      board.attach = () => { throw new Error("pid not recorded"); };
+      const run = worker.start(board.getCard(card.id)!);
+      board.attach = attach;
+      // The stopped process may still hold the worktree, so a retry has to wait for it.
+      const retryWorker = new Worker(board, join(dir, "data"), fakePi, fakeWt);
+      assert.throws(() => retryWorker.start(board.getCard(card.id)!), /already has an active run/);
+      await waitFor(() => board.getRun(run.id)?.status === "failed");
+      assert.equal(board.getRun(run.id)!.error, "pid not recorded");
+      assert.doesNotMatch(readFileSync(log, { encoding: "utf8", flag: "a+" }), /^pi$/m, "the stopped run must not launch Pi");
+      assert.equal(worker.activeCount, 0);
+      await worker.drain();
+      const retry = retryWorker.start(board.getCard(card.id)!);
+      await waitFor(() => board.getRun(retry.id)?.status === "review");
+      const worktree = join(dir, "data", "worktrees", card.id);
+      assert.ok(existsSync(join(worktree, "README.md")));
+      assert.equal(execFileSync("git", ["-C", worktree, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" }).trim(), `bakery/${card.id}`);
+      assert.match(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" }), new RegExp(`\\[bakery/${card.id}\\]`));
+      board.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
 test("a local-mode card worktree starts from origin/main when local main is behind it, and from main when ahead", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
   const repo = join(dir, "repo"), remote = join(dir, "origin.git"), other = join(dir, "other"), fakePi = join(dir, "pi-fake");

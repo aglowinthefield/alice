@@ -323,6 +323,7 @@ flowchart LR
 - Failed reviews aren't retried.
 - The reviewer reads the repository's `AGENTS.md`, `CLAUDE.md` and review instructions and runs the checks they ask for itself, instead of sending the card back for missing proof. Checks only a person can do, such as device runs, screenshots or staging access, leave the card for you.
 - Turning the setting off stops a review in progress from opening a PR.
+- **Approve N** in the Review lane header of a local board (or `alice approve-approved --yes`) approves every agent-approved card, oldest first, through the same checks as Approve. It asks first, naming the count. It stops at the first card that conflicts, fails or whose work changed since the agent reviewed it, notes why on that card, and leaves it and the later cards in Review. Cards that aren't agent-approved, and cards approved after you confirmed, are left alone.
 - The reviewer is a full Pi agent in the card's worktree, with the same tools, extensions, skills, and context files as a card run. It can read code and run builds or tests, and runs locally with your permissions. It's told not to change anything; if the work changes during review, the card is left for you.
 
 ## CLI
@@ -349,6 +350,7 @@ npm run alice -- start CARD_ID... --yes
 npm run alice -- recover CARD_ID --yes
 npm run alice -- runs CARD_ID
 npm run alice -- conflicts
+npm run alice -- approve-approved [--yes]
 npm run alice -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
 npm run alice -- board [--integration local|github-pr]
 npm run alice -- pr CARD_ID [URL|off]

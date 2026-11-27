@@ -451,6 +451,17 @@ const server = createServer(async (req, res) => {
         return { ...pr, card: card ? { id: card.id, title: card.title, status: card.status, prChecks: card.prChecks ?? null } : null };
       })); return;
     }
+    // Approve all: GET lists the agent-approved queue, POST approves the cards the person confirmed, oldest first.
+    const approveAllRoute = path.match(/^\/api\/boards\/([\w-]+)\/approve-approved$/);
+    if (approveAllRoute && (req.method === "GET" || req.method === "POST")) {
+      const repoBoard = board.getBoard(approveAllRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      if (req.method === "GET") { send(res, 200, integration.agentApprovedQueue(repoBoard.repo).map(card => ({ id: card.id, title: card.title }))); return; }
+      const { cardIds } = await body(req);
+      if (!Array.isArray(cardIds) || !cardIds.length || cardIds.length > 500 || !cardIds.every(value => typeof value === "string" && /^[\w-]+$/.test(value)))
+        throw new Error("cardIds must list the agent-approved cards you confirmed");
+      send(res, 200, await integration.approveAgentApproved(repoBoard.repo, cardIds as string[])); return;
+    }
     const pickupResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/auto-pickup\/reset-limit$/);
     if (pickupResetRoute && req.method === "POST") {
       const repoBoard = board.getBoard(pickupResetRoute[1]);

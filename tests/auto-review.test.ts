@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
+import type { ApproveAllResult } from "../shared/wire.js";
 import { AutoReview, promptDiff, reviewerPrompt, reviewerVerdict } from "../server/auto-review.js";
 import { RunLimitError } from "../server/board.js";
 import { AutoPickup } from "../server/auto-pickup.js";
@@ -29,13 +30,13 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
   // The fake emits the same JSON events as --mode json; it never calls a model.
   writeFileSync(piBin, `#!/bin/sh\ncat <<'EVENTS'\n${settle(verdict)}EVENTS\n`); chmodSync(piBin, 0o755);
   const integration = new Integration(board, data), auto = new AutoReview(board, integration, piBin);
-  function reviewedCard() {
-    const card = board.createCard({ repo, title: "Add a new line", body: "Include a regression test" });
+  function reviewedCard(title = "Add a new line", file = "README.md") {
+    const card = board.createCard({ repo, title, body: "Include a regression test" });
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
     git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);
-    writeFileSync(join(worktree, "README.md"), `original\nnew ${card.id}\n`);
+    writeFileSync(join(worktree, file), file === "README.md" ? `original\nnew ${card.id}\n` : `${card.id}\n`);
     board.finish(run.id, "review");
     // The server records this when a run reaches Review; the card's next step depends on it.
     board.recordChangedFiles(run.id, 1);
@@ -700,6 +701,78 @@ test("auto-review is not stopped by the diff viewer's 200-file cap, but still re
     await item.auto.tick();
     assert.equal(item.board.listAutoReviewJobs(many.card.id)[0].details, "Agent requested human review: Stop here", "reached the reviewer");
     assert.match(item.board.listAutoReviewJobs(binary.card.id)[0].details, /Binary, symlink, or submodule/);
+  } finally { item.close(); }
+});
+
+/** Three cards the agent approved, oldest first, on separate files so each merges on its own. */
+async function approvedQueue() {
+  const item = fixture();
+  item.board.setAutoReview(item.repoBoard.id, true);
+  // Count every run below as finished after auto-review was turned on, without waiting on the clock.
+  item.board.sqlite.prepare("UPDATE boards SET autoReviewEnabledAt=? WHERE id=?").run("2000-01-01T00:00:00.000Z", item.repoBoard.id);
+  const cards = [item.reviewedCard("First", "first.txt"), item.reviewedCard("Second", "second.txt"), item.reviewedCard("Third", "third.txt")];
+  for (let ticks = 0; item.board.listAutoReviewCandidates().length && ticks < 10; ticks++) await item.auto.tick();
+  cards.forEach(({ card }, index) => item.board.sqlite.prepare("UPDATE cards SET updatedAt=? WHERE id=?").run(`2026-01-0${index + 1}T00:00:00.000Z`, card.id));
+  const integration = new Integration(item.board, item.data);
+  return { ...item, cards, integration, ids: cards.map(({ card }) => card.id), status: (id: string) => item.board.getCard(id)!.status };
+}
+const names = (list: { title: string }[]) => list.map(card => card.title);
+
+test("Approve all merges the agent-approved cards oldest first and never touches the others", async () => {
+  const item = await approvedQueue();
+  try {
+    // Listed in creation order would put Second first: the queue goes by when each card was last updated.
+    item.board.sqlite.prepare("UPDATE cards SET updatedAt=? WHERE id=?").run("2025-12-31T00:00:00.000Z", item.ids[1]);
+    const handedOff = item.reviewedCard("Handed off", "handed-off.txt");
+    await item.auto.tick();
+    item.board.sqlite.prepare("UPDATE auto_review_jobs SET state='needs_human' WHERE cardId=?").run(handedOff.card.id);
+    const unconfirmed = item.reviewedCard("Approved after you confirmed", "late.txt");
+    await item.auto.tick();
+    assert.equal(item.board.getCard(handedOff.card.id)!.reviewAction, "needs_you");
+    assert.equal(item.board.getCard(unconfirmed.card.id)!.reviewAction, "agent_approved");
+    assert.deepEqual(names(item.integration.agentApprovedQueue(item.repo)), ["Second", "First", "Third", "Approved after you confirmed"]);
+
+    const result: ApproveAllResult = await item.integration.approveAgentApproved(item.repo, [...item.ids, handedOff.card.id]);
+    assert.deepEqual(names(result.merged), ["Second", "First", "Third"]);
+    assert.equal(result.stopped, null);
+    assert.deepEqual(result.remaining, []);
+    assert.deepEqual(git(item.repo, "log", "--first-parent", "--format=%s", "-3", "main").split("\n"), ["Merge card: Third", "Merge card: First", "Merge card: Second"]);
+    for (const id of item.ids) assert.equal(item.status(id), "done");
+    assert.equal(item.status(handedOff.card.id), "review", "a card the agent handed to a person is left alone");
+    assert.equal(item.status(unconfirmed.card.id), "review", "a card approved after you confirmed waits for the next Approve all");
+  } finally { item.close(); }
+});
+
+test("Approve all stops at a conflict: earlier cards stay merged, the rest stay in Review with the reason", async () => {
+  const item = await approvedQueue();
+  try {
+    // Main moves after the reviews: First still merges, since its reviewed work is unchanged; Second conflicts.
+    writeFileSync(join(item.repo, "second.txt"), "main's own second\n");
+    git(item.repo, "add", "second.txt");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "conflicting main");
+    const result = await item.integration.approveAgentApproved(item.repo, item.ids);
+    assert.deepEqual(names(result.merged), ["First"]);
+    assert.equal(result.stopped?.id, item.ids[1]);
+    assert.equal(result.stopped?.reason, "Changes conflict with current main: second.txt");
+    assert.deepEqual(names(result.remaining), ["Second", "Third"]);
+    assert.deepEqual([item.status(item.ids[0]), item.status(item.ids[1]), item.status(item.ids[2])], ["done", "review", "review"]);
+    assert.deepEqual(item.board.listMergeFailures(item.repo).map(failure => failure.cardId), [item.ids[1]]);
+    assert.match(item.board.listCardEvents(item.ids[1]).at(-1)!.reason, /^Approve all stopped at this card and left it in Review: Changes conflict/);
+    assert.equal(item.board.getCard(item.ids[2])!.reviewAction, "agent_approved", "Third is untouched and still waits for Approve");
+    assert.doesNotMatch(readFileSync(join(item.repo, "README.md"), "utf8"), /new /);
+  } finally { item.close(); }
+});
+
+test("Approve all stops at a card whose work changed after the agent reviewed it", async () => {
+  const item = await approvedQueue();
+  try {
+    writeFileSync(join(item.cards[1].worktree, "second.txt"), "edited after the agent approved it\n");
+    const result = await item.integration.approveAgentApproved(item.repo, item.ids);
+    assert.deepEqual(names(result.merged), ["First"]);
+    assert.match(result.stopped!.reason, /work changed since the agent reviewed it/);
+    assert.deepEqual(names(result.remaining), ["Second", "Third"]);
+    assert.deepEqual([item.status(item.ids[1]), item.status(item.ids[2])], ["review", "review"]);
+    assert.equal(existsSync(join(item.repo, "second.txt")), false, "the changed work never reached main");
   } finally { item.close(); }
 });
 

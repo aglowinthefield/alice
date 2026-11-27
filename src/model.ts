@@ -9,7 +9,13 @@ import type {
 import type { Card, CardPriority, CardStatus } from "../shared/wire.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
 
-export type { Card, ReviewAction, ReviewWait, Run } from "../shared/wire.js";
+export type {
+  ApproveAllResult,
+  Card,
+  ReviewAction,
+  ReviewWait,
+  Run,
+} from "../shared/wire.js";
 export {
   agentApproved,
   cardActivity,

@@ -245,3 +245,10 @@ export type LogEntry = {
   level: LogLevel;
   message: string;
 };
+
+/** What Approve all did on a local board: the cards it merged, where it stopped and why, and the cards left in Review. */
+export type ApproveAllResult = {
+  merged: { id: string; title: string }[];
+  stopped: { id: string; title: string; reason: string } | null;
+  remaining: { id: string; title: string }[];
+};

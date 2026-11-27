@@ -101,8 +101,15 @@ export const COMMANDS = [
   {
     name: "close", group: "Runs", args: "CARD_ID", summary: "move a Review card to Done without merging",
     full: "CARD_ID [--reason REASON [--note TEXT]] [--board ID|PATH] [--json]",
-    details: "The worktree and branch stay. No command approves a merge. The reason is optional and shows in the card's history and on the Statistics page.",
+    details: "The worktree and branch stay. To merge agent-approved cards instead, use approve-approved. The reason is optional and shows in the card's history and on the Statistics page.",
     options: [["--reason REASON", "duplicate, wrong-approach, not-needed, superseded or other"], ["--note TEXT", "free text with the reason, up to 500 characters"], BOARD, JSON_OUT],
+  },
+  {
+    name: "approve-approved", group: "Runs", args: "--yes", summary: "merge every agent-approved card, oldest first",
+    full: "[--board ID|PATH] --yes [--json]",
+    details: "Local boards only. Approves the Review cards the agent reviewer approved, oldest first, the same way Approve does. It stops at the first card that conflicts, fails or changed since the agent reviewed it, notes why on that card, and leaves it and the later cards in Review. Without --yes it lists the cards and merges nothing. Exits 1 when it stopped early.",
+    options: [BOARD, ["--yes", "confirm the merges"], JSON_OUT],
+    examples: [["alice approve-approved", "list what would merge"], ["alice approve-approved --yes", ""]],
   },
   {
     name: "conflicts", group: "Runs", summary: "cards whose merge conflicts",

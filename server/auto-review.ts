@@ -254,7 +254,7 @@ export class AutoReview {
       // Nothing merges into local main without a person: on a local board, and on a pull-request board where Alice
       // cannot push, the agent's approval is advice and the card waits in Review for Approve.
       if (!pullRequests || !this.openPullRequest) {
-        this.board.finishAutoReview(run.id, "approved", verdict.reason, fingerprint);
+        this.board.finishAutoReview(run.id, "approved", verdict.reason, fingerprint, undefined, "", work);
         return;
       }
       // A card it depends on merged during this review, so the approved tree is on an old main. The next tick brings

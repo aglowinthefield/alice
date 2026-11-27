@@ -115,7 +115,7 @@ export type Approval = { cardId: string; runId: string; candidate: string; prepa
  * `handoff` is what Alice posts on the draft pull request it opens when the review leaves the card for a person on a
  * board with automatic pull requests; empty for jobs from before it was kept.
  */
-export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string; handoff: string; handoffPending: number } & UsageFields;
+export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; work: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string; handoff: string; handoffPending: number } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
 export { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot };
 // Conflict events older than this are pruned; only the hotspot window reads them.
@@ -403,6 +403,9 @@ export class Board {
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
     if (!jobColumns.has("changes")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN changes TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("requeued")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN requeued INTEGER NOT NULL DEFAULT 0");
+    // The run and tree the reviewer saw (`run:tree`). Unlike the fingerprint it ignores main, so Approve all can tell
+    // "main moved" from "the work changed". Older reviews keep '' and fall back to the fingerprint.
+    if (!jobColumns.has("work")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN work TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("handoff")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN handoff TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("handoffPending")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN handoffPending INTEGER NOT NULL DEFAULT 0");
     // Older attempts and reviews keep NULL usage so the UI shows "—" rather than an invented 0.
@@ -1105,13 +1108,13 @@ export class Board {
       if (!candidate) throw new Error("Auto-review is not eligible for this card");
       // A requeued job keeps its row, so the interrupted attempt's spend and agent still count.
       this.db.prepare(`INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,cost) VALUES (?,?,'running',?,0,0,0,0,0)
-        ON CONFLICT(runId) DO UPDATE SET state='running', details='', fingerprint='', startedAt=excluded.startedAt, finishedAt=NULL, requeued=0 WHERE requeued=1`).run(cardId, runId, now());
+        ON CONFLICT(runId) DO UPDATE SET state='running', details='', fingerprint='', work='', startedAt=excluded.startedAt, finishedAt=NULL, requeued=0 WHERE requeued=1`).run(cardId, runId, now());
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[], handoff = ""): void {
-    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, finishedAt=?, changes=?, handoff=? WHERE runId=? AND state='running'")
-      .run(state, details.slice(0, 4000), fingerprint, now(), changes ? JSON.stringify(changes) : "", handoff, runId);
+  finishAutoReview(runId: string, state: "needs_human" | "approved" | "merged" | "pull_request", details: string, fingerprint = "", changes?: { path: string; line?: number; comment: string }[], handoff = "", work = ""): void {
+    this.db.prepare("UPDATE auto_review_jobs SET state=?, details=?, fingerprint=?, work=?, finishedAt=?, changes=?, handoff=? WHERE runId=? AND state='running'")
+      .run(state, details.slice(0, 4000), fingerprint, work, now(), changes ? JSON.stringify(changes) : "", handoff, runId);
   }
   /**
    * The reviewer's requested rerun cannot start (not a capacity wait): the completed review becomes a human handoff, so

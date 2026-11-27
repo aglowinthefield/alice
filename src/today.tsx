@@ -17,7 +17,7 @@ import {
 type Props = {
   boards: Board[];
   cards: Card[];
-  /** When you last opened Bakery. Cards finished after it count as new. */
+  /** When you last opened Alice. Cards finished after it count as new. */
   since: string;
   onOpen: (card: Card) => void;
   onReview: () => void;
@@ -163,7 +163,7 @@ function CardList({
   );
 }
 
-const captureKey = "bakery-capture-board";
+const captureKey = "alice-capture-board";
 
 function Capture({
   boards,

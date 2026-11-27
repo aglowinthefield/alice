@@ -9,7 +9,7 @@ const messages = [
   { id: "m1", chatId: "c1", role: "user", body: "What is blocked?", parts: [], createdAt: "2025-01-01T00:00:00Z" },
   { id: "m2", chatId: "c1", role: "agent", body: "Card B waits on A.", createdAt: "2025-01-01T00:00:01Z",
     parts: [
-      { type: "tool", id: "t1", name: "bash", input: "bakery-cli cards", output: "A\nB", status: "done" },
+      { type: "tool", id: "t1", name: "bash", input: "alice cards", output: "A\nB", status: "done" },
       { type: "text", text: "Card B waits on A." },
     ] },
 ];
@@ -781,7 +781,7 @@ test("shortening or deleting the longest label lowers the maximum and clamps a w
       { id: "c1", topic: "Hi", unread: 0 },
       { id: "c2", topic: "Why is card B still waiting on A", unread: 0 },
     ];
-    await page.addInitScript(() => localStorage.setItem("bakery-chat-sidebar-width", "900"));
+    await page.addInitScript(() => localStorage.setItem("alice-chat-sidebar-width", "900"));
     await unreadHarness(page, list);
     await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
     const nav = page.getByRole("navigation", { name: "Chats" });

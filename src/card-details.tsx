@@ -35,7 +35,7 @@ import {
   needsYourReview,
   reviewActionLabels,
   type AutoReviewJob,
-  type BakerySettings,
+  type AliceSettings,
   type Card,
   type MergeConflict,
   type ReviewComment,
@@ -61,7 +61,7 @@ type Props = {
   onOpenCard: (id: string) => void;
   /** Opens the repository's Pull requests page on this card's PR; absent when the remote has none. */
   onOpenPullRequest?: () => void;
-  settings: BakerySettings | null;
+  settings: AliceSettings | null;
   conflict: MergeConflict | undefined;
   onClose: () => void;
   onEdit: (card: Card) => void;
@@ -106,7 +106,7 @@ export function CardDetails({
     setReply("");
   }, [cardId]);
   const [sideWidth, setSideWidth] = useState(
-    () => Number(localStorage.getItem("bakery-side-width")) || 900,
+    () => Number(localStorage.getItem("alice-side-width")) || 900,
   );
   const [smallScreen, setSmallScreen] = useState(
     () => window.matchMedia("(max-width: 1023px)").matches,
@@ -385,7 +385,7 @@ export function CardDetails({
                     Math.max(520, window.innerWidth - event.clientX),
                   );
                   setSideWidth(width);
-                  localStorage.setItem("bakery-side-width", String(width));
+                  localStorage.setItem("alice-side-width", String(width));
                 }
               }}
               onKeyDown={(event) => {
@@ -400,7 +400,7 @@ export function CardDetails({
                       previous + (event.key === "ArrowLeft" ? 32 : -32),
                     ),
                   );
-                  localStorage.setItem("bakery-side-width", String(width));
+                  localStorage.setItem("alice-side-width", String(width));
                   return width;
                 });
               }}
@@ -573,8 +573,8 @@ export function CardDetails({
             card.locallyMerged && (
               <div className="mt-4 rounded-md border border-border p-3 text-xs">
                 <p>
-                  Bakery merged this card into local main, not through a pull
-                  request. Publish as PR pushes the approved work to bakery/
+                  Alice merged this card into local main, not through a pull
+                  request. Publish as PR pushes the approved work to alice/
                   {card.id}, opens a pull request, and moves the card back to
                   Review until the PR merges.
                 </p>
@@ -1009,7 +1009,7 @@ export function CardDetails({
                       {card.source}
                     </code>
                     {card.source === "manual" && (
-                      <span>(made before Bakery recorded sources)</span>
+                      <span>(made before Alice recorded sources)</span>
                     )}
                   </div>
                 )}
@@ -1230,7 +1230,7 @@ export function CardDetails({
                   if (
                     integration !== "github-pr" &&
                     !(await confirmAction(
-                      `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                      `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Alice checks Git conflicts and whitespace, but does not run tests or push.`,
                     ))
                   )
                     return;
@@ -1598,7 +1598,7 @@ function PullRequestLink({
             #{card.prNumber}
           </a>
         ) : (
-          `none yet (looks for bakery/${card.id})`
+          `none yet (looks for alice/${card.id})`
         )}
         {onOpenPullRequest && (
           <>

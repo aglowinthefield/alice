@@ -442,6 +442,59 @@ test("reviewer can request changes with concrete items, and malformed requests a
   assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"x","changes":[{"path":"a","comment":"b"}]}')), /invalid or ambiguous/);
 });
 
+test("reviewer can leave a checklist only a person can do, and malformed lists are rejected", () => {
+  const checks = ["Open the card on an iPhone in dark mode", "Confirm staging sends the email"];
+  for (const verdict of ["approve", "needs_human"] as const)
+    assert.deepEqual(reviewerVerdict(settle(JSON.stringify({ verdict, reason: "Needs eyes", humanChecks: checks }))), { verdict, reason: "Needs eyes", humanChecks: checks });
+  assert.deepEqual(reviewerVerdict(settle('{"verdict":"needs_human","reason":"x","humanChecks":["  padded  "]}')).humanChecks, ["padded"]);
+  assert.deepEqual(reviewerVerdict(settle('{"verdict":"approve","reason":"x","humanChecks":[]}')), { verdict: "approve", reason: "x" }, "an empty list means nothing to check");
+  for (const bad of [
+    '"humanChecks":"check the screenshots"',
+    '"humanChecks":[1]',
+    '"humanChecks":["  "]',
+    `"humanChecks":${JSON.stringify(["x".repeat(200)])}`,
+    `"humanChecks":${JSON.stringify(Array.from({ length: 9 }, (_, index) => `check ${index}`))}`,
+  ]) assert.throws(() => reviewerVerdict(settle(`{"verdict":"needs_human","reason":"x",${bad}}`)), /invalid or ambiguous/, bad);
+  assert.equal(reviewerVerdict(settle(JSON.stringify({ verdict: "approve", reason: "x", humanChecks: ["x".repeat(199)] }))).humanChecks?.[0].length, 199);
+  assert.throws(() => reviewerVerdict(settle('{"verdict":"request_changes","reason":"x","changes":[{"path":"a","comment":"b"}],"humanChecks":["y"]}')), /invalid or ambiguous/,
+    "a send-back goes to the implementer, not a person");
+  assert.match(reviewerPrompt({ title: "t", body: "b" }, "diff"), /"humanChecks"/);
+});
+
+test("a hand-off's checks are stored on its run and ticks persist per run", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"Screens need a look","humanChecks":["Check dark mode","Check light mode"]}');
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const { card, run } = item.reviewedCard();
+    await item.auto.tick();
+    const job = item.board.getAutoReviewJob(run.id)!;
+    assert.equal(job.state, "needs_human");
+    assert.equal(job.details, "Agent requested human review: Screens need a look");
+    assert.deepEqual(JSON.parse(job.humanChecks), ["Check dark mode", "Check light mode"]);
+    assert.equal(job.humanChecksTicked, "");
+    assert.equal(item.board.tickHumanCheck(card.id, run.id, 1, true).humanChecksTicked, "[1]");
+    assert.equal(item.board.tickHumanCheck(card.id, run.id, 0, true).humanChecksTicked, "[0,1]");
+    assert.equal(item.board.tickHumanCheck(card.id, run.id, 1, false).humanChecksTicked, "[0]");
+    assert.throws(() => item.board.tickHumanCheck(card.id, run.id, 2, true), /No such check/);
+    assert.throws(() => item.board.tickHumanCheck("other-card", run.id, 0, true), /not found/);
+    assert.equal(item.board.getAutoReviewJob(run.id)!.humanChecksTicked, "[0]", "ticks survive a reload of the job");
+  } finally { item.close(); }
+});
+
+test("an approval keeps its checks for the person who presses Approve", async () => {
+  const item = fixture('{"verdict":"approve","reason":"Logic is right","humanChecks":["Try it on a phone"]}');
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const { run } = item.reviewedCard();
+    await item.auto.tick();
+    const job = item.board.getAutoReviewJob(run.id)!;
+    assert.equal(job.state, "approved");
+    assert.deepEqual(JSON.parse(job.humanChecks), ["Try it on a phone"]);
+  } finally { item.close(); }
+});
+
 test("reviewer progress reports elapsed time, turns, tool counts and narration without tool arguments", async () => {
   const { ReviewProgress } = await import("../server/auto-review.js");
   const progress = new ReviewProgress(0);

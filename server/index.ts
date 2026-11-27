@@ -751,6 +751,11 @@ const server = createServer(async (req, res) => {
           throw new Error("This card is a sentinel job. Its sentinel delivers the result; it is not reviewed or merged here");
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRunsWithKinds(id)); return; }
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
+        if (req.method === "POST" && action === "human-checks") {
+          const { runId, index, ticked } = await body(req);
+          if (typeof runId !== "string" || !/^[\w-]+$/.test(runId) || typeof index !== "number" || typeof ticked !== "boolean") throw new Error("Send runId, index and ticked");
+          send(res, 200, board.tickHumanCheck(id, runId, index, ticked)); return;
+        }
         if (req.method === "GET" && action === "history") { send(res, 200, cardHistory(item, board.listCardEvents(id), board.listRuns(id), board.listAutoReviewJobs(id))); return; }
         if (req.method === "GET" && action === "push-progress") { send(res, 200, integration.pushProgress(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }

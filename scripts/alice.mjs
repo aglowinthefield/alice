@@ -117,6 +117,13 @@ function cardId(value) {
 
 const usageKeys = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "cost"];
 // Older attempts have null usage: they are unknown, not free.
+/** The checks the agent reviewer left for a person on a review job, with whether each is ticked. */
+function humanChecks(job) {
+  try {
+    const ticked = new Set(job?.humanChecksTicked ? JSON.parse(job.humanChecksTicked) : []);
+    return (job?.humanChecks ? JSON.parse(job.humanChecks) : []).map((text, index) => ({ text, ticked: ticked.has(index) }));
+  } catch { return []; }
+}
 function usageTotal(items) {
   const recorded = items.filter(item => typeof item.cost === "number");
   const total = Object.fromEntries(usageKeys.map(key => [key, recorded.length ? recorded.reduce((sum, item) => sum + (item[key] ?? 0), 0) : null]));
@@ -384,6 +391,7 @@ async function main() {
       `attempts\t${runs.length}`,
       ...runs.map(run => `#${run.attempt}\t${run.status}\t${run.agent || "-"}${run.error ? `\t${run.error}` : ""}`),
       `auto-review\t${review ? `${review.state}${review.details ? `\t${review.details}` : ""}` : "none"}`,
+      ...humanChecks(review).map(check => `check\t[${check.ticked ? "x" : " "}] ${check.text}`),
     ]);
   } else if (command === "edit") {
     const id = args[0];

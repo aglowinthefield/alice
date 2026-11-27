@@ -1,4 +1,4 @@
-// Token and cost fields are null for attempts recorded before Bakery tracked usage.
+// Token and cost fields are null for attempts recorded before Alice tracked usage.
 // Those show "—": unknown, not free.
 export type UsageFields = {
   inputTokens?: number | null;

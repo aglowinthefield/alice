@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Small block parser covering what Bakery text uses (src/markdown.ts): headings, paragraphs, fenced code,
+/// Small block parser covering what Alice text uses (src/markdown.ts): headings, paragraphs, fenced code,
 /// quotes, lists with task boxes, rules, tables, and images from card attachment or chat image URLs.
 enum MDBlock: Identifiable {
     case heading(Int, String), paragraph(String), code(String, String?), quote(String)

@@ -13,7 +13,7 @@ import {
   thinkingLevels,
   type AgentModel,
   type ThinkingLevel,
-} from "../server/agent-models.js";
+} from "../shared/agent-models.js";
 import { Button } from "./components/ui/button";
 import { CardLinks, Markdown } from "./markdown-view.js";
 import { formatRoute } from "./route.js";
@@ -43,7 +43,7 @@ import {
 
 type ChatState = { messages: ChatMessage[]; live: ChatLive };
 
-const railKey = "bakery-chat-sidebar";
+const railKey = "alice-chat-sidebar";
 // How often the chat list refreshes its per-chat unread counts, and how long a dropped event stream waits to reconnect.
 const listPollMs = 3000;
 const reconnectMs = 3000;
@@ -67,7 +67,7 @@ function UnreadBadge({
       data-unread={count}
       aria-label={`${count} unread`}
       title={`${count} unread ${count === 1 ? "reply" : "replies"}`}
-      className={`shrink-0 rounded-sm bg-primary px-1.5 font-mono text-[10px] leading-4 text-primary-foreground ${className}`}
+      className={`shrink-0 rounded-sm bg-primary px-1.5 font-mono text-[11px] leading-4 text-primary-foreground ${className}`}
     >
       {count}
     </span>
@@ -115,7 +115,7 @@ function Parts({ parts }: { parts: ChatPart[] }) {
   );
 }
 
-/** General-purpose agent chats for one board. The agent can read and change the board through bakery-cli. */
+/** General-purpose agent chats for one board. The agent can read and change the board through alice. */
 export function ChatView({
   boardId,
   onError,
@@ -135,7 +135,7 @@ export function ChatView({
 }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [chatId, setChatId] = useState<string | null>(() =>
-    sessionStorage.getItem(`bakery-chat-${boardId}`),
+    sessionStorage.getItem(`alice-chat-${boardId}`),
   );
   const [state, setState] = useState<ChatState>({ messages: [], live: null });
   const [draft, setDraft] = useState("");
@@ -155,6 +155,9 @@ export function ChatView({
   );
   const [contentWidth, setContentWidth] = useState<number | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  // Bumped when a web font finishes loading. Inter swaps in after the first layout, which changes the labels' widths
+  // without a render, so the list measures them again.
+  const [, setFontsLoaded] = useState(0);
   const [sideBySide, setSideBySide] = useState(
     () => window.matchMedia("(min-width: 768px)").matches,
   );
@@ -309,8 +312,15 @@ export function ChatView({
       observer?.disconnect();
     };
   }, []);
+  useEffect(() => {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    const update = () => setFontsLoaded((count) => count + 1);
+    fonts.addEventListener("loadingdone", update);
+    return () => fonts.removeEventListener("loadingdone", update);
+  }, []);
   // The widest a row needs to show its whole label, measured from what is displayed, so it follows the labels,
-  // the date grouping, the unread badges and the chat list.
+  // the date grouping, the unread badges, the fonts and the chat list.
   useLayoutEffect(() => {
     const nav = rail.current;
     if (!nav || collapsed) return;
@@ -348,8 +358,8 @@ export function ChatView({
     localStorage.setItem(groupingKey, grouping);
   }, [grouping]);
   useEffect(() => {
-    if (chatId) sessionStorage.setItem(`bakery-chat-${boardId}`, chatId);
-    else sessionStorage.removeItem(`bakery-chat-${boardId}`);
+    if (chatId) sessionStorage.setItem(`alice-chat-${boardId}`, chatId);
+    else sessionStorage.removeItem(`alice-chat-${boardId}`);
   }, [chatId, boardId]);
 
   // The transcript comes from one fetch, then the event stream carries the live reply and each saved message.
@@ -629,7 +639,7 @@ export function ChatView({
         {chat.unread ? (
           <UnreadBadge
             count={chat.unread}
-            className="absolute right-0 top-0 px-1 text-[9px] leading-3"
+            className="absolute right-0 top-0 px-1"
           />
         ) : (
           chat.pending && (
@@ -659,13 +669,13 @@ export function ChatView({
           dateTime={chat.updatedAt}
           title={fullTime(chat.updatedAt)}
           data-chat-time
-          className="shrink-0 pl-1 text-[10px] text-muted-foreground"
+          className="shrink-0 pl-1 text-[11px] text-muted-foreground"
         >
           {grouping === "date"
             ? clockTime(chat.updatedAt)
             : shortDay(chat.updatedAt)}
         </time>
-        {!!chat.unread && <UnreadBadge count={chat.unread} />}
+        {!!chat.unread && <UnreadBadge count={chat.unread} className="ml-1" />}
         <button
           aria-label={`Delete ${chatLabel(chat)}`}
           onClick={() => void remove(chat)}
@@ -752,7 +762,7 @@ export function ChatView({
                   data-chat-group={group.key}
                   className="flex flex-col gap-1"
                 >
-                  <h3 className="px-2 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <h3 className="px-2 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                     {group.heading}
                   </h3>
                   {group.chats.map((chat) => row(chat))}
@@ -817,7 +827,7 @@ export function ChatView({
                 data-role={item.role}
                 className={`${quiet.current.has(item.id) ? "" : "chat-entry "}rounded-md border p-3 ${item.role === "user" ? "ml-8 border-primary/30 bg-primary/10" : item.role === "error" ? "mr-8 border-destructive/30 bg-destructive/10 text-destructive" : "mr-8 border-border bg-accent/10"}`}
               >
-                <div className="mb-1 flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
                   <span>
                     {item.role === "user"
                       ? "You"
@@ -852,7 +862,7 @@ export function ChatView({
                 data-live="true"
                 className="chat-entry mr-8 rounded-md border border-border bg-accent/10 p-3"
               >
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
                   Agent
                 </div>
                 {state.live.parts.length ? (

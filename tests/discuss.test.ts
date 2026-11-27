@@ -7,7 +7,7 @@ import { Board } from "../server/board.js";
 import { discuss, discussionPrompt } from "../server/discuss.js";
 
 test("discussion messages persist per card in order", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-discuss-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-discuss-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const a = board.createCard({ title: "A", body: "", repo: dir }), b = board.createCard({ title: "B", body: "", repo: dir });
@@ -20,7 +20,7 @@ test("discussion messages persist per card in order", () => {
 });
 
 test("the discussion prompt carries the card, report and recent chat, and forbids edits", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-discuss-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-discuss-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Fix feed", body: "Details here", repo: dir });
@@ -32,7 +32,7 @@ test("the discussion prompt carries the card, report and recent chat, and forbid
 });
 
 test("discuss returns Pi's reply and reports failures", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-discuss-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-discuss-"));
   try {
     const ok = join(dir, "pi-ok"), bad = join(dir, "pi-bad");
     writeFileSync(ok, `#!/bin/sh

@@ -3,7 +3,7 @@ import type { DiffLine } from "./diff-lines.js";
 export type DiffSide = "additions" | "deletions";
 export type DiffTarget = { side: DiffSide; lineNumber: number };
 
-// Bakery stores one file's patch. Fixtures and some git output omit the file header,
+// Alice stores one file's patch. Fixtures and some git output omit the file header,
 // which the diff renderer needs to name the file and pick a language.
 export function withFileHeader(path: string, patch: string): string {
   if (/^(diff --git |--- )/m.test(patch.split("@@")[0] ?? "")) return patch;

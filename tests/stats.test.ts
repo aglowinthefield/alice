@@ -21,6 +21,13 @@ const input: StatsInput = {
     { repo: "/code/alpha", status: "done", createdAt: "2026-03-09T12:00:00.000Z", updatedAt: "2026-03-10T00:00:00.000Z", attempts: 2, reviewRounds: 1, ciReworks: 2 },
     { repo: "/code/beta", status: "triage", createdAt: "2026-03-10T01:00:00.000Z", updatedAt: "2026-03-10T01:00:00.000Z", attempts: 0, reviewRounds: 0, ciReworks: 0 },
   ],
+  closes: [
+    { repo: "/code/alpha", at: "2026-03-10T09:00:00.000Z", reason: "duplicate" },
+    { repo: "/code/beta", at: "2026-03-09T09:00:00.000Z", reason: "duplicate" },
+    { repo: "/code/alpha", at: "2026-03-08T09:00:00.000Z", reason: "" },
+    { repo: "/code/alpha", at: "2026-03-07T09:00:00.000Z", reason: "superseded" },
+    { repo: "/code/alpha", at: "2026-01-01T00:00:00.000Z", reason: "wrong-approach" },
+  ],
 };
 
 test("SQLite timestamps without a zone read as UTC", () => {
@@ -65,8 +72,14 @@ test("repo filter narrows runs and cards; groups sort by spend", () => {
   assert.equal(all.byAgent.find(row => row.name === "pi · sonnet")?.failed, 1);
 });
 
+test("closes without merging count by reason in the range and repository, skipped reasons included", () => {
+  assert.deepEqual(buildStats(input, { days: 7, repo: null, now }).closeReasons, [{ reason: "duplicate", count: 2 }, { reason: "superseded", count: 1 }, { reason: "", count: 1 }]);
+  assert.deepEqual(buildStats(input, { days: 7, repo: "/code/beta", now }).closeReasons, [{ reason: "duplicate", count: 1 }]);
+  assert.equal(buildStats(input, { days: null, repo: null, now }).closeReasons.find(row => row.reason === "wrong-approach")?.count, 1);
+});
+
 test("an empty range reports unknowns instead of zeros", () => {
-  const stats = buildStats({ runs: [], reviews: [], cards: [] }, { days: 30, repo: null, now });
+  const stats = buildStats({ runs: [], reviews: [], cards: [], closes: [] }, { days: 30, repo: null, now });
   assert.equal(stats.summary.successRate, null);
   assert.equal(stats.summary.avgRunMinutes, null);
   assert.equal(stats.daily.length, 30);

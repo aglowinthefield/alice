@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 
 test("sentinel in-progress counts include running and queued jobs, not done or plain cards", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-sentinel-badge-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-sentinel-badge-"));
   const file = join(dir, "board.sqlite");
   const board = new Board(file);
   try {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keeps a Bakery checkout run with `npm start` (for example under systemd) up to date with origin/main.
+# Keeps an Alice checkout run with `npm start` (for example under systemd) up to date with origin/main.
 #   scripts/update.sh          fetch origin/main only. The server lists the new commits in the UI and installs
 #                              them when asked, or by itself while no run is active. The update timer runs this.
 #   scripts/update.sh install  fast-forward main, npm install, build the UI into dist-next. The server runs this,

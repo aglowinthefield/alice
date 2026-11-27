@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { repoIcons } from "./repo-appearance.js";
 
-const brandIcons: readonly string[] = repoIcons;
+// Alice is the default brand mark; the repo icons stay available as alternatives.
+const brandIcons: readonly string[] = ["alice", ...repoIcons];
 
-const storageKey = "bakery-icon";
+const storageKey = "alice-icon";
 
 function readIcon() {
   try {

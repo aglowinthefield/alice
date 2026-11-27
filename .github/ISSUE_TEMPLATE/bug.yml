@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Bakery doesn't work as expected.
+description: Something in Alice doesn't work as expected.
 labels: [bug]
 body:
   - type: markdown
@@ -31,8 +31,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: Bakery version
-      description: Shown in Settings, or run `bakery-cli --version`.
+      label: Alice version
+      description: Shown in Settings, or run `alice --version`.
     validations:
       required: true
   - type: input
@@ -45,7 +45,7 @@ body:
   - type: textarea
     id: doctor
     attributes:
-      label: Output of `bakery-cli doctor`
+      label: Output of `alice doctor`
       render: text
     validations:
       required: true

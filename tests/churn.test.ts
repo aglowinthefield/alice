@@ -6,7 +6,9 @@ import { test } from "node:test";
 import { Board } from "../server/board.js";
 import { buildStats, classifySendBack, weekKey } from "../server/stats.js";
 
-const timeout = "Pi exited (null); Bakery sent SIGTERM: 90-minute run timeout; no tool was running; no settlement event";
+const timeout = "Pi exited (null); Alice sent SIGTERM: 90-minute run timeout; no tool was running; no settlement event";
+// Runs from before the Bakery to Alice rename keep the old wording and still count.
+const bakeryTimeout = "Pi exited (null); Bakery sent SIGTERM: 60-minute run timeout; no tool was running; no settlement event";
 
 // Two boards over two weeks (Mondays 2026-03-02 and 2026-03-09), plus a sentinel card the Statistics page never counts.
 function fixture(board: Board) {
@@ -36,7 +38,7 @@ function fixture(board: Board) {
 
   card("b1", "/code/beta", "Docs pass");
   run("b1-1", "b1", 1, "2026-03-09T10:00:00.000Z", 3);
-  run("b1-2", "b1", 2, "2026-03-11T10:00:00.000Z", 1, "failed", timeout);
+  run("b1-2", "b1", 2, "2026-03-11T10:00:00.000Z", 1, "failed", bakeryTimeout);
   review("b1", "b1-1", "2026-03-11T12:00:00.000Z", 0.75, "needs_human", "Sent back to the implementer: The PR description is missing the follow-ups.");
 
   card("s1", "/code/alpha", "Sentinel job", true);
@@ -45,7 +47,7 @@ function fixture(board: Board) {
 }
 
 test("the churn panel's numbers match hand queries over a fixture database", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-churn-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-churn-"));
   const board = new Board(join(dir, "board.sqlite"));
   try {
     fixture(board);
@@ -54,7 +56,7 @@ test("the churn panel's numbers match hand queries over a fixture database", () 
     // Week = the Monday on or before the start date. Rework = runs after the first attempt, as on the card's cost marker.
     const runs = db.prepare(`SELECT cards.repo, date(runs.startedAt, '-6 days', 'weekday 1') AS week, COUNT(*) AS runs, COUNT(DISTINCT runs.cardId) AS cards,
         SUM(runs.cost) AS cost, SUM(CASE WHEN runs.attempt > 1 THEN runs.cost ELSE 0 END) AS rework,
-        SUM(COALESCE(runs.error, '') LIKE '%Bakery sent SIGTERM: %-minute run timeout%') AS timeouts
+        SUM(COALESCE(runs.error, '') LIKE '%sent SIGTERM: %-minute run timeout%') AS timeouts
       FROM runs JOIN cards ON cards.id = runs.cardId WHERE cards.sentinelId IS NULL GROUP BY 1, 2`).all() as { repo: string; week: string; runs: number; cards: number; cost: number; rework: number; timeouts: number }[];
     const reviews = db.prepare(`SELECT cards.repo, date(job.startedAt, '-6 days', 'weekday 1') AS week, SUM(job.cost) AS cost,
         SUM(job.details LIKE 'Sent back to the implementer: %') AS sendBacks

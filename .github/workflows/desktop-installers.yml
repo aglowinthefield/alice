@@ -82,18 +82,18 @@ jobs:
       - name: Verify macOS app signature and architecture
         if: runner.os == 'macOS'
         run: |
-          mount=$(mktemp -d "$RUNNER_TEMP/bakery-dmg.XXXXXX")
+          mount=$(mktemp -d "$RUNNER_TEMP/alice-dmg.XXXXXX")
           hdiutil attach src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg \
             -readonly -nobrowse -mountpoint "$mount"
           trap 'hdiutil detach "$mount"' EXIT
-          app="$mount/Bakery.app"
+          app="$mount/Alice.app"
           codesign --verify --deep --strict --verbose=2 "$app"
-          lipo "$app/Contents/MacOS/bakery-desktop" -verify_arch arm64
+          lipo "$app/Contents/MacOS/alice-desktop" -verify_arch arm64
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: bakery-${{ matrix.platform }}-${{ github.sha }}
+          name: alice-${{ matrix.platform }}-${{ github.sha }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/${{ matrix.bundle }}/*.${{ matrix.extension }}
           if-no-files-found: error
           retention-days: 14

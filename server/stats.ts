@@ -1,37 +1,15 @@
-// Aggregates what Bakery already records per card (runs, agent reviews, usage) for the Statistics page.
-import type { RunKind } from "../src/run-kinds.js";
-
-/** `kind` is why the run happened (src/run-kinds.ts); every kind but "first" is rework. `timedOut` is 1 when Bakery killed it at the run timeout. */
+// Aggregates what Alice already records per card (runs, agent reviews, usage) for the Statistics page.
+import type { ChurnRow, DayPoint, GroupRow, RunKind, SendBackReason, Stats } from "../shared/wire.js";
+export type { ChurnRow, DayPoint, GroupRow, SendBackReason, Stats };
+/** `kind` is why the run happened (src/run-kinds.ts); every kind but "first" is rework. `timedOut` is 1 when Alice killed it at the run timeout. */
 export type StatsRun = { repo: string; id: string; cardId: string; attempt: number; kind: RunKind; timedOut: number; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };
 /** `sendBack` is the reviewer's reason and requested changes when it sent the card back to the implementer, else null. */
 export type StatsReview = { repo: string; cardId: string; sendBack: string | null; state: string; agent: string; startedAt: string; finishedAt: string | null; cost: number | null };
 export type StatsCard = { repo: string; id: string; title: string; status: string; createdAt: string; updatedAt: string; attempts: number; reviewRounds: number; ciReworks: number };
-export type StatsInput = { runs: StatsRun[]; reviews: StatsReview[]; cards: StatsCard[] };
+/** One close without merging; reason is '' when the operator skipped it. */
+export type StatsClose = { repo: string; at: string; reason: string };
+export type StatsInput = { runs: StatsRun[]; reviews: StatsReview[]; cards: StatsCard[]; closes: StatsClose[] };
 export type StatsOptions = { days: number | null; repo: string | null; now?: number };
-
-export type DayPoint = { date: string; succeeded: number; failed: number; interrupted: number; cost: number; created: number; done: number; reviewCost: number };
-export type GroupRow = { name: string; runs: number; failed: number; cost: number; tokens: number; avgMinutes: number | null };
-export type SendBackReason = "verification" | "visual" | "writeup" | "code";
-export type ChurnCard = { id: string; title: string; runs: number; attempts: number; cost: number };
-/** One board's week (Monday, UTC). `cost` is run plus agent review spend; `reworkCost` is runs after the first attempt. */
-export type ChurnRow = {
-  repo: string; week: string; runs: number; cards: number; runsPerCard: number | null;
-  cost: number; reworkCost: number; reworkShare: number | null; reworkByKind: Partial<Record<RunKind, number>>;
-  sendBacks: number; sendBackReasons: Record<SendBackReason, number>; timeouts: number; topCards: ChurnCard[];
-};
-export type Stats = {
-  days: number | null;
-  summary: { cardsCreated: number; cardsDone: number; runs: number; successRate: number | null; cost: number; tokens: number; avgRunMinutes: number | null; avgLeadHours: number | null; autoShare: number | null; reviewRounds: number; ciReworks: number; agentReviews: number; agentReviewsMerged: number };
-  /** Turbo cache across runs in range; hitRate is null when no run used turbo. */
-  buildCache: { tasks: number; hits: number; hitRate: number | null; savedMinutes: number };
-  daily: DayPoint[];
-  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  byAgent: GroupRow[];
-  byRepo: GroupRow[];
-  cardStatus: { status: string; count: number }[];
-  /** Newest week first; within a week, the busiest board first. */
-  churn: ChurnRow[];
-};
 
 // Keywords from the reviewer's reason and requested changes. A send-back can match several; "code" also takes those that match none.
 const reasonPatterns: [Exclude<SendBackReason, "code">, RegExp][] = [
@@ -157,6 +135,8 @@ export function buildStats(input: StatsInput, options: StatsOptions): Stats {
   const cost = sum(runs.map(run => run.cost)) + sum(reviews.map(review => review.cost));
   const statusCounts = new Map<string, number>();
   for (const card of cards) statusCounts.set(card.status, (statusCounts.get(card.status) ?? 0) + 1);
+  const closeCounts = new Map<string, number>();
+  for (const close of input.closes) if (inRepo(close) && inRange(close.at)) closeCounts.set(close.reason, (closeCounts.get(close.reason) ?? 0) + 1);
   return {
     days: options.days,
     summary: {
@@ -178,6 +158,7 @@ export function buildStats(input: StatsInput, options: StatsOptions): Stats {
     byAgent: group(runs, run => run.agent || "Unknown"),
     byRepo: group(runs, run => run.repo),
     cardStatus: [...statusCounts].map(([status, count]) => ({ status, count })),
+    closeReasons: [...closeCounts].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || Number(!a.reason) - Number(!b.reason) || a.reason.localeCompare(b.reason)),
     churn: churn(runs, reviews, cards),
   };
 }

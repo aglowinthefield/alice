@@ -27,6 +27,7 @@ const data = {
     { repo: "/code/alpha", id: "c", title: "Fix flaky login", status: "review", createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), attempts: 2, reviewRounds: 0, ciReworks: 0 },
     { repo: "/code/beta", id: "d", title: "Docs pass", status: "review", createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), attempts: 1, reviewRounds: 0, ciReworks: 0 },
   ],
+  closes: [{ repo: "/code/alpha", at: new Date(now - 3_600_000).toISOString(), reason: "duplicate" }, { repo: "/code/alpha", at: new Date(now - 3_600_000).toISOString(), reason: "" }],
 };
 
 test("Statistics charts the aggregated stats and refetches when the range or repository changes", async () => {
@@ -49,6 +50,8 @@ test("Statistics charts the aggregated stats and refetches when the range or rep
     await page.getByRole("heading", { name: "Statistics" }).waitFor();
     await page.getByText("$3.50").first().waitFor();
     assert.equal(await page.locator(".recharts-wrapper").count(), 6);
+    await page.getByTestId("close-reasons").getByText("Duplicate").waitFor();
+    assert.deepEqual(await page.getByTestId("close-reasons").locator("tbody tr").allInnerTexts(), ["Duplicate\t1\t50%", "Not given\t1\t50%"]);
     assert.deepEqual(queries, ["?days=30"]);
     await page.getByRole("combobox", { name: "Time range" }).selectOption("7");
     await page.getByRole("combobox", { name: "Repository" }).selectOption({ label: "beta" });

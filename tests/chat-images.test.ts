@@ -7,7 +7,7 @@ import { publishChatImages, chatImagePath } from "../server/chat-images.js";
 import { parseMarkdown } from "../src/markdown.js";
 
 test("local raster links become managed inline images; arbitrary bytes and symlinks outside roots stay private", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-images-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-images-"));
   try {
     const file = join(dir, "preview.png");
     const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
@@ -21,7 +21,10 @@ test("local raster links become managed inline images; arbitrary bytes and symli
     writeFileSync(join(dir,"fake.png"), "secret text");
     const fake = `[fake](${join(dir,"fake.png")})`;
     assert.equal(publishChatImages(fake, dir, "chat", "board", dir), fake);
-    symlinkSync("/etc/passwd", join(dir,"escape.png"));
+    const outside = join(tmpdir(), `alice-outside-${process.pid}.png`);
+    writeFileSync(outside, "not an image");
+    process.once("exit", () => rmSync(outside, { force: true }));
+    try { symlinkSync(outside, join(dir,"escape.png")); } catch { return; } // Windows without symlink privilege
     const escape = `[escape](${join(dir,"escape.png")})`;
     assert.equal(publishChatImages(escape, dir, "chat", "board", dir), escape);
     assert.doesNotMatch(JSON.stringify(parseMarkdown("![bad](https://example.com/tracker.png)")), /"type":"image"/);

@@ -38,6 +38,7 @@ test("keys split out of one chunk of terminal input", () => {
   assert.deepEqual(keyNames("\x1b"), ["escape"]);
   assert.deepEqual(keyNames("\x03"), ["interrupt"]);
   assert.deepEqual(keyNames("\t]"), ["tab", "]"]);
+  assert.deepEqual(keyNames("\x1b[<0;5;3M\x1b[<0;5;3mj"), ["mouse:0:5:3:M", "mouse:0:5:3:m", "j"], "mouse reports split out too");
 });
 
 test("a card offers the web card's actions for its state", () => {
@@ -292,4 +293,49 @@ test("Today lists what is running, what needs you and what is approved across bo
   assert.deepEqual(f.posts(), [["POST", "/api/boards/b2/cards/new-0000/start", undefined]]);
   await f.tui.key("0");
   assert.match(f.screen(), /repo +1 triage/, "0 goes back to the board");
+});
+
+/** Presses the left button (or another) on the first place `text` shows on screen. */
+async function click(f: ReturnType<typeof fixture>, text: string, button = 0) {
+  const lines = f.screen().split("\n"), y = lines.findIndex((line: string) => line.includes(text));
+  assert.ok(y >= 0, `"${text}" is not on screen:\n${f.screen()}`);
+  await f.tui.key(`mouse:${button}:${lines[y].indexOf(text) + 1}:${y + 1}:M`);
+}
+
+test("a click selects a card and a second opens it; tabs, outside the dialog, the wheel and footer keys click too", async () => {
+  const f = fixture([card("r00", "ready"), card("r01", "ready"), card("m", "review")], { columns: 120, rows: 18 });
+  await f.tui.refresh();
+  await click(f, "m card");
+  assert.match(f.screen(), /┃ ◉ m card/);
+  assert.equal(f.tui.state.mode, "board", "the first click only selects");
+  await click(f, "m card");
+  assert.equal(f.tui.state.mode, "details");
+  await click(f, "Attempts 1");
+  assert.match(f.screen(), /Attempt 2 · failed · pi/);
+  await f.tui.key("mouse:0:1:1:M");
+  assert.equal(f.tui.state.mode, "board", "a click outside the dialog closes it");
+  await click(f, "r00 card");
+  await click(f, "r00 card", 65);
+  assert.match(f.screen(), /┃ ◎ r01 card/, "the wheel moves down the lane");
+  await click(f, " run again");
+  assert.match(f.screen(), /Start a paid Pi run on “r01 card”/);
+  await f.tui.key("mouse:0:1:1:M");
+  assert.match(f.screen(), /Cancelled/, "a click answers no");
+  assert.equal(f.posts().length, 0);
+  await f.tui.key("mouse:0:1:1:m");
+  assert.match(f.screen(), /Cancelled/, "a release does nothing");
+});
+
+test("the sidebar and Today's rows click", async () => {
+  const boards = [board, { id: "b2", repo: "/code/other", integration: "local" }];
+  const f = fixture([card("a", "review", { repo: "/repo", updatedAt: "2026-11-20T10:00:00Z" }), card("b", "failed", { repo: "/repo", updatedAt: "2026-11-21T10:00:00Z" })], { boards, columns: 150, rows: 16 });
+  await f.tui.refresh();
+  await click(f, "2 other");
+  assert.match(f.screen(), /other +0 triage/);
+  await click(f, "0 Today");
+  assert.match(f.screen(), /Needs you/);
+  await click(f, "b card");
+  assert.match(f.screen(), /▸ ✗ b card/);
+  await click(f, "b card");
+  assert.equal(f.tui.state.mode, "details");
 });

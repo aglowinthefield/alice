@@ -13,8 +13,10 @@ export const keyName = data => KEYS[data] ?? data;
 export function keyNames(data) {
   const out = [];
   for (let i = 0; i < data.length;) {
-    const sequence = /^(?:\x1b\[[\d;]*[~A-Za-z]|\x1bO[A-D]|\r\n)/.exec(data.slice(i))?.[0] ?? data[i];
-    out.push(keyName(sequence === "\r\n" ? "\r" : sequence));
+    const sequence = /^(?:\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[[\d;]*[~A-Za-z]|\x1bO[A-D]|\r\n)/.exec(data.slice(i))?.[0] ?? data[i];
+    // A mouse report (SGR mode) becomes "mouse:BUTTON:COLUMN:ROW:M", M for a press and m for a release.
+    const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(sequence);
+    out.push(mouse ? `mouse:${mouse.slice(1).join(":")}` : keyName(sequence === "\r\n" ? "\r" : sequence));
     i += sequence.length;
   }
   return out;
@@ -93,6 +95,7 @@ const HELP = [
   ["← →  h l", "previous or next lane"], ["↑ ↓  j k", "move within a lane, or down Today"], ["g  G", "first or last card"],
   ["enter", "open the card (esc closes, tab switches to its attempts)"], ["o", "open the card in the browser"], ["A", "show or hide the Archive lane"],
   ["/", "find a card on this board by title or id, or on every board from Today"],
+  ["click", "select a card, a board or a key in the footer; click a selected card to open it. The wheel scrolls"],
   ["r  t", "move to Ready or back to Triage"], ["s", "start or run again (asks first: paid)"], ["x", "stop a running agent"],
   ["a", "approve, accept findings, or update the PR"], ["R", "recover a Failed card in a fresh session"], ["q", "quit"],
 ];
@@ -101,7 +104,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
   const state = {
     board, boards: [board], view: today ? "today" : "board", cards: [], today: [], todayAt: 0, conflicts: 0, slowAt: -Infinity, sidebar: null,
     selected: null, all: false, mode: "board", confirm: null, message: "", error: false, details: null, tab: 0, scroll: 0, search: null,
-    laneStart: 0, laneScroll: {}, lastInLane: {}, quit: false,
+    laneStart: 0, laneScroll: {}, lastInLane: {}, zones: [], quit: false,
   };
   const say = (message, error = false) => { state.message = message; state.error = error; };
   const pathOf = item => `/api/boards/${encodeURIComponent(item.id)}`;
@@ -252,8 +255,35 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     search.at = 0;
   }
 
+  /**
+   * A mouse press: a click acts on the zone drawn under it, the wheel moves like the arrow keys. A click while a question
+   * or the key list is up answers no or closes it, like esc. Releases and drags do nothing.
+   */
+  async function pointer(button, x, y, press) {
+    if (!press || button & 32) return;
+    if (state.confirm || state.mode === "help") return key("escape");
+    if (button & 64) return key(button & 1 ? "down" : "up");
+    if (button & 3) return;
+    const target = state.zones.findLast(zone => x >= zone.x && x < zone.x + zone.w && y >= zone.y && y < zone.y + zone.h)?.target;
+    if (!target) return;
+    if (target.key) return key(target.key);
+    if (target.card) {
+      if (state.selected === target.card) return openDetails();
+      return select(state.cards.find(card => card.id === target.card));
+    }
+    if (target.today !== undefined) {
+      if (state.todayAt === target.today) return openDetails();
+      state.todayAt = target.today;
+    } else if (target.found !== undefined) {
+      if (state.search.at === target.found) return searchKey("enter");
+      state.search.at = target.found;
+    } else if (target.tab !== undefined) { state.tab = target.tab; state.scroll = 0; }
+  }
+
   async function key(name) {
     if (name === "interrupt") { state.quit = true; return; }
+    const mouse = /^mouse:(\d+):(\d+):(\d+):([Mm])$/.exec(name);
+    if (mouse) return pointer(Number(mouse[1]), Number(mouse[2]) - 1, Number(mouse[3]) - 1, mouse[4] === "M");
     if (state.mode === "search") return searchKey(name);
     if (state.confirm) {
       const { run } = state.confirm;
@@ -323,12 +353,14 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     const needsYou = state.boards.reduce((sum, item) => sum + needsYouStatuses.reduce((n, status) => n + (item.cardCounts?.[status] ?? 0), 0), 0);
     const today = state.view === "today";
     screen.parts(1, 2, [["0 ", DIM], ["Today", today ? ACCENT : ""]]);
+    screen.zone(0, 2, w, 1, { key: "0" });
     if (needsYou) screen.put(w - 1 - String(needsYou).length, 2, String(needsYou), "34");
     state.boards.slice(0, Math.max(0, rows - 7)).forEach((item, i) => {
       const y = 4 + i, here = !today && item.id === state.board.id, counts = item.cardCounts ?? {};
       screen.parts(1, y, [[i < 9 ? `${i + 1} ` : "  ", DIM], [clip(nameOf(item), w - 9), here ? ACCENT : ""]]);
       if (counts.running) screen.put(w - 6, y, spinner(), "33");
       if (counts.review) screen.put(w - 1 - String(counts.review).length, y, String(counts.review), "34");
+      if (i < 9) screen.zone(0, y, w, 1, { key: String(i + 1) });
     });
   }
 
@@ -396,6 +428,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
       screen.box(x, top, 5, bottom - top, DIM);
       screen.put(x + 2, top + 1, arrow, ACCENT);
       list.forEach((lane, i) => { screen.put(x + 1, top + 3 + i * 3, "●", lane.style); screen.put(x + 1, top + 4 + i * 3, String(lane.count).padStart(3), DIM); });
+      screen.zone(x, top, 5, bottom - top, { key: arrow === "‹" ? "h" : "l" });
     };
     let x = left;
     if (before.length) { edgeStrip(left, before, "‹"); x = left + 6; }
@@ -430,6 +463,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
         screen.put(x + 2, y + 1, mark, markStyle);
         t.lines.forEach((line, j) => screen.put(x + 4, y + 1 + j, line, selected ? "1" : ""));
         if (t.pill) screen.put(x + 4, y + 1 + t.lines.length, ...t.pill);
+        screen.zone(x, y, lane.w, t.h, { card: card.id });
         y += t.h;
       }
       if (i < cards.length) screen.put(x + 2, y, `↓ ${cards.length - i} more`, DIM);
@@ -461,6 +495,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
       if (pill) screen.put(end + 2, y, pillText, pill[1]);
       screen.put(x + w - 20, y, clip(nameOf(home), 14), DIM);
       screen.put(x + w - width(age), y, age, DIM);
+      screen.zone(x - 2, y, w + 2, 1, { today: todayCards().indexOf(card) });
     });
   }
 
@@ -531,6 +566,8 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     const w = Math.min(90, columns - 2), h = bottom - 1, x = Math.floor((columns - w) / 2), y = 1, inner = w - 6, { query } = state.search;
     screen.clear(x, y, w, h);
     screen.box(x, y, w, h, DIM);
+    screen.zone(0, 0, columns, bottom, { key: "escape" });
+    screen.zone(x, y, w, h, {});
     const end = screen.parts(x + 3, y + 1, [["/ ", ACCENT], [clip(query, inner - 4), "1"]]);
     screen.put(end, y + 1, "▏", ACCENT);
     const top = y + 3, room = Math.max(1, y + h - 1 - top);
@@ -549,6 +586,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
       if (selected) screen.put(x + 1, row, "▸", ACCENT);
       screen.parts(x + 3, row, [glyph(card, lane), [` ${clip(card.title, inner - width(where) - 4)}`, selected ? "1" : ""]]);
       screen.put(x + w - 3 - width(where), row, where, DIM);
+      screen.zone(x + 1, row, w - 2, 1, { found: off + i });
     });
   }
 
@@ -558,6 +596,11 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     const w = Math.min(104, columns - 2), h = bottom - 1, x = Math.floor((columns - w) / 2), y = 1, inner = w - 6;
     screen.clear(x, y, w, h);
     screen.box(x, y, w, h, DIM);
+    // A click outside the dialog closes it; one inside does nothing but switch tabs.
+    screen.zone(0, 0, columns, bottom, { key: "escape" });
+    screen.zone(x, y, w, h, {});
+    screen.zone(x + 3, y + 4, 8, 1, { tab: 0 });
+    screen.zone(x + 15, y + 4, 12, 1, { tab: 1 });
     const lane = LANES.find(item => item.id === laneOf(card, isPullRequestBoard(boardOf(card)))) ?? LANES[0];
     const pill = needsYourReview(card) ? [" Needs you ", PILL_YOU] : tilePill(card, known, now(), isPullRequestBoard(boardOf(card)));
     screen.parts(x + 3, y + 1, [glyph(card, lane), [` ${clip(card.title, inner - 2)}`, "1"]]);
@@ -593,7 +636,9 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
     let x = 1;
     for (const [name, label] of keys) {
       if (x + width(name) + width(label) + 1 > columns) break;
+      const start = x, press = { "⏎": "enter", esc: "escape", tab: "tab" }[name] ?? ([...name].length === 1 ? name : null);
       x = screen.parts(x, rows - 1, [[name, "1"], [` ${label}   `, DIM]]);
+      if (press) screen.zone(start, rows - 1, x - start - 2, 1, { key: press });
     }
   }
 
@@ -614,6 +659,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
       if (state.mode === "search") drawSearch(screen, columns, bottom);
     }
     footer(screen, columns, rows);
+    state.zones = screen.zones;
     return screen.lines(color);
   }
 
@@ -661,10 +707,11 @@ export async function runTui({ api, board, today, webUrl }) {
     clearTimeout(timer);
     clearInterval(frames);
     input.setRawMode(false);
-    out.write("\x1b[?25h\x1b[?1049l");
+    out.write("\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l");
     process.exit(0);
   };
-  out.write("\x1b[?1049h\x1b[?25l");
+  // Mouse presses and the wheel arrive as SGR reports (1000 and 1006); hold Shift to select text as usual.
+  out.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h");
   input.setRawMode(true);
   input.setEncoding("utf8");
   input.resume();

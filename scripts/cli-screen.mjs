@@ -39,6 +39,8 @@ export class Screen {
   constructor(columns, rows) {
     this.columns = columns;
     this.rows = rows;
+    /** What a click on each rectangle does, in drawing order: a later zone sits on top of an earlier one. */
+    this.zones = [];
     this.cells = Array.from({ length: rows }, () => Array.from({ length: columns }, () => [" ", ""]));
   }
 
@@ -63,6 +65,11 @@ export class Screen {
   parts(x, y, list) {
     for (const [text, style] of list) x = this.put(x, y, text, style);
     return x;
+  }
+
+  /** Marks a rectangle as clickable; the TUI decides what `target` means. */
+  zone(x, y, w, h, target) {
+    this.zones.push({ x, y, w, h, target });
   }
 
   /** Blanks a rectangle, as a dialog does over the board behind it. */

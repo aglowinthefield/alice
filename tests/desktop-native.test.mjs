@@ -158,7 +158,7 @@ test(
       }
       assert.equal(
         await readFile(
-          join(directory, "config/dev.bakery.desktop/server-url"),
+          join(directory, "config/dev.alice.desktop/server-url"),
           "utf8",
         ),
         address,

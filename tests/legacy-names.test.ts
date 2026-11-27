@@ -1,63 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adoptLegacyEnv, cardBranch, databaseFile, dataDir } from "../server/legacy-names.js";
-import { parseLock } from "../server/pr-lock.js";
-import { parsePlan } from "../src/plan.js";
-import { adoptLegacyStorage } from "../src/legacy-storage.js";
+import { cardBranch } from "../server/legacy-names.js";
 
-test("BAKERY_* settings fill their ALICE_* names, and an ALICE_* setting wins", () => {
-  const env: NodeJS.ProcessEnv = { BAKERY_PORT: "4317", BAKERY_HOST: "old", ALICE_HOST: "new", PATH: "/bin" };
-  adoptLegacyEnv(env);
-  assert.equal(env.ALICE_PORT, "4317");
-  assert.equal(env.ALICE_HOST, "new");
-  assert.equal(env.BAKERY_PORT, "4317", "the old name stays for child processes that still read it");
-});
-
-test("the data dir stays in ~/.local/share/bakery when it exists, else moves to alice", () => {
-  const home = mkdtempSync(join(tmpdir(), "alice-home-"));
-  // os.homedir() reads HOME off Windows and USERPROFILE on it.
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  try {
-    process.env.HOME = home;
-    process.env.USERPROFILE = home;
-    assert.equal(dataDir({ BAKERY_DATA_DIR: "/data" }), "/data");
-    assert.equal(dataDir({ ALICE_DATA_DIR: "/new", BAKERY_DATA_DIR: "/old" }), "/new");
-    assert.equal(dataDir({}), join(home, ".local", "share", "alice"));
-    mkdirSync(join(home, ".local", "share", "bakery"), { recursive: true });
-    assert.equal(dataDir({}), join(home, ".local", "share", "bakery"));
-  } finally {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name]; else process.env[name] = value;
-    }
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test("plan blocks and PR lock comments are read under either name", () => {
-  for (const name of ["alice", "bakery"]) {
-    const fence = "```";
-    const plan = parsePlan(`Report\n\n${fence}${name}-plan\n[{"id":"a","title":"A","body":"B"}]\n${fence}\n`);
-    assert.ok(plan && "subtasks" in plan, name);
-    assert.equal(parseLock(`<!-- ${name}-lock {"holder":"x","startedAt":"2026-11-26T10:00:00Z"} -->`)?.holder, "x", name);
-  }
-});
-
-test("a new data dir gets alice.sqlite, and one that holds only bakery.sqlite keeps it", () => {
-  const dir = mkdtempSync(join(tmpdir(), "alice-data-"));
-  try {
-    assert.equal(databaseFile(dir), join(dir, "alice.sqlite"));
-    writeFileSync(join(dir, "bakery.sqlite"), "");
-    assert.equal(databaseFile(dir), join(dir, "bakery.sqlite"));
-    writeFileSync(join(dir, "alice.sqlite"), "");
-    assert.equal(databaseFile(dir), join(dir, "alice.sqlite"), "alice.sqlite wins once it exists");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("a card works on alice/<id>, or on the bakery/<id> branch it already has", async () => {
+test("a card works on alice/<id>, or on the bakery/<id> branch its open PR already has", async () => {
   const repo = mkdtempSync(join(tmpdir(), "alice-branch-"));
   const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" });
   try {
@@ -71,21 +20,4 @@ test("a card works on alice/<id>, or on the bakery/<id> branch it already has", 
     git("update-ref", "refs/remotes/origin/bakery/pushed", "HEAD");
     assert.equal(await cardBranch(repo, "pushed"), "bakery/pushed", "a PR branch only on origin counts too");
   } finally { rmSync(repo, { recursive: true, force: true }); }
-});
-
-test("old browser keys are copied once, so a setting cleared later stays cleared", () => {
-  const map = new Map<string, string>([["bakery-chat-collapsed", "1"]]);
-  const storage = {
-    get length() { return map.size; },
-    key: (index: number) => [...map.keys()][index] ?? null,
-    getItem: (key: string) => map.get(key) ?? null,
-    setItem: (key: string, value: string) => { map.set(key, value); },
-    removeItem: (key: string) => { map.delete(key); },
-    clear: () => map.clear(),
-  } as Storage;
-  adoptLegacyStorage(storage);
-  assert.equal(map.get("alice-chat-collapsed"), "1");
-  map.delete("alice-chat-collapsed");
-  adoptLegacyStorage(storage);
-  assert.equal(map.has("alice-chat-collapsed"), false);
 });

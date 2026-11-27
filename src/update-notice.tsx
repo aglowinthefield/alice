@@ -33,8 +33,8 @@ const installHint = (updates: Updates, activeRuns: number) =>
       ? `Restarts after ${runs(activeRuns)} finish.`
       : "Nothing is running, so it restarts right away.";
 
-// Every card commit starts "Alice card: " ("Bakery card: " before the rename), which says nothing in a list of mostly card commits.
-const subjectText = (subject: string) => subject.replace(/^(?:Alice|Bakery) card: /, "");
+// Every card commit starts "Alice card: ", which says nothing in a list of mostly card commits.
+const subjectText = (subject: string) => subject.replace(/^Alice card: /, "");
 
 /** The pending commits, newest first: short hash in a fixed column so wrapped subjects line up. */
 function Changelog({

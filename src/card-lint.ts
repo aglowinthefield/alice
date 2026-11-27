@@ -218,13 +218,11 @@ function workText(body: string): string {
   return kept.join("\n");
 }
 
-/** A card already asking for a plan: the text "Turn into a plan" writes, an alice-plan block (or a bakery-plan one from before the rename), or a title starting "Plan". */
+/** A card already asking for a plan: the text "Turn into a plan" writes, an alice-plan block, or a title starting "Plan". */
 export function isPlanningCard(card: { title: string; body: string }): boolean {
   return (
     /^\s*(?:plan|break\s+down|split)\b/i.test(card.title) ||
-    /\b(?:alice|bakery)-plan\b|\b(?:do\s+not|don't)\s+implement\b/i.test(
-      card.body ?? "",
-    )
+    /\balice-plan\b|\b(?:do\s+not|don't)\s+implement\b/i.test(card.body ?? "")
   );
 }
 

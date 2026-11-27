@@ -160,8 +160,7 @@ export type PrComment = { id: string; at: string; author: string; association: s
 export type PrRequest = { author: string; comment: string; path?: string; line?: number | null };
 // Only people with a say in the repository can send a card back; anyone else's comment is just a comment.
 const trustedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
-// `/bakery`, the command's name before the rename, still works.
-const mentionsAlice = (body: string) => /^\s*\/(?:alice|bakery)(?![\w-])/i.test(body);
+const mentionsAlice = (body: string) => /^\s*\/alice(?![\w-])/i.test(body);
 
 /**
  * The requests in `comments` posted after `since`: each comment by a trusted author that starts with `/alice`
@@ -409,7 +408,7 @@ function prRepo(card: Card, repo: string): string {
   return (card.prOverrideUrl && parsePullRequestUrl(card.prOverrideUrl)?.repo) || repo;
 }
 
-/** The PR linked to a card: its override URL if set, else the newest PR from its branch (`alice/<id>`, or `bakery/<id>`). */
+/** The PR linked to a card: its override URL if set, else the newest PR from its branch. */
 export async function linkedPullRequest(github: GitHub, repo: string, card: Card, recent?: PullRequest[]): Promise<PullRequest | undefined> {
   if (card.prOverrideUrl) {
     const link = parsePullRequestUrl(card.prOverrideUrl);

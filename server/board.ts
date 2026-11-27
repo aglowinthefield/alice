@@ -84,7 +84,7 @@ export function parseCardSource(value: unknown): CardSource | undefined {
 }
 /**
  * The source an idempotency key's prefix implies, or null when it implies none. Only prefixes one path writes count:
- * `bakery-local-` keys came from a bulk copy of plan, follow-up and typed cards alike, so they say nothing.
+ * `alice-local-` keys came from a bulk copy of plan, follow-up and typed cards alike, so they say nothing.
  */
 export function sourceFromKey(key: string | null): CardSource | null {
   const prefix = key?.match(/^(hermes|plan|follow-up|sentinel|request):/)?.[1];
@@ -149,7 +149,7 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   (SELECT json_group_array(edge.dependsOn) FROM (SELECT d.dependsOn FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id ORDER BY parent.createdAt, parent.rowid) edge) AS dependsOn,
   EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked,
   EXISTS (SELECT 1 FROM approvals merged WHERE merged.cardId=cards.id AND merged.merged=1) AS locallyMerged,
-  COALESCE((SELECT (latest.report LIKE '%alice-plan%' OR latest.report LIKE '%bakery-plan%') FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), 0) AS planOnly,
+  COALESCE((SELECT latest.report LIKE '%alice-plan%' FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), 0) AS planOnly,
   CASE WHEN cards.status='failed' THEN (SELECT latest.error FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedError,
   CASE WHEN cards.status='failed' THEN (SELECT latest.failureKind FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedKind,
   CASE WHEN cards.status='running' THEN (SELECT latest.stuck FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS stuck

@@ -30,7 +30,7 @@ test("a slow git call does not stop /api/status or /metrics from answering, and 
   const port = await freePort(), url = `http://127.0.0.1:${port}`;
   const child: ChildProcess = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PATH: `${fake.bin}${delimiter}${process.env.PATH}`, HOME: join(dir, "home"), BAKERY_DATA_DIR: join(dir, "data"), BAKERY_PORT: String(port), BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", BAKERY_GH_BIN: "false", BAKERY_METRICS: "1" },
+    env: { ...process.env, PATH: `${fake.bin}${delimiter}${process.env.PATH}`, HOME: join(dir, "home"), ALICE_DATA_DIR: join(dir, "data"), ALICE_PORT: String(port), ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", ALICE_GH_BIN: "false", ALICE_METRICS: "1" },
     stdio: ["ignore", "ignore", "pipe"],
   });
   let log = "";

@@ -8,17 +8,9 @@
 set -euo pipefail
 [[ $(uname) == Darwin ]] || { echo "install-desktop.sh builds the macOS app; run it on a Mac." >&2; exit 2; }
 repo=$(cd "$(dirname "$0")/.." && pwd)
-# ALICE_DESKTOP_APP falls back to its old name, BAKERY_DESKTOP_APP.
-app=${ALICE_DESKTOP_APP:-${BAKERY_DESKTOP_APP:-/Applications/Alice.app}}
-# Before the rename the app was Bakery.app. It has the same bundle id, so the default install replaces it.
-legacy_app=""
-[[ -z ${ALICE_DESKTOP_APP:-}${BAKERY_DESKTOP_APP:-} ]] && legacy_app=/Applications/Bakery.app
-# An existing state directory keeps its old name, so its Cargo cache and install stamp carry over.
-state=${XDG_STATE_HOME:-$HOME/.local/state}/bakery
-[[ -d $state ]] || state=${XDG_STATE_HOME:-$HOME/.local/state}/alice
-# launchd keys an installed job on its label, so an installed job keeps its old label and log.
+app=${ALICE_DESKTOP_APP:-/Applications/Alice.app}
+state=${XDG_STATE_HOME:-$HOME/.local/state}/alice
 label=dev.alice.desktop-update logname=alice-desktop-update
-[[ -f $HOME/Library/LaunchAgents/dev.bakery.desktop-update.plist ]] && label=dev.bakery.desktop-update logname=bakery-desktop-update
 mkdir -p "$state"
 
 if [[ ${1:-} == --launchd ]]; then
@@ -77,9 +69,7 @@ cd "$work"
 npm ci --no-audit --no-fund --silent
 # A shared target directory keeps Cargo's incremental build between runs.
 CARGO_TARGET_DIR=$state/desktop-target npm run desktop:build -- --bundles app
-# origin/main from before the rename still builds Bakery.app.
 built=$state/desktop-target/release/bundle/macos/Alice.app
-[[ -d $built ]] || built=$state/desktop-target/release/bundle/macos/Bakery.app
 
 # Swap the bundle in one rename, so a launch never sees a half-copied app.
 staged=$(dirname "$app")/.Alice.app.new
@@ -89,6 +79,5 @@ old=""
 if [[ -d $app ]]; then old=$(mktemp -d "${TMPDIR:-/tmp}/alice-old.XXXXXX"); mv "$app" "$old/"; fi
 mv "$staged" "$app"
 [[ -n $old ]] && rm -rf "$old"
-[[ -n $legacy_app && -d $legacy_app && $legacy_app != "$app" ]] && rm -rf "$legacy_app"
 echo "$commit" > "$stamp"
 echo "$(date '+%F %T') installed $app at ${commit:0:7}$(pgrep -qf "$app/Contents/MacOS" && echo "; quit and reopen Alice to use it")"

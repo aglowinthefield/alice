@@ -1677,7 +1677,6 @@ test("aliceRequests: reads /alice comments from trusted authors, and whole revie
   assert.deepEqual(none, { requests: [], latest: null, asked: [] }, "untrusted authors, mid-sentence mentions and old comments are ignored");
   const one = aliceRequests([c("a", 5, "  /alice please rename x to y "), c("b", 6, "/alice-bot hi"), c("e", 7, "@alice hi")], at(2));
   assert.deepEqual(one.requests.map(item => item.comment), ["/alice please rename x to y"]);
-  assert.deepEqual(aliceRequests([c("a", 5, "/bakery please rename x"), c("b", 6, "/bakery-bot hi")], at(2)).requests.map(item => item.comment), ["/bakery please rename x"], "the command's name before the rename still works");
   assert.equal(one.latest, at(5));
   const review = aliceRequests([c("r", 9, "/alice address these"), c("i1", 8, "use a Map", "MEMBER", { path: "a.ts", line: 4, reviewId: "r" }), c("i2", 8, "unrelated", "MEMBER", { path: "b.ts", line: 1, reviewId: "other" })], at(2));
   assert.deepEqual(review.requests.map(item => [item.comment, item.path]), [["/alice address these", undefined], ["use a Map", "a.ts"]]);

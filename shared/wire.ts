@@ -37,9 +37,10 @@ export type LiveActivity = { tool: string; turn: number; since: string };
 
 /**
  * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Alice is about to send
- * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
+ * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main). A rerun the
+ * agent reviewer asked for that is waiting for a free run slot (`rerun_queued`) is the agent's turn too.
  */
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export type ReviewWait = "agent_review" | "ci_fix" | "github" | "rerun_queued";
 /**
  * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
@@ -134,6 +135,8 @@ export type Card = {
   attachmentCount: number;
   /** A Failed card's reason in a few words (see `summarizeFailure`); null on other cards. */
   failureSummary: string | null;
+  /** On a Running card: why its run may be going in circles, such as repeating one tool call (see server/stuck.ts); null while it looks fine. */
+  stuck: string | null;
   /** Done cards on a local board with a GitHub remote: is the merge on origin/main (last fetch)? */
   originMain?: "pushed" | "local";
   /** Only the card lists carry it; null when no run is in progress or it has not used a tool yet. */
@@ -169,6 +172,8 @@ export type Run = {
   sessionFile: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
+  /** Why Alice thinks this run may be going in circles (see server/stuck.ts); null while it looks fine. */
+  stuck: string | null;
   /** Files the run's work changes against main, as of the last time Alice looked; null until it has. */
   changedFiles: number | null;
   /** Why the run happened; only a card's run list carries it (see src/run-kinds.ts). */

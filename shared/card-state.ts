@@ -12,6 +12,7 @@ export const reviewWaitLabels: Record<ReviewWait, string> = {
   agent_review: "Agent reviewing",
   ci_fix: "CI fix queued",
   github: "Waiting on GitHub",
+  rerun_queued: "Rerun queued",
 };
 
 /** A Review card you can act on now, rather than one an agent, CI or GitHub still has. */

@@ -62,9 +62,10 @@
                 "group": [
                   "**/server/*",
                   "**/server",
-                  "!**/server/legacy-names.ts"
+                  "!**/server/legacy-names.ts",
+                  "!**/server/platform.ts"
                 ],
-                "message": "The CLI must not pull in server code. Move what both sides need into shared/. Only server/legacy-names.ts, which maps Bakery's old env names and data dir to Alice's, is allowed."
+                "message": "The CLI must not pull in server code. Move what both sides need into shared/. Only server/legacy-names.ts, which maps Bakery's old env names and data dir to Alice's, and server/platform.ts, whose command() gives the TUI's openUrl the same per-OS opener the server uses, are allowed."
               }
             ]
           }

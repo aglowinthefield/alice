@@ -48,7 +48,7 @@ function run(bin: string, args: string[], cwd?: string, timeout = 60_000): Promi
         const detail = code === "ENOENT" ? `${bin} is not installed or not on PATH`
           : (stderr || stdout).trim() || (killed && signal === "SIGTERM" ? `${bin} ${args[0] === "-C" ? args[2] : args[0]} timed out after ${Math.round(timeout / 1000)}s`
             : signal ? `${bin} was stopped by ${signal}` : `${bin} exited with code ${typeof code === "number" ? code : "unknown"} and printed nothing`);
-        reject(Object.assign(new Error(detail.slice(0, 4000)), { exitCode: typeof code === "number" ? code : (error as { code?: unknown }).code }));
+        reject(Object.assign(new Error(detail.slice(0, 4000)), { exitCode: typeof code === "number" ? code : (error as { code?: unknown }).code, stdout }));
       } else resolve({ stdout, stderr });
     });
   });
@@ -277,6 +277,10 @@ export class GitHub {
     }
     return protection.required_pull_request_reviews ? "branch protection requires a pull request" : null;
   }
+  /** Marks a draft PR ready for review. */
+  async ready(repo: string, number: number): Promise<void> {
+    await this.gh(["pr", "ready", String(number), "--repo", repo]);
+  }
   /** Posts a comment on a PR. */
   async comment(repo: string, number: number, body: string): Promise<void> {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
@@ -333,9 +337,9 @@ export class GitHub {
   async editComment(repo: string, commentId: string, body: string): Promise<void> {
     await this.gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`]);
   }
-  /** Opens a PR and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
-  async create(repo: string, branch: string, title: string, body: string): Promise<string> {
-    const output = await this.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", title, "--body", body]);
+  /** Opens a PR (a draft one when asked) and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
+  async create(repo: string, branch: string, title: string, body: string, draft = false): Promise<string> {
+    const output = await this.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", title, "--body", body, ...(draft ? ["--draft"] : [])]);
     const url = output.trim().split("\n").reverse().find(line => parsePullRequestUrl(line.trim()));
     if (!url) throw new Error(`gh pr create did not print a pull request URL: ${output.trim().slice(0, 500)}`);
     return url.trim();
@@ -351,8 +355,13 @@ const aliceIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/al
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${aliceIconUrl()}" width="16" height="16" alt="" /> Posted by Alice`); }
+  try { await postPullRequestComment(github, repo, number, body); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+/** Like `commentOnPullRequest`, but a failure to post is thrown, for comments that must not be lost. */
+export function postPullRequestComment(github: GitHub, repo: string, number: number, body: string): Promise<void> {
+  return github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${aliceIconUrl()}" width="16" height="16" alt="" /> Posted by Alice`);
 }
 
 /** Runs a reaction; one that fails is logged, never blocking the work it acknowledges. */
@@ -478,6 +487,10 @@ export class GitHubSync {
         return;
       }
       const syncStart = Date.now();
+      for (const pending of this.board.listPendingHandoffs(repoBoard.repo)) {
+        try { await postPullRequestComment(this.github, repo, pending.prNumber, pending.handoff); this.board.setHandoffPending(pending.runId, false); }
+        catch (error) { console.error(`Could not post the reviewer's findings on ${repo}#${pending.prNumber}: ${error instanceof Error ? error.message : String(error)} (retrying)`); }
+      }
       await this.settleCards(repoBoard, repo);
       await fastForwardMain(repoBoard.repo);
       console.debug(`[sync ${repo}] settled ${this.board.listPullRequestCards(repoBoard.repo).length} PR card(s) in ${Date.now() - syncStart}ms`);
@@ -619,14 +632,17 @@ export class GitHubSync {
     }
     // Which files conflict, without touching the worktree. Only used to brief the agent and the PR.
     let files: string[] = [], details = "";
-    try { await git(worktree, "merge-tree", "--write-tree", "--name-only", "--no-messages", head, mainTip); }
+    try { await git(worktree, "merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", head, mainTip); }
     catch (error) {
       if ((error as { exitCode?: unknown }).exitCode !== 1) return undefined;
-      details = (error as Error).message;
-      for (const line of details.split("\n").slice(1)) { if (!line) break; files.push(line); }
+      // Raw stdout, NUL-delimited: the merged tree's id, then each conflicted path with its real spelling.
+      const [, ...paths] = ((error as { stdout?: string }).stdout ?? "").split("\0");
+      for (const path of paths) { if (!path) break; files.push(path); }
+      details = files.length ? `Conflicting files:\n${files.join("\n")}` : (error as Error).message.replaceAll("\0", "\n");
     }
     if (card.conflictRepairs >= maxConflictRepairs) {
       this.board.markConflictHandled(card.id, `${key}!`);
+      this.board.recordConflictEvents(card.id, files);
       const reason = `${maxConflictRepairs} automatic repairs have already been tried`;
       await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Alice stopped repairing it automatically because ${reason}. A person needs to resolve it.`);
       return said(`The pull request conflicts with main${files.length ? ` in ${files.join(", ")}` : ""}; ${reason}, so a person needs to resolve it.`);

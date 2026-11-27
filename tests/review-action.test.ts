@@ -10,7 +10,7 @@ import { reviewActionText, type Card } from "../src/model.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-review-action-")), repo = join(dir, "repo"), data = join(dir, "data");
+  const dir = mkdtempSync(join(tmpdir(), "alice-review-action-")), repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
@@ -22,7 +22,7 @@ function fixture() {
     const card = board.createCard({ repo, title: change ? "Implement" : "Investigate", body: "" });
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
-    git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);
     if (change) writeFileSync(join(worktree, "README.md"), `original\n${card.id}\n`);
     board.finish(run.id, "review");

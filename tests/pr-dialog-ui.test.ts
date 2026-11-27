@@ -108,7 +108,7 @@ test("the PR dialog shows the push's live hook output, then the refused push's e
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/push-progress")) return route.fulfill({ json: push });
       if (path.endsWith("/approve")) {
-        push = { step: "Pushing bakery/card (the repository's pre-push hooks run first)", log: ["==> knip: Unused files", "Unused exports (1)"], startedAt: new Date().toISOString(), finishedAt: null, error: null };
+        push = { step: "Pushing alice/card (the repository's pre-push hooks run first)", log: ["==> knip: Unused files", "Unused exports (1)"], startedAt: new Date().toISOString(), finishedAt: null, error: null };
         await approveHeld;
         return route.fulfill({ status: 400, json: { error: "push failed: the repository's pre-push hook refused it.\n\nUnused exports (1)\ncountryCode  placeEvidence.ts:79:17" } });
       }
@@ -131,7 +131,7 @@ test("the PR dialog shows the push's live hook output, then the refused push's e
     await page.getByRole("button", { name: "Approve and open PR" }).click();
     const dialog = page.getByRole("dialog", { name: "Open pull request" });
     await dialog.getByRole("button", { name: "Approve and open PR" }).click();
-    await dialog.getByText("Pushing bakery/card (the repository's pre-push hooks run first)").waitFor();
+    await dialog.getByText("Pushing alice/card (the repository's pre-push hooks run first)").waitFor();
     await dialog.getByText(/==> knip: Unused files\nUnused exports \(1\)/).waitFor();
     push = { ...(push as object), finishedAt: new Date().toISOString(), error: "push failed" };
     releaseApprove();

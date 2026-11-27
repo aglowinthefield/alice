@@ -10,7 +10,6 @@ import { atMachineCapacity, atRunCapacity, autoStartRefusal, machineAgentLimit, 
 import { classifyProviderFailure, isProviderFailureKind, type ProviderFailureKind } from "./provider-failure.js";
 import { summarizeFailure } from "./failure-summary.js";
 import type { ThemeName } from "../src/themes.js";
-import { featureOffMessage, readFeatures, type Features } from "../src/features.js";
 import { parsePlan } from "../src/plan.js";
 import { defaultStaleReviewDays, validateStaleReviewDays } from "../src/stale-review.js";
 import { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot } from "../src/model.js";
@@ -20,15 +19,14 @@ import type { StatsInput } from "./stats.js";
 import type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields } from "../shared/wire.js";
 export type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields };
 export { reviewActionLabels } from "../shared/card-state.js";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[];
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[];
   /** Days a card may sit in Review before the board marks it stale and the push digest lists it; 0 is off. */
   staleReviewDays: number };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type AliceSettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean; maxActiveAgents: number };
 type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string; staleReviewDays: number };
-/** `integration` is what the build lets Alice do: github-pr only with the pull requests feature. `integrationConfigured` is what is stored, kept while the feature is off. The stored sync error and warning are kept too but read empty while it is off, so they never hold back pickup. */
-const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullRequests: boolean): RepoBoard => ({
+const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl,
   autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewConcurrency: row.autoReviewConcurrency, autoReviewMaxFiles: row.autoReviewMaxFiles, autoReviewMaxPatchChars: row.autoReviewMaxPatchChars, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
@@ -37,7 +35,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullReque
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
   autoPickupStarts: starts.length, agentModels: parseBoardAgentModels(row.agentModels), sharedCaches: validateSharedCaches(JSON.parse(row.sharedCaches)),
   autoPickupNextAt: nextStartAt(limitSettings(row), starts),
-  pickupCostBudget: row.pickupCostBudget, cost24h, integration: pullRequests ? row.integration : "local", integrationConfigured: row.integration, integrationError: pullRequests ? row.integrationError : "", integrationWarning: pullRequests ? row.integrationWarning : "", integrationSyncedAt: row.integrationSyncedAt,
+  pickupCostBudget: row.pickupCostBudget, cost24h, integration: row.integration, integrationError: row.integrationError, integrationWarning: row.integrationWarning, integrationSyncedAt: row.integrationSyncedAt,
   integrationChosen: row.integrationChosen !== 0, githubMainProtected: row.githubMainProtected === null ? null : row.githubMainProtected !== 0, integrationNote: row.integrationNote,
   autoPickupBudgetReached: budgetReached(limitSettings(row), cost24h),
   limitsEnabled: row.limitsEnabled !== 0, staleReviewDays: row.staleReviewDays,
@@ -181,7 +179,7 @@ export class RunLimitError extends Error {}
 
 export class Board {
   private db: DatabaseSync;
-  constructor(path: string, readonly features: Features = readFeatures(process.env)) {
+  constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0);
@@ -495,7 +493,7 @@ export class Board {
     const starts = (this.db.prepare(`SELECT runs.startedAt FROM runs JOIN cards ON cards.id=runs.cardId
       WHERE cards.repo=? AND runs.startedBy='auto' AND runs.rowid>?
         AND julianday(runs.startedAt)>=julianday('now','-1 day') ORDER BY runs.startedAt`).all(row.repo, row.autoPickupResetRunRowid) as { startedAt: string }[]).map(run => run.startedAt);
-    return toRepoBoard(row, starts, this.cost24h(row.repo), this.features.pullRequests);
+    return toRepoBoard(row, starts, this.cost24h(row.repo));
   }
   // Rolling 24h spend: attempts and agent reviews still running or finished within the last day.
   // Cost accrues while a run is active, so a long run counts until a day after it ends.
@@ -535,7 +533,7 @@ export class Board {
       if (value.length > 500 || !url || (url.protocol !== "https:" && url.protocol !== "http:"))
         throw new Error("Remote repository link must be an http:// or https:// URL (maximum 500 characters)");
     }
-    if (this.getBoard(id)!.integrationConfigured === "github-pr" && !githubRepo(value)) throw new Error("This board integrates through GitHub pull requests; its remote must stay a https://github.com/OWNER/REPO link");
+    if (this.getBoard(id)!.integration === "github-pr" && !githubRepo(value)) throw new Error("This board integrates through GitHub pull requests; its remote must stay a https://github.com/OWNER/REPO link");
     // A new remote is a new repository: what was detected about the old one no longer applies.
     if (value !== this.getBoard(id)!.remoteUrl) this.db.prepare("UPDATE boards SET remoteUrl=?, githubMainProtected=NULL, integrationNote='' WHERE id=?").run(value, id);
     return this.getBoard(id)!;
@@ -545,7 +543,6 @@ export class Board {
     const board = this.getBoard(id);
     if (!board) throw new Error("Board not found");
     if (mode !== "local" && mode !== "github-pr") throw new Error("Integration must be local or github-pr");
-    if (mode === "github-pr" && !this.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (mode === "github-pr" && !githubRepo(board.remoteUrl)) throw new Error("github-pr integration requires the board's remote to be a GitHub repository link (https://github.com/OWNER/REPO)");
     this.db.prepare("UPDATE boards SET integration=?, integrationError='', integrationWarning='', integrationChosen=1 WHERE id=?").run(mode, id);
     return this.getBoard(id)!;
@@ -558,9 +555,9 @@ export class Board {
   recordGithubProtection(id: string, remoteUrl: string, isProtected: boolean | null, note: string, switchMode: boolean): RepoBoard | undefined {
     const board = this.getBoard(id);
     if (!board || board.remoteUrl !== remoteUrl) return board;
-    const switchToPr = this.features.pullRequests && switchMode && isProtected === true && !board.integrationChosen && board.integrationConfigured === "local";
+    const switchToPr = switchMode && isProtected === true && !board.integrationChosen && board.integration === "local";
     this.db.prepare("UPDATE boards SET githubMainProtected=?, integrationNote=?, integration=? WHERE id=?")
-      .run(isProtected === null ? null : isProtected ? 1 : 0, note.slice(0, 2000), switchToPr ? "github-pr" : board.integrationConfigured, id);
+      .run(isProtected === null ? null : isProtected ? 1 : 0, note.slice(0, 2000), switchToPr ? "github-pr" : board.integration, id);
     return this.getBoard(id);
   }
   /** An integration error pauses automatic pickup on the board until a later sync clears it. */
@@ -577,7 +574,6 @@ export class Board {
   }
   boardForRepo(repo: string): RepoBoard | undefined { return this.listBoards().find(item => item.repo === repo); }
   integrationFor(repo: string): IntegrationMode {
-    if (!this.features.pullRequests) return "local";
     return (this.db.prepare("SELECT integration FROM boards WHERE repo=?").get(repo) as { integration: IntegrationMode } | undefined)?.integration ?? "local";
   }
   /** A PR URL that overrides the `alice/<id>` branch lookup; an empty value restores the lookup. */
@@ -806,7 +802,6 @@ export class Board {
   setAutoPullRequest(id: string, enabled: boolean): RepoBoard {
     const board = this.getBoard(id);
     if (!board) throw new Error("Board not found");
-    if (enabled && !this.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     this.db.prepare("UPDATE boards SET autoPullRequestEnabled=?, autoPullRequestEnabledAt=? WHERE id=?")
       .run(enabled ? 1 : 0, enabled ? board.autoPullRequestEnabledAt ?? now() : null, id);
     return this.getBoard(id)!;
@@ -1185,7 +1180,6 @@ export class Board {
   }
   /** Per repo, how many sentinel jobs are in progress: running, or queued to start. Keep in step with `isSentinelLive` in src/sentinels.tsx. */
   sentinelInProgressCounts(): Record<string, number> {
-    if (!this.features.sentinels) return {};
     const rows = this.db.prepare(`SELECT repo, COUNT(*) AS count FROM cards WHERE status IN ('running', 'ready', 'triage') AND NOT ${notSentinelJob} GROUP BY repo`).all() as { repo: string; count: number }[];
     return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
   }

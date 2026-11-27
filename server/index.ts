@@ -1,6 +1,5 @@
 import { dataDir as defaultDataDir } from "./data-dir.js";
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
-import { featureOffMessage, type Feature } from "../src/features.js";
 import { readyFlags } from "../src/card-lint.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
@@ -166,13 +165,11 @@ const githubSync = new GitHubSync(board, dataDir, github, process.env.ALICE_WT_B
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
 githubSync.onMerged = cardId => integration.updateDependents(cardId);
-// Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
-const features = board.features;
 /** The machine-wide agent limit in force and how many agents run now, for Settings and the CLI. */
 const agentSlots = () => { const { limit, active } = board.machineCapacity(); return { activeAgentsLimit: limit, activeAgents: active }; };
 // Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. ALICE_SENTINEL=0 turns it off;
 // ALICE_OWNER names the PR author it acts for (default: the signed-in `gh` user).
-const sentinelsOn = board.features.sentinels && process.env.ALICE_SENTINEL !== "0";
+const sentinelsOn = process.env.ALICE_SENTINEL !== "0";
 const runLocks = new RunLocks(board, prLocks, sentinelStore, sentinelsOn);
 // Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or ALICE_DISCORD_WEBHOOK_URL when Settings has none.
 new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.ALICE_DISCORD_WEBHOOK_URL);
@@ -298,11 +295,6 @@ const server = createServer(async (req, res) => {
     const localMergesRoute = path.match(/^\/api\/boards\/([\w-]+)\/local-merges$/);
     const mainResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/main\/reset$/);
     const cardRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|(?<pullRequestAction>pull-request|publish|pr-draft)|accept-findings|create-plan|close|discussion|history|ready-check))?)?$/);
-    const disabled: Feature | undefined =
-      !features.sentinels && (sentinelsRoute || sentinelRoute) ? "sentinels" :
-      !features.pullRequests && (pullMergeRoute || pullsRoute || syncRoute || localMergesRoute || mainResetRoute || cardRoute?.groups?.pullRequestAction) ? "pullRequests" :
-      undefined;
-    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled, error: featureOffMessage(disabled) }); return; }
     // Prometheus metrics for the operator's own monitoring; off unless ALICE_METRICS=1. See docs/metrics.md.
     if (path === "/metrics" && req.method === "GET") {
       if (process.env.ALICE_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set ALICE_METRICS=1 to serve them." }); return; }
@@ -318,7 +310,7 @@ const server = createServer(async (req, res) => {
         for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], ...agentSlots(), draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], ...agentSlots(), draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, ...version });
       return;
     }
     if (path === "/api/push/key" && req.method === "GET") { send(res, 200, { publicKey: push.publicKey() }); return; }
@@ -511,7 +503,6 @@ const server = createServer(async (req, res) => {
       }
       if ("autoPullRequestEnabled" in input) {
         if (Object.keys(input).length !== 1 || typeof input.autoPullRequestEnabled !== "boolean") throw new Error("Update autoPullRequestEnabled as a boolean, separately from other board settings");
-        if (input.autoPullRequestEnabled && !features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
         if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
         send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
@@ -925,7 +916,7 @@ const server = createServer(async (req, res) => {
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
 server.listen(port, bindHost, () => { console.log(`Alice listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start(); push.start();
-  if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
+  autoPullRequest.start(); githubSync.start(); pullFeed.start();
   if (updates) {
     void updates.poll();
     // UI-only updates install on their own; ones that restart the server wait for the button.

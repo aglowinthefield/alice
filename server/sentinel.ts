@@ -82,7 +82,7 @@ export class Sentinel {
     private readonly startRun?: (card: Card) => void,
     /** How often the scheduler checks which sentinels are due. */
     private readonly pollMs = 15_000,
-    /** False when the Sentinels feature is off or ALICE_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
+    /** False when ALICE_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
     readonly active = true) {
     // Inactive (feature off or ALICE_SENTINEL=0): no listeners and no writes to the stored sentinel data.
     if (!active) return;

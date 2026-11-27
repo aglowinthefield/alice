@@ -79,8 +79,6 @@ import { PullRequests } from "./pull-requests.js";
 import { Visualizer } from "./visualizer/visualizer.js";
 import { ChatView } from "./chat.js";
 import { Sentinels, isSentinelJob } from "./sentinels.js";
-import { features } from "./build-features.js";
-import { featureOffMessage } from "./features.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
@@ -356,11 +354,11 @@ function ChatUnreadBadge({
   );
 }
 
-/** Pull request screens and links need the feature in this build and a GitHub remote for `gh`. */
+/** Pull request screens and links need a GitHub remote for `gh`. */
 const supportsPullRequests = (board: { remoteUrl?: string }) =>
-  features.pullRequests && hasGithubRemote(board);
+  hasGithubRemote(board);
 const supportsSentinels = (board: { remoteUrl?: string }) =>
-  features.sentinels && hasGithubRemote(board);
+  hasGithubRemote(board);
 /** Sentinel jobs running or queued to start, shown beside the Sentinels entry. */
 function SentinelsBadge({ count }: { count: number }) {
   const label = `${count} sentinel ${count === 1 ? "job" : "jobs"} in progress`;
@@ -712,10 +710,10 @@ export function App() {
     if (initialRoute) return initialRoute.view;
     const saved = readTab("alice-view") ?? localStorage.getItem("alice-view");
     return saved === "board" ||
-      (saved === "pulls" && features.pullRequests) ||
+      saved === "pulls" ||
       saved === "visualizer" ||
       saved === "chat" ||
-      (saved === "sentinels" && features.sentinels) ||
+      saved === "sentinels" ||
       saved === "stats" ||
       saved === "logs" ||
       saved === "settings"
@@ -2664,45 +2662,6 @@ export function App() {
             </Button>
           </div>
         )}
-        {!features.pullRequests &&
-          (currentBoard?.integrationConfigured === "github-pr" ||
-            (currentBoard?.githubMainProtected &&
-              !currentBoard.integrationChosen)) && (
-            <div
-              role="alert"
-              data-testid="pull-requests-off-notice"
-              className="mx-6 mt-5 flex items-center justify-between gap-4 rounded-md border border-status-interrupted/40 bg-status-interrupted/10 px-4 py-3 text-sm lg:mx-10"
-            >
-              <span className="min-w-0 break-words">
-                <strong>Approve is unavailable here:</strong>{" "}
-                {currentBoard.integrationConfigured === "github-pr"
-                  ? "this board is set to GitHub pull requests"
-                  : "main on GitHub only accepts pull requests"}
-                , and pull requests are turned off in this build, so Alice will
-                not merge into local main instead.{" "}
-                {featureOffMessage("pullRequests")} You can also keep Local
-                merge for this board.
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() => {
-                  const target = currentBoard;
-                  void action(async () => {
-                    updateBoard(
-                      await api<Board>(`/boards/${target.id}/settings`, {
-                        method: "PATCH",
-                        body: JSON.stringify({ integration: "local" }),
-                      }),
-                    );
-                  });
-                }}
-              >
-                Keep Local merge
-              </Button>
-            </div>
-          )}
         {currentBoard?.integration === "github-pr" &&
           (currentBoard.integrationError ||
             currentBoard.integrationWarning) && (
@@ -3085,7 +3044,7 @@ export function App() {
                                       waiting={waitingOn(item, cards)}
                                     />
                                   )}
-                                  {features.pullRequests && item.prNumber && (
+                                  {item.prNumber && (
                                     <PullRequestBadge
                                       card={item}
                                       onOpen={
@@ -3616,61 +3575,53 @@ export function App() {
           {editingBoard && (
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Integration</div>
-              {!features.pullRequests && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Approve merges the card into local main.
-                </p>
-              )}
-              {features.pullRequests && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Local: Approve merges the card into local main. GitHub pull
-                  requests: Approve pushes alice/&lt;card&gt; and opens a PR
-                  with gh; the card is Done once the PR merges and the merge is
-                  on origin/main. Local main is then only fast-forwarded to
-                  origin/main. Needs gh signed in and a GitHub remote link. When
-                  a GitHub remote is set, Alice picks GitHub pull requests if
-                  main only accepts pull requests.
-                </p>
-              )}
-              {features.pullRequests && (
-                <label className="mt-4 block text-xs">
-                  Integration mode
-                  <select
-                    aria-label="Integration mode"
-                    value={editingBoard.integration ?? "local"}
-                    disabled={busy}
-                    onChange={(event) => {
-                      const integration = event.target.value;
-                      void action(async () => {
-                        const updated = await api<Board>(
-                          `/boards/${editingBoard.id}/settings`,
-                          {
-                            method: "PATCH",
-                            body: JSON.stringify({ integration }),
-                          },
-                        );
-                        setBoards((previous) =>
-                          previous.map((item) =>
-                            item.id === updated.id ? updated : item,
-                          ),
-                        );
-                        setEditingBoard(updated);
-                      });
-                    }}
-                    className="mt-2 block w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
-                  >
-                    <option value="local">Local merge</option>
-                    <option value="github-pr">GitHub pull requests</option>
-                  </select>
-                </label>
-              )}
-              {features.pullRequests && editingBoard.integrationNote && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Local: Approve merges the card into local main. GitHub pull
+                requests: Approve pushes alice/&lt;card&gt; and opens a PR with
+                gh; the card is Done once the PR merges and the merge is on
+                origin/main. Local main is then only fast-forwarded to
+                origin/main. Needs gh signed in and a GitHub remote link. When a
+                GitHub remote is set, Alice picks GitHub pull requests if main
+                only accepts pull requests.
+              </p>
+
+              <label className="mt-4 block text-xs">
+                Integration mode
+                <select
+                  aria-label="Integration mode"
+                  value={editingBoard.integration ?? "local"}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const integration = event.target.value;
+                    void action(async () => {
+                      const updated = await api<Board>(
+                        `/boards/${editingBoard.id}/settings`,
+                        {
+                          method: "PATCH",
+                          body: JSON.stringify({ integration }),
+                        },
+                      );
+                      setBoards((previous) =>
+                        previous.map((item) =>
+                          item.id === updated.id ? updated : item,
+                        ),
+                      );
+                      setEditingBoard(updated);
+                    });
+                  }}
+                  className="mt-2 block w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
+                >
+                  <option value="local">Local merge</option>
+                  <option value="github-pr">GitHub pull requests</option>
+                </select>
+              </label>
+
+              {editingBoard.integrationNote && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   {editingBoard.integrationNote}
                 </p>
               )}
-              {features.pullRequests &&
-                editingBoard.githubMainProtected &&
+              {editingBoard.githubMainProtected &&
                 !editingBoard.integrationChosen &&
                 (editingBoard.integration ?? "local") === "local" && (
                   <Button
@@ -3699,7 +3650,7 @@ export function App() {
                     Keep Local merge
                   </Button>
                 )}
-              {features.pullRequests && editingBoard.integrationError && (
+              {editingBoard.integrationError && (
                 <p role="alert" className="mt-2 text-xs text-destructive">
                   {editingBoard.integrationError}
                 </p>
@@ -3879,13 +3830,11 @@ export function App() {
                   </span>
                 </label>
               )}
-              {features.pullRequests && (
-                <LocalMerges
-                  boardId={editingBoard.id}
-                  integration={editingBoard.integration ?? "local"}
-                  onChanged={refresh}
-                />
-              )}
+              <LocalMerges
+                boardId={editingBoard.id}
+                integration={editingBoard.integration ?? "local"}
+                onChanged={refresh}
+              />
             </div>
           )}
           {pickupBoard && (

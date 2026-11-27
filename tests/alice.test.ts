@@ -569,7 +569,7 @@ test("doctor ends with INFO rows for the CLI's ALICE_* variables and the server'
     env: { ALICE_URL: "mochi", ALICE_DISCORD_WEBHOOK_URL: "https://discord.example/hook/secret", PATH: "/usr/bin" },
     origin: new URL("http://mochi:4317"), local: false,
     fetchBoards: async () => [],
-    fetchStatus: async () => ({ version: "1.2.3", hostname: "mochi", activeRuns: 2, draining: true, features: { sentinels: false, pullRequests: true } }),
+    fetchStatus: async () => ({ version: "1.2.3", hostname: "mochi", activeRuns: 2, draining: true }),
     fetchSettings: async () => ({ agentModels: { work: { model: "claude", thinking: "high" }, review: { model: "", thinking: "" } }, telemetryAvailable: true, telemetryEnabled: false, discordWebhookUrl: "https://discord.example/hook/secret" }),
     cliPath: "/opt/alice/scripts/alice.mjs",
   });
@@ -580,7 +580,6 @@ test("doctor ends with INFO rows for the CLI's ALICE_* variables and the server'
     "INFO\tenv ALICE_DISCORD_WEBHOOK_URL\tset (hidden)",
     "INFO\tenv ALICE_URL\tmochi",
     "INFO\tserver host\tmochi",
-    "INFO\tserver features\tsentinels off, pullRequests on",
     "INFO\tserver runs\t2 active, draining for an update",
     "INFO\tserver models\twork claude (high), review default",
     "INFO\tserver telemetry\toff",

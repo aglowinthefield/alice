@@ -29,7 +29,6 @@ flowchart LR
 - [Reviewing and merging](#reviewing-and-merging)
 - [GitHub pull request mode](#github-pull-request-mode)
 - [Sentinels](#sentinels)
-- [Optional features](#optional-features)
 - [Watching a run](#watching-a-run)
 - [Automation (opt-in)](#automation-opt-in)
 - [CLI](#cli)
@@ -182,8 +181,6 @@ In the repository's settings, **Push main to origin after merging** (local-merge
 
 ## GitHub pull request mode
 
-Off unless `ALICE_FEATURE_PULL_REQUESTS=1` (see [Optional features](#optional-features)).
-
 A board integrates either locally, where Approve merges into local `main`, or through GitHub pull requests, where a card is Done only when its PR has merged on GitHub and the merge commit is on `origin/main`.
 
 The default depends on the repository. When you give a board a GitHub remote link (`https://github.com/OWNER/REPO`), Alice asks GitHub whether `main` accepts direct pushes: `gh api repos/OWNER/REPO/rules/branches/main` for rulesets, then `gh api repos/OWNER/REPO/branches/main/protection` for branch protection. If a ruleset requires a pull request or a merge queue, or branch protection requires pull request reviews, the board switches to **GitHub pull requests**. Otherwise it stays **Local merge**. The board's settings show what Alice found.
@@ -239,8 +236,6 @@ Publishing doesn't touch local `main`. Once every local commit on `main` is an A
 
 ## Sentinels
 
-Off unless `ALICE_FEATURE_SENTINELS=1` (see [Optional features](#optional-features)).
-
 A sentinel is a persistent monitor, not a card. It never enters Triage, Ready, Running, Review or Done, is never reviewed or merged, and is not counted in lane counts, Today or SDLC stats. A pull-request board has two, listed under **Sentinels** in the sidebar:
 
 - **Broken pull requests** looks every 5 minutes (`ALICE_SENTINEL_MS`) for open PRs by the repository owner that conflict with main or fail CI.
@@ -251,25 +246,6 @@ Each has instructions (added to every job's brief), a schedule, an enabled or pa
 What a sentinel finds becomes an ordinary job card, linked back by sentinel, run and a stable finding key (`pr:<number>` for a broken PR). The card runs on the usual worker, with the same logs, usage and budget, and Alice pushes its result to the PR branch itself, so Approve, merge and auto-review do not apply to it. While a finding's card is open, later runs add no second card for it. Once that card is Done and the PR is still broken (a new head or main), the next run makes a new card, up to three per PR. Finishing a card never completes or pauses its sentinel. A run only one process can hold at a time, and a run cut off by a restart is marked interrupted.
 
 Jobs made before sentinels had records are linked to their sentinel on first start, keeping their ids, status, PR locks and any running agent. The link is made in one transaction and is safe to repeat.
-
-## Optional features
-
-Sentinels and GitHub pull requests are optional and **off by default**. Each has its own switch, and the two are independent:
-
-| Switch | Turns on |
-| --- | --- |
-| `ALICE_FEATURE_SENTINELS=1` | Sentinels: the Sentinels page, their routes and their background scheduler. |
-| `ALICE_FEATURE_PULL_REQUESTS=1` | GitHub pull request mode: the Pull requests page, the Integration mode choice, publishing, automatic pull requests, GitHub sync and polling. |
-
-Unset, empty or `0` means off; any other value is an error. Set the switch both when you build the UI and when you start the server, because the UI has it compiled in and the server reads it at start (`/api/status` reports what the server runs with). For example, `ALICE_FEATURE_PULL_REQUESTS=1 npm run build && ALICE_FEATURE_PULL_REQUESTS=1 ALICE_SERVE_UI=1 npm start`; for a service, put both in its environment and in the environment of `scripts/update.sh`. `src/features.ts` is the one definition both sides read.
-
-With a feature off:
-
-- Its screens, navigation and settings are not shown, its routes answer `404` with `code: "feature_off"` and the switch to set, its timers never start, and it needs no configuration (`gh` included).
-- Stored data is kept, not deleted. A board set to GitHub pull requests reads as Local while pull requests are off, and goes back to its stored mode when you turn them on; sentinels, their runs and their job cards come back the same way.
-- Cards, runs, local review and Local merge work as usual.
-- Alice never falls back to merging locally when the board needs a pull request. If the board is set to GitHub pull requests, or `main` on GitHub only accepts them and you haven't chosen Local merge, Approve is refused with a message saying so; set the switch or choose Local merge in the board's settings.
-- Sentinels need only a GitHub remote link on the board, not pull request mode, so with only Sentinels on they watch boards that merge locally too. A stored sync error is kept but ignored (it does not pause automatic pickup) while pull requests are off.
 
 ## Watching a run
 
@@ -354,7 +330,7 @@ npm run alice -- board [--integration local|github-pr]
 npm run alice -- pr CARD_ID [URL|off]
 ```
 
-- `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. The server line comes right after the versions and says which instance you reached and whether it's local or remote. Against a non-loopback `ALICE_URL` it checks only the server and boards, since tools and paths are on the server's machine, and names each board `<host>:<path>`. After the checks come `INFO` rows that never pass or fail: the CLI's path, every `ALICE_*` variable the CLI sees (names containing `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `WEBHOOK` or `ENDPOINT` print as `set (hidden)`), and what the server reports about itself: host, build features, active runs, agent models, telemetry and whether a Discord webhook is set. A remote server's own environment variables stay on its machine. `--json` prints the checks.
+- `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. The server line comes right after the versions and says which instance you reached and whether it's local or remote. Against a non-loopback `ALICE_URL` it checks only the server and boards, since tools and paths are on the server's machine, and names each board `<host>:<path>`. After the checks come `INFO` rows that never pass or fail: the CLI's path, every `ALICE_*` variable the CLI sees (names containing `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `WEBHOOK` or `ENDPOINT` print as `set (hidden)`), and what the server reports about itself: host, active runs, agent models, telemetry and whether a Discord webhook is set. A remote server's own environment variables stay on its machine. `--json` prints the checks.
 - `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body`, `--priority` and `--source` as `create`.
 - Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
@@ -462,7 +438,7 @@ Then open `https://<machine>.<tailnet>.ts.net`. Add that name to `ALICE_ALLOWED_
 
 `alice service install` runs this checkout in the background: a systemd user service on Linux, or a launchd agent on macOS. It starts at login, restarts after a crash, and checks for updates every 2 minutes. It builds the UI first if `dist/` is missing.
 
-- Settings go in `~/.config/alice/alice.env`. Install creates the file once with `ALICE_SERVE_UI=1` and `ALICE_HOST` (`--host`, default `127.0.0.1`) and never overwrites. Put feature switches here too, so the server and the update check both read them.
+- Settings go in `~/.config/alice/alice.env`. Install creates the file once with `ALICE_SERVE_UI=1` and `ALICE_HOST` (`--host`, default `127.0.0.1`) and never overwrites.
 - `alice service restart` applies a changed env file. It waits for active runs to finish, as an update does.
 - `status` and `logs` show the server's state and its last 200 log lines. `stop` and `uninstall` end active runs at once, so they need `--yes`. Uninstall keeps the env file and the data directory.
 - On Linux the service starts at login. To start it at boot and keep it running after logout, run `loginctl enable-linger`; install says so when it is off.

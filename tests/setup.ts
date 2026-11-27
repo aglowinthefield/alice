@@ -10,10 +10,6 @@ delete process.env.ALICE_ALLOWED_HOSTS;
 // An Alice agent on a board with shared caches inherits them too; the worker tests check that only an enabled board sets them.
 delete process.env.TURBO_CACHE_DIR;
 delete process.env.TURBO_RUN_SUMMARY;
-// Optional features are off in a default build (src/features.ts). Most tests cover them, so the suite turns them on;
-// tests/features.test.ts sets each combination itself.
-process.env.ALICE_FEATURE_SENTINELS ??= "1";
-process.env.ALICE_FEATURE_PULL_REQUESTS ??= "1";
 
 // Loaded by `npm test` before every test file. Playwright waits 30s by default for a locator that never appears,
 // and a UI test can wait several times, so one missing element stalled the suite for minutes. A wait that takes

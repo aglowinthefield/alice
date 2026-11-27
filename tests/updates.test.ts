@@ -213,7 +213,7 @@ test("a live UI swap keeps the old build's chunks for pages still open on it", (
 test("the server's module graph includes the src files it imports and nothing else from src", () => {
   const files = serverModules(process.cwd());
   assert.ok(files.has("server/index.ts"));
-  assert.ok(files.has("src/features.ts"));
+  assert.ok(files.has("src/model.ts"));
   assert.ok(!files.has("src/main.tsx"));
   assert.ok(!files.has("src/style.css"));
 });

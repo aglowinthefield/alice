@@ -2046,7 +2046,7 @@ export function App() {
                     <button
                       onClick={() => openBoard(item.id)}
                       aria-current={active ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${active ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${active ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <Kanban size={13} aria-hidden="true" /> Kanban
                       {!!item.newCards && (
@@ -2058,7 +2058,7 @@ export function App() {
                     <button
                       onClick={() => openPulls(item.id)}
                       aria-current={pullsActive ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${pullsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${pullsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <GitPullRequest size={13} aria-hidden="true" /> Pull
                       requests
@@ -2068,7 +2068,7 @@ export function App() {
                     <button
                       onClick={() => openVisualizer(item.id)}
                       aria-current={visualizerActive ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${visualizerActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${visualizerActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <Workflow size={13} aria-hidden="true" /> Visualizer
                     </button>
@@ -2077,7 +2077,7 @@ export function App() {
                     <button
                       onClick={() => openChat(item.id)}
                       aria-current={chatActive ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${chatActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${chatActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
                     >
                       <MessageSquare size={13} aria-hidden="true" /> Chat
                       {!!item.chatUnread && (

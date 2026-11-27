@@ -1035,6 +1035,56 @@ test("the wrap-up extension steers only a busy session, once per message, so it 
   }
 });
 
+for (const mode of ["local", "github-pr"] as const) {
+  test(`Run again on current main on a ${mode} board authorizes the card-branch update and nothing beyond it`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "alice-worker-"));
+    const repo = join(dir, "repo"), remote = join(dir, "origin.git"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { encoding: "utf8" }).trim();
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main", repo]);
+      execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+      writeFileSync(join(repo, "README.md"), "initial\n");
+      git("add", "README.md");
+      git("commit", "-qm", "initial");
+      git("remote", "add", "origin", remote);
+      git("push", "-q", "origin", "main");
+      writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+      chmodSync(fakePi, 0o755);
+      const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+      const repoBoard = board.addRepo(repo);
+      if (mode === "github-pr") { board.setRemoteUrl(repoBoard.id, "https://github.com/example/repo"); board.setIntegration(repoBoard.id, "github-pr"); }
+      const card = board.createCard({ title: "Stale work", body: "Keep it working", repo });
+      board.setStatus(card.id, "ready");
+      const first = worker.start(board.getCard(card.id)!);
+      await waitFor(() => board.getRun(first.id)?.status === "review");
+      const plain = readFileSync(promptFile, "utf8");
+      assert.match(plain, /Do not stage, commit, push, create a PR, merge, deploy, or post externally/, "an ordinary run keeps the blanket ban");
+      writeFileSync(join(repo, "NEW.md"), "main moved\n");
+      git("add", "NEW.md");
+      git("commit", "-qm", "main moves on");
+      git("push", "-q", "origin", "main");
+      const tip = git("rev-parse", "main");
+      const again = worker.start(board.getCard(card.id)!, "manual", "on current main", undefined, true, true);
+      await waitFor(() => board.getRun(again.id)?.status === "review");
+      const prompt = readFileSync(promptFile, "utf8");
+      assert.ok(prompt.startsWith(`Task from Alice card ${card.id}: Stale work\n\nKeep it working\n\nThis card sat in Review long enough`), "the catch-up task comes straight after the card");
+      assert.ok(prompt.includes(`(${tip})`), "names the main tip to catch up with");
+      assert.doesNotMatch(prompt, /Do not stage, commit/, "no rule contradicts the update it asks for");
+      assert.match(prompt, /Do not change main, push, create a PR, deploy, or post externally\./);
+      if (mode === "github-pr") {
+        assert.match(prompt, /merge origin\/main into the card branch and commit the merge there/);
+        assert.match(prompt, /authorized to merge origin\/main into the card branch and to stage and commit that merge, and your fixes on top of it, on the card branch only/);
+        assert.match(prompt, /pre-push hook/);
+      } else {
+        assert.match(prompt, /current local `main`/);
+        assert.match(prompt, /authorized to stash, rebase or merge local `main` into the card branch/);
+        assert.match(prompt, /leave the card's own work uncommitted/);
+      }
+      board.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
 // A fake Pi that loads the real wrap-up extension and works in turns. `loop` runs the same command every turn until it
 // is steered and the test has written `release`, then reports and settles. Each other mode settles after `turns`.
 // `append-untracked` and `rewrite-tracked` change files only through bash, with a different command each turn: the

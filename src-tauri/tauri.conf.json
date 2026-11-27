@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Bakery",
+  "productName": "Alice",
   "version": "0.1.0",
-  "identifier": "dev.bakery.desktop",
+  "identifier": "dev.alice.desktop",
   "build": {
     "frontendDist": "../desktop"
   },

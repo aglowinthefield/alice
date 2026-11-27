@@ -18,7 +18,7 @@ async function freePort(): Promise<number> {
 }
 
 test("cards made outside the board UI count as new until the board is opened", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-new-cards-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-new-cards-"));
   const repo = join(home, "repo");
   mkdirSync(repo);
   execFileSync("git", ["init", "-q", repo]);
@@ -30,11 +30,11 @@ test("cards made outside the board UI count as new until the board is opened", a
       cwd: process.cwd(),
       env: {
         ...process.env,
-        BAKERY_HOST: "",
-        BAKERY_ALLOWED_HOSTS: "",
+        ALICE_HOST: "",
+        ALICE_ALLOWED_HOSTS: "",
         HOME: home,
-        BAKERY_DATA_DIR: join(home, "data"),
-        BAKERY_PORT: String(port),
+        ALICE_DATA_DIR: join(home, "data"),
+        ALICE_PORT: String(port),
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

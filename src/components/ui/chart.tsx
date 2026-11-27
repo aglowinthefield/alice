@@ -2,7 +2,7 @@ import * as React from "react";
 import * as Recharts from "recharts";
 import { cn } from "../../lib/utils";
 
-// shadcn/ui's chart primitive, trimmed to what Bakery uses. Series colors come from the config as CSS variables.
+// shadcn/ui's chart primitive, trimmed to what Alice uses. Series colors come from the config as CSS variables.
 export type ChartConfig = Record<
   string,
   { label?: React.ReactNode; color?: string }

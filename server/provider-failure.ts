@@ -1,5 +1,5 @@
 /**
- * What kind of provider failure a Pi run ended with, so Bakery can tell a rejected conversation history (which fails
+ * What kind of provider failure a Pi run ended with, so Alice can tell a rejected conversation history (which fails
  * the same way every time it is resumed) from a passing outage, billing, auth, or any other rejected request.
  *
  * - `invalid-history`: HTTP 400 that points into the `messages` array (for example `messages.103: role 'system' must
@@ -11,7 +11,8 @@
  * - `rate-limit`, `transient`: 429, 5xx, overloaded and network errors. An ordinary retry is expected to work.
  * - `unknown`: no recognizable provider status.
  */
-export type ProviderFailureKind = "invalid-history" | "output-blocked" | "billing" | "auth" | "invalid-request" | "rate-limit" | "transient" | "unknown";
+import type { ProviderFailureKind } from "../shared/wire.js";
+export type { ProviderFailureKind };
 
 export const PROVIDER_FAILURE_KINDS: readonly ProviderFailureKind[] = ["invalid-history", "output-blocked", "billing", "auth", "invalid-request", "rate-limit", "transient", "unknown"];
 
@@ -28,7 +29,7 @@ function httpStatus(text: string): number | null {
 
 /**
  * Network, gateway and server wording that names a passing failure even without a 5xx status. Pi retries these itself
- * (pi-ai's `RETRYABLE_PROVIDER_ERROR_PATTERN`), so what reaches Bakery is one Pi gave up on, and it often carries no
+ * (pi-ai's `RETRYABLE_PROVIDER_ERROR_PATTERN`), so what reaches Alice is one Pi gave up on, and it often carries no
  * status: "Connection error.", "terminated", "other side closed", "stream ended before message_stop".
  */
 const TRANSIENT = new RegExp([

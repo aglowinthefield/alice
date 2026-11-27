@@ -128,7 +128,11 @@ const now = () => new Date().toISOString();
 /** Minutes an automatic run that failed on a `transient` or `rate-limit` provider error waits before pickup retries its card. */
 const autoRetryDelaysMinutes = loopGuards.autoRetryDelaysMinutes;
 /** A status change (fromStatus/toStatus set) or a note (both null), with why it happened. */
-export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string };
+export type CardEvent = { at: string; fromStatus: CardStatus | null; toStatus: CardStatus | null; reason: string; closeReason: CloseReason | "" | null; closeNote: string };
+/** Why work was closed without merging. The operator may skip it, which stores '' instead. */
+export const closeReasons = ["duplicate", "wrong-approach", "not-needed", "superseded", "other"] as const;
+export type CloseReason = typeof closeReasons[number];
+export const isCloseReason = (value: unknown): value is CloseReason => closeReasons.includes(value as CloseReason);
 // One card's attempts and agent reviews. Per card, so a single-card lookup does not total every run on the board.
 const cardSpend = `(SELECT ${usageColumns.join(", ")} FROM runs spent WHERE spent.cardId=cards.id UNION ALL SELECT ${usageColumns.join(", ")} FROM auto_review_jobs spent WHERE spent.cardId=cards.id)`;
 const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALESCE(MAX(runs.turnsIncomplete), 0) AS turnsIncomplete,
@@ -251,6 +255,19 @@ export class Board {
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
     // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push, 'commit' for a commit hook that refused the commit.
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
+    // A close without merging records why ('' when skipped); every other event leaves it NULL. Closes from before the columns
+    // existed count as skipped, found by the text closeReview gave them. All or nothing, and a database left with only
+    // closeReason by an interrupted upgrade gets the rest.
+    const eventColumns = new Set((this.db.prepare("PRAGMA table_info(card_events)").all() as { name: string }[]).map(column => column.name));
+    if (!eventColumns.has("closeReason") || !eventColumns.has("closeNote")) {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!eventColumns.has("closeReason")) this.db.exec("ALTER TABLE card_events ADD COLUMN closeReason TEXT");
+        if (!eventColumns.has("closeNote")) this.db.exec("ALTER TABLE card_events ADD COLUMN closeNote TEXT NOT NULL DEFAULT ''");
+        this.db.exec("UPDATE card_events SET closeReason='' WHERE closeReason IS NULL AND toStatus='done' AND (reason LIKE 'Closed without merging%' OR reason LIKE 'Closed from % without merging')");
+        this.db.exec("COMMIT");
+      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    }
     // A start the run limit refused waits for a free slot (untilSlot=1) with the reason its history line gives.
     const queuedColumns = new Set((this.db.prepare("PRAGMA table_info(queued_starts)").all() as { name: string }[]).map(column => column.name));
     for (const column of ["untilSlot INTEGER NOT NULL DEFAULT 0", "why TEXT NOT NULL DEFAULT ''"]) if (!queuedColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE queued_starts ADD COLUMN ${column}`);
@@ -1070,6 +1087,7 @@ export class Board {
       runs: this.db.prepare(`SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens, runs.cacheTasks, runs.cacheHits, runs.cacheSavedMs FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["runs"],
       reviews: this.db.prepare(`SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId WHERE ${notSentinelJob}`).all() as StatsInput["reviews"],
       cards: this.db.prepare(`SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards WHERE ${notSentinelJob})`).all() as StatsInput["cards"],
+      closes: this.db.prepare(`SELECT cards.repo AS repo, e.at, e.closeReason AS reason FROM card_events e JOIN cards ON cards.id=e.cardId WHERE e.closeReason IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["closes"],
     };
   }
   listAutoReviewJobs(cardId: string): AutoReviewJob[] {
@@ -1342,13 +1360,20 @@ export class Board {
     return this.getCard(id)!;
   }
   // Drops a Triage, Ready, Failed or Review card to Done without merging. Runs, worktree and branch stay, so Reopen can bring it back.
-  closeReview(id: string): Card {
+  closeReview(id: string, why: { reason?: CloseReason; note?: string } = {}): Card {
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (!["triage", "ready", "failed", "review"].includes(card.status)) throw new Error("Only Triage, Ready, Failed and Review cards can be closed without merging");
     if (this.getApproval(id)) throw new Error("Approval is in progress; retry Approve and merge into local main");
-    this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), id);
-    this.explain(id, card.status === "review" ? "Closed without merging; the worktree and branch stay, and Reopen brings it back to Review" : `Closed from ${card.status} without merging`);
+    // The status change, its reason text and the picked reason land together or not at all.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), id);
+      this.explain(id, card.status === "review" ? "Closed without merging; the worktree and branch stay, and Reopen brings it back to Review" : `Closed from ${card.status} without merging`);
+      this.db.prepare("UPDATE card_events SET closeReason=?, closeNote=? WHERE id=(SELECT MAX(id) FROM card_events WHERE cardId=? AND toStatus='done')")
+        .run(why.reason ?? "", why.reason ? (why.note ?? "").trim().slice(0, 500) : "", id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return this.getCard(id)!;
   }
   // Archiving only hides Done cards in a separate lane. It never touches runs, worktrees, or Git.
@@ -1722,7 +1747,7 @@ export class Board {
     this.db.prepare("INSERT INTO card_events(cardId, at, reason) VALUES (?, ?, ?)").run(cardId, now(), reason.slice(0, 2000));
   }
   listCardEvents(cardId: string): CardEvent[] {
-    return this.db.prepare("SELECT at, fromStatus, toStatus, reason FROM card_events WHERE cardId=? ORDER BY id").all(cardId) as CardEvent[];
+    return this.db.prepare("SELECT at, fromStatus, toStatus, reason, closeReason, closeNote FROM card_events WHERE cardId=? ORDER BY id").all(cardId) as CardEvent[];
   }
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }

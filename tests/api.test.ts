@@ -290,6 +290,24 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
+    // Close without merging takes an optional reason from a fixed list, and a note only alongside one.
+    const dropped = (await request(`/boards/${first.id}/cards`, "POST", { title: "Dropped", body: "" })).data;
+    assert.match((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { reason: "boring" })).data.error, /reason must be one of duplicate, wrong-approach/);
+    assert.match((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { note: "why" })).data.error, /A note needs a reason/);
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { note: "x".repeat(501), reason: "other" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { reason: "superseded", note: "Replaced by the new importer" })).data.status, "done");
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/history`)).data.at(-1).detail, "Reason: Superseded\nReplaced by the new importer");
+    assert.deepEqual((await request(`/stats?days=30`)).data.closeReasons, [{ reason: "superseded", count: 1 }]);
+    // A POST with no body and no Content-Type, as older clients send, still closes without a reason; a body must be JSON.
+    const bare = (await request(`/boards/${first.id}/cards`, "POST", { title: "Bare", body: "" })).data;
+    const raw = (body?: string, type?: string) => fetch(`${url}/api/boards/${first.id}/cards/${bare.id}/close`, { method: "POST", headers: type ? { "Content-Type": type } : undefined, body });
+    assert.equal((await raw("reason=duplicate", "text/plain")).status, 400);
+    assert.equal((await raw("{nope", "application/json")).status, 400);
+    assert.equal((await raw("[]", "application/json")).status, 400);
+    const closedBare = await raw();
+    assert.equal(closedBare.status, 200);
+    assert.equal((await closedBare.json()).status, "done");
+    assert.deepEqual((await request(`/stats?days=30`)).data.closeReasons, [{ reason: "superseded", count: 1 }, { reason: "", count: 1 }]);
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Typed", body: "", origin: "ui" })).data.source, "ui");
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Agent", body: "", source: "hermes" })).data.source, "hermes");
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Follow-up", body: "", source: "follow-up", idempotencyKey: "follow-up:run:0" })).data.source, "follow-up");

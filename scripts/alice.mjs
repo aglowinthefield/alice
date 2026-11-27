@@ -20,7 +20,7 @@ function options(argv) {
   const result = { positionals: [], json: false, yes: false, after: [], on: [] };
   // These may repeat; each occurrence adds one card ID.
   const lists = new Set(["after", "on"]);
-  const values = new Set(["board", "title", "body", "key", "priority", "source", "concurrency", "limit", "budget", "integration", "host"]);
+  const values = new Set(["board", "title", "body", "key", "priority", "source", "concurrency", "limit", "budget", "integration", "host", "reason", "note"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch" || arg === "--print") result[arg.slice(2)] = true;
@@ -217,6 +217,11 @@ async function main() {
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
   if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined || opts.source !== undefined)) throw new Error("--key, --priority and --source are only valid with create or add");
   if (opts.priority !== undefined && priorityValue(opts.priority) === null) throw new Error("Priority must be a whole number from -100 to 100, or low, normal, high, or urgent");
+  if (command !== "close" && (opts.reason !== undefined || opts.note !== undefined)) throw new Error("--reason and --note are only valid with close");
+  if (opts.note !== undefined && opts.reason === undefined) throw new Error("--note needs --reason; use --reason other for free text");
+  // "wrong approach" and "Wrong_Approach" both mean wrong-approach; the server rejects anything outside its list.
+  const closeReason = opts.reason?.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  if (opts.reason !== undefined && !closeReason) throw new Error("--reason cannot be empty; leave it out to close without a reason");
   if (command === "edit" && opts.title === undefined && opts.body === undefined) throw new Error("edit requires --title TITLE and/or --body BODY");
   if (command === "edit" && opts.title !== undefined && !opts.title.trim()) throw new Error("--title cannot be empty");
   if (opts.integration !== undefined && command !== "board") throw new Error("--integration is only valid with board");
@@ -389,7 +394,7 @@ async function main() {
     const card = await request(origin, `${path}/cards/${id}`, "PATCH", { title: opts.title ?? current.title, body: opts.body ?? current.body ?? "" });
     print(card, opts.json, [cardLine(card)]);
   } else if (command === "close") {
-    const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", {});
+    const card = await request(origin, `${path}/cards/${args[0]}/close`, "POST", closeReason ? { reason: closeReason, ...(opts.note ? { note: opts.note } : {}) } : {});
     print(card, opts.json, [cardLine(card)]);
   } else if (command === "archive" || command === "restore") {
     const cards = await request(origin, `${path}/cards/${command === "archive" ? "archive" : "unarchive"}`, "POST", { cardIds: args });

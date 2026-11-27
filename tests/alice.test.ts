@@ -46,6 +46,7 @@ async function fixture(boards: object[] = [board]) {
     else if (path === `/api/boards/${board.id}/cards/purge-attachments` && req.method === "POST") data = (input as { cardIds: string[] }).cardIds.map(cardId => ({ cardId, files: 2, bytes: 10 }));
     else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|flagged)\/status$/.test(path) && req.method === "POST") data = { id: path.split("/")[5], status: (input as { status: string }).status };
+    else if (path === `/api/boards/${board.id}/cards/card-one/close` && req.method === "POST") data = { ...cards[0], status: "done" };
     // card-one stands in for an older server without the check, which answers 404.
     else if (path === `/api/boards/${board.id}/cards/card-flagged/ready-check`) data = { flags: [
       { rule: "person-only", message: "Needs a physical device, which the agent does not have", quote: "Verify on a physical iPhone." },
@@ -159,6 +160,25 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.equal((await f.run("create", "--title", "From Hermes", "--source", "hermes")).code, 0);
     assert.match((await f.run("cards", "--source", "hermes")).stderr, /only valid with create or add/);
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely", source: "cli" }, { status: "triage" }, { title: "Hotfix", body: "", source: "cli", priority: "urgent" }, { title: "Scripted", body: "", source: "cli", idempotencyKey: "nightly-1" }, { title: "From Hermes", body: "", source: "hermes" }]);
+  } finally { await f.close(); }
+});
+
+test("close sends an optional reason and note", async () => {
+  const f = await fixture();
+  try {
+    for (const args of [["close", "card-one", "--reason", "duplicate"], ["close", "card-one", "--reason", "Wrong approach", "--note", "Use the queue instead"], ["close", "card-one"]]) {
+      const result = await f.run(...args);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /^card-one\tdone\t/);
+    }
+    assert.match((await f.run("close", "card-one", "--note", "why")).stderr, /--note needs --reason/);
+    const blank = await f.run("close", "card-one", "--reason", "   ", "--note", "why");
+    assert.notEqual(blank.code, 0);
+    assert.match(blank.stderr, /--reason cannot be empty/);
+    assert.match((await f.run("show", "card-one", "--reason", "duplicate")).stderr, /only valid with close/);
+    assert.match((await f.run("help", "close")).stdout, /duplicate, wrong-approach, not-needed, superseded or other/);
+    const closes = f.requests.filter(r => r.path.endsWith("/close"));
+    assert.deepEqual(closes.map(r => r.input), [{ reason: "duplicate" }, { reason: "wrong-approach", note: "Use the queue instead" }, {}]);
   } finally { await f.close(); }
 });
 

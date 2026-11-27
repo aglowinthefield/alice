@@ -100,9 +100,9 @@ export const COMMANDS = [
   },
   {
     name: "close", group: "Runs", args: "CARD_ID", summary: "move a Review card to Done without merging",
-    full: "CARD_ID [--board ID|PATH] [--json]",
-    details: "The worktree and branch stay. No command approves a merge.",
-    options: [BOARD, JSON_OUT],
+    full: "CARD_ID [--reason REASON [--note TEXT]] [--board ID|PATH] [--json]",
+    details: "The worktree and branch stay. No command approves a merge. The reason is optional and shows in the card's history and on the Statistics page.",
+    options: [["--reason REASON", "duplicate, wrong-approach, not-needed, superseded or other"], ["--note TEXT", "free text with the reason, up to 500 characters"], BOARD, JSON_OUT],
   },
   {
     name: "conflicts", group: "Runs", summary: "cards whose merge conflicts",

@@ -28,6 +28,7 @@ import { followUps } from "./follow-ups.js";
 import { parsePlan } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
+import { CloseCardDialog } from "./close-card.js";
 import {
   PRIORITY_MAX,
   PRIORITY_MIN,
@@ -96,6 +97,7 @@ export function CardDetails({
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [autoJobs, setAutoJobs] = useState<AutoReviewJob[]>([]);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const [expandedDetails, setExpandedDetails] = useState(false);
   const [tab, setTab] = useState<
     "overview" | "reviews" | "attempts" | "discuss" | "details"
@@ -1405,26 +1407,29 @@ export function CardDetails({
               card?.status === "failed" ||
               card?.status === "triage" ||
               card?.status === "ready") && (
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={async () => {
-                  if (
-                    !(await confirmAction(
-                      "Close this card without merging? Its worktree and branch stay, and Reopen brings it back.",
-                    ))
-                  )
-                    return;
-                  void action(() =>
-                    api(`/boards/${boardId}/cards/${card.id}/close`, {
-                      method: "POST",
-                      body: "{}",
-                    }),
-                  );
-                }}
-              >
-                Close without merging
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setClosing(true)}
+                >
+                  Close without merging
+                </Button>
+                <CloseCardDialog
+                  open={closing}
+                  busy={busy}
+                  onOpenChange={setClosing}
+                  onClose={(choice) => {
+                    setClosing(false);
+                    void action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/close`, {
+                        method: "POST",
+                        body: JSON.stringify(choice),
+                      }),
+                    );
+                  }}
+                />
+              </>
             )}
             {card?.status === "done" && (
               <Button

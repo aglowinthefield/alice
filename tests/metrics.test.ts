@@ -25,6 +25,7 @@ test("finished runs become counters and a duration histogram; running ones wait 
     runs: [run({}), run({ cardId: "c2", cost: 0.5, finishedAt: "2026-01-01 10:20:00" }), run({ status: "failed", agent: "", cost: null }), run({ status: "running", finishedAt: null, cost: 9 })],
     reviews: [{ repo: "/code/app", state: "merged", agent: "x", startedAt: "2026-01-01 11:00:00", finishedAt: "2026-01-01 11:01:00", cost: 0.25 }, { repo: "/code/app", state: "running", agent: "x", startedAt: "2026-01-01 11:00:00", finishedAt: null, cost: 7 }],
     cards: [{ repo: "/code/app", status: "ready", createdAt: "", updatedAt: "", attempts: 1, reviewRounds: 2, ciReworks: 1 }, { repo: "/code/app", status: "ready", createdAt: "", updatedAt: "", attempts: 0, reviewRounds: 0, ciReworks: 0 }],
+    closes: [],
   }, { runs: 1, reviews: 0, pullRequests: 2 }, "1.2.3");
 
   assert.equal(sample(text, 'alice_info{version="1.2.3"}'), 1);
@@ -49,7 +50,7 @@ test("finished runs become counters and a duration histogram; running ones wait 
 });
 
 test("label values are escaped", () => {
-  const text = renderMetrics({ runs: [], reviews: [], cards: [{ repo: 'C:\\code\\"odd"\nrepo', status: "ready", createdAt: "", updatedAt: "", attempts: 0, reviewRounds: 0, ciReworks: 0 }] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1");
+  const text = renderMetrics({ runs: [], reviews: [], cards: [{ repo: 'C:\\code\\"odd"\nrepo', status: "ready", createdAt: "", updatedAt: "", attempts: 0, reviewRounds: 0, ciReworks: 0 }], closes: [] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1");
   assert.equal(sample(text, 'alice_cards{repo="C:\\\\code\\\\\\"odd\\"\\nrepo",status="ready"}'), 1);
 });
 

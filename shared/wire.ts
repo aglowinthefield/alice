@@ -234,6 +234,8 @@ export type Stats = {
   byAgent: GroupRow[];
   byRepo: GroupRow[];
   cardStatus: { status: string; count: number }[];
+  /** Closes without merging in range, by reason ('' = not given), most common first, a skipped reason last among ties. A card closed twice counts twice. */
+  closeReasons: { reason: string; count: number }[];
 };
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

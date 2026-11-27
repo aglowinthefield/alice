@@ -10,13 +10,9 @@ import { fileURLToPath } from "node:url";
 export const ACTIONS = ["install", "uninstall", "start", "stop", "restart", "status", "logs"];
 const LABEL = "dev.alice.server", UPDATE_LABEL = "dev.alice.update";
 const NAMES = { service: "alice.service", update: "alice-update.service", timer: "alice-update.timer", label: LABEL, updateLabel: UPDATE_LABEL, logs: "alice" };
-// What install wrote before the rename. Every action but install still runs those units until they are uninstalled.
-const LEGACY_NAMES = { service: "bakery.service", update: "bakery-update.service", timer: "bakery-update.timer", label: "dev.bakery.server", updateLabel: "dev.bakery.update", logs: "bakery" };
 
 /**
- * Every path the service uses, from the environment, so tests can point them at a temporary home. `names` are the
- * installed units' names: Bakery's when only those are installed. The env file stays ~/.config/bakery/bakery.env
- * when only that one exists.
+ * Every path the service uses, from the environment, so tests can point them at a temporary home.
  */
 export function servicePaths(env = process.env, platform = process.platform) {
   const home = env.HOME || homedir();
@@ -24,15 +20,11 @@ export function servicePaths(env = process.env, platform = process.platform) {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const node = process.execPath;
   const units = platform === "darwin" ? join(home, "Library", "LaunchAgents") : join(config, "systemd", "user");
-  const unitFile = names => join(units, platform === "darwin" ? `${names.label}.plist` : names.service);
-  const legacy = !existsSync(unitFile(NAMES)) && existsSync(unitFile(LEGACY_NAMES));
-  const names = legacy ? LEGACY_NAMES : NAMES;
-  const envFile = join(config, "alice", "alice.env"), legacyEnvFile = join(config, "bakery", "bakery.env");
   return {
     root, node, npm: join(dirname(node), "npm"),
-    envFile: !existsSync(envFile) && existsSync(legacyEnvFile) ? legacyEnvFile : envFile,
-    units, unitFile: unitFile(names), names, legacy,
-    logs: join(home, "Library", "Logs", names.logs),
+    envFile: join(config, "alice", "alice.env"),
+    units, unitFile: join(units, platform === "darwin" ? `${LABEL}.plist` : NAMES.service), names: NAMES,
+    logs: join(home, "Library", "Logs", NAMES.logs),
     home,
   };
 }
@@ -175,7 +167,6 @@ export function service(action, { host, yes = false, env = process.env, platform
   if (platform !== "linux" && platform !== "darwin") throw new Error("alice service supports Linux (systemd) and macOS (launchd). On Windows, start `npm start` from Task Scheduler at logon; see docs/reference.md.");
   if ((action === "stop" || action === "uninstall") && !yes) throw new Error(`${ACTIVE_RUNS} Repeat with --yes to confirm.`);
   const paths = servicePaths(env, platform);
-  if (action === "install" && paths.legacy) throw new Error(`Bakery's service is installed (${paths.unitFile}). Run alice service uninstall --yes first, which stops it and ends any active runs, then install again.`);
   return platform === "linux" ? systemd(action, paths, { host, env, log }) : launchd(action, paths, { host, env, log });
 }
 

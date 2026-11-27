@@ -185,5 +185,5 @@ export class Telemetry {
 export function runOutcome(run: { status: string; error: string | null }): "alice.runs.finished" | "alice.runs.failed" | "alice.runs.stopped" | null {
   if (run.status === "review") return "alice.runs.finished";
   if (run.status !== "failed") return null;
-  return /(?:Alice|Bakery) sent SIGTERM: manual stop/.test(run.error ?? "") ? "alice.runs.stopped" : "alice.runs.failed";
+  return /Alice sent SIGTERM: manual stop/.test(run.error ?? "") ? "alice.runs.stopped" : "alice.runs.failed";
 }

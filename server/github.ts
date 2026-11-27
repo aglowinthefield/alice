@@ -1,6 +1,6 @@
 import { repoIcons } from "../src/repo-appearance.js";
-import { execFile, execFileSync } from "node:child_process";
-import { command } from "./platform.js";
+import { execFile } from "node:child_process";
+import { command, worktrunkVersion } from "./platform.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Board, Card, RepoBoard } from "./board.js";
@@ -160,8 +160,7 @@ export type PrComment = { id: string; at: string; author: string; association: s
 export type PrRequest = { author: string; comment: string; path?: string; line?: number | null };
 // Only people with a say in the repository can send a card back; anyone else's comment is just a comment.
 const trustedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
-// `/bakery`, the command's name before the rename, still works.
-const mentionsAlice = (body: string) => /^\s*\/(?:alice|bakery)(?![\w-])/i.test(body);
+const mentionsAlice = (body: string) => /^\s*\/alice(?![\w-])/i.test(body);
 
 /**
  * The requests in `comments` posted after `since`: each comment by a trusted author that starts with `/alice`
@@ -409,7 +408,7 @@ function prRepo(card: Card, repo: string): string {
   return (card.prOverrideUrl && parsePullRequestUrl(card.prOverrideUrl)?.repo) || repo;
 }
 
-/** The PR linked to a card: its override URL if set, else the newest PR from its branch (`alice/<id>`, or `bakery/<id>`). */
+/** The PR linked to a card: its override URL if set, else the newest PR from its branch. */
 export async function linkedPullRequest(github: GitHub, repo: string, card: Card, recent?: PullRequest[]): Promise<PullRequest | undefined> {
   if (card.prOverrideUrl) {
     const link = parsePullRequestUrl(card.prOverrideUrl);
@@ -751,7 +750,7 @@ export class GitHubSync {
   private async removeWorktree(repo: string, card: Card): Promise<void> {
     const branch = cardBranch(repo, card.id), worktree = join(this.dataDir, "worktrees", card.id);
     try {
-      if (this.wtBin && hasWorktrunk(this.wtBin)) await run(this.wtBin, ["-C", repo, "remove", branch, "--yes", "--foreground", "--force-delete"], repo, 120_000);
+      if (this.wtBin && worktrunkVersion(this.wtBin)) await run(this.wtBin, ["-C", repo, "remove", branch, "--yes", "--foreground", "--force-delete"], repo, 120_000);
       else {
         if (existsSync(worktree)) await git(repo, "worktree", "remove", worktree);
         await git(repo, "branch", "-D", branch);
@@ -762,8 +761,3 @@ export class GitHubSync {
   }
 }
 
-/** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name. */
-export function hasWorktrunk(wtBin: string): boolean {
-  try { return /^wt v\d/.test(execFileSync(...command(wtBin, ["--version"]), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
-  catch { return false; }
-}

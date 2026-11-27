@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { command, killTree, posixShell } from "../server/platform.js";
+import { command, killTree, posixShell, worktrunkVersion } from "../server/platform.js";
 
 function withDir(fn: (dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "alice-platform-"));
@@ -78,6 +78,21 @@ test("on Windows an .exe on PATH is resolved and an unknown name is left alone",
       command("nope", [], "win32", { PATH: dir, PATHEXT: ".EXE" }),
       ["nope", []],
     );
+  }));
+
+// Windows Terminal's `wt.exe` app alias opens a dialog for `--version`, so Alice must not run it to ask.
+// The fake is a shell script, which only runs off Windows.
+test("on Windows a wt under WindowsApps is never run to check for Worktrunk", { skip: process.platform === "win32" && "needs a shebang script" }, () =>
+  withDir((dir) => {
+    const marker = join(dir, "ran");
+    for (const sub of ["WindowsApps", "bin"]) {
+      mkdirSync(join(dir, sub));
+      writeFileSync(join(dir, sub, "wt.EXE"), `#!/bin/sh\necho ${sub} >> '${marker}'\necho 'wt v0.9.0'\n`);
+      chmodSync(join(dir, sub, "wt.EXE"), 0o755);
+    }
+    assert.equal(worktrunkVersion("wt", "win32", { PATH: join(dir, "WindowsApps"), PATHEXT: ".EXE" }), undefined);
+    assert.ok(!existsSync(marker));
+    assert.equal(worktrunkVersion("wt", "win32", { PATH: join(dir, "bin"), PATHEXT: ".EXE" }), "wt v0.9.0");
   }));
 
 test("on Windows sh.exe is found beside a git.exe that PATH resolves, wherever Git is installed", () =>

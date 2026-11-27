@@ -1,5 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { command, killTree } from "./platform.js";
+import { command, killTree, worktrunkVersion } from "./platform.js";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
@@ -348,11 +348,8 @@ export class Worker {
     }
     return `Alice already merged origin/main (${tip}) into the card branch for this run, because main moved after the failing commit. Some failures may come from main's newer changes meeting this card's work rather than from the card alone. Keep the merge commit; Alice pushes it with your fix.`;
   }
-  /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */
   private hasWorktrunk() {
-    if (!this.wtBin) return false;
-    try { return /^wt v\d/.test(execFileSync(...command(this.wtBin, ["--version"]), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
-    catch { return false; }
+    return !!this.wtBin && !!worktrunkVersion(this.wtBin);
   }
   private release(id: string) {
     this.active.delete(id);

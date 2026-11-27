@@ -45,7 +45,7 @@ const CAKE = [
 const SHADES = [31, 31, 35, 35, 35, 33, 33, 33, 33, 33];
 
 export function banner(version) {
-  const beside = ["", "", "", "", c.bold("b a k e r y"), "Pi agents bake your cards, one worktree each.", version ? c.dim(version) : "", "", "", ""];
+  const beside = ["", "", "", "", c.bold("a l i c e"), "Pi agents work your cards, one worktree each.", version ? c.dim(version) : "", "", "", ""];
   return CAKE.map((row, i) => `  ${paint(String(SHADES[i]))(row)}${beside[i] ? `   ${beside[i]}` : ""}`).join("\n");
 }
 

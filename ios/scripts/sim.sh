@@ -7,8 +7,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 REMOTE=code/alice-ios
 mode=${1:-run}; shift || true
 rsync -az --delete --exclude build --exclude '*.xcodeproj' "$HERE/" "$HOST:$REMOTE/"
-# ALICE_BOARD, ALICE_CARD and ALICE_URL fall back to their old BAKERY_ names.
-ssh -o BatchMode=yes "$HOST" env ALICE_BOARD="${ALICE_BOARD:-${BAKERY_BOARD:-}}" ALICE_CARD="${ALICE_CARD:-${BAKERY_CARD:-}}" TEST_FILTER="${TEST_FILTER:-}" ALICE_URL="${ALICE_URL:-${BAKERY_URL:-}}" bash -s -- "$mode" "$@" <<'REMOTE'
+ssh -o BatchMode=yes "$HOST" env ALICE_BOARD="${ALICE_BOARD:-}" ALICE_CARD="${ALICE_CARD:-}" TEST_FILTER="${TEST_FILTER:-}" ALICE_URL="${ALICE_URL:-}" bash -s -- "$mode" "$@" <<'REMOTE'
 set -euo pipefail
 export PATH=/opt/homebrew/bin:$PATH
 cd ~/code/alice-ios
@@ -29,16 +28,16 @@ xcodebuild -project Alice.xcodeproj -scheme Alice -configuration Debug -sdk ipho
   | grep -E 'error:|warning: unre|BUILD (SUCCEEDED|FAILED)' | grep -v '^ld: warning' | head -60
 test -d build/Build/Products/Debug-iphonesimulator/Alice.app || exit 1
 [ "$mode" = build ] && exit 0
-xcrun simctl terminate "$DEV" dev.bakery.ios 2>/dev/null || true
+xcrun simctl terminate "$DEV" dev.alice.ios 2>/dev/null || true
 xcrun simctl install "$DEV" build/Build/Products/Debug-iphonesimulator/Alice.app
 if [ "$mode" = shot ]; then
   name=$1; shift
-  xcrun simctl launch "$DEV" dev.bakery.ios "$@" >/dev/null
+  xcrun simctl launch "$DEV" dev.alice.ios "$@" >/dev/null
   sleep ${SHOT_WAIT:-5}
   xcrun simctl io "$DEV" screenshot "/tmp/alice-$name.png" >/dev/null 2>&1
   echo "shot /tmp/alice-$name.png"
 else
-  xcrun simctl launch "$DEV" dev.bakery.ios "$@"
+  xcrun simctl launch "$DEV" dev.alice.ios "$@"
 fi
 REMOTE
 if [ "$mode" = test ]; then

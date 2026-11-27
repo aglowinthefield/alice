@@ -4,7 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Board, type Card } from "./board.js";
-import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
+import { answerReviewComments, boardGithubRepo, commentOnPullRequest, commentOutcomes, fetchOrigin, type GitHub } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
@@ -534,8 +534,32 @@ export class Integration {
       const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body });
       this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
       this.board.recordPullRequestPush(card.id, run.id);
+      await this.answerReviewComments(card.id, slug, pr.number, candidate, github, step);
       return this.board.getCard(card.id)!;
     });
+  }
+
+  /**
+   * Once a push carries the rework that took a PR's inline review comments, answers each in its thread with what the
+   * agent's report says it did. A comment waits until a run has started since it was sent back, so a push of older
+   * work never answers it. The newest report that mentions a comment wins. Failures are logged; the push stands.
+   */
+  private async answerReviewComments(cardId: string, slug: string, number: number, sha: string, github: GitHub, step: (text: string) => void): Promise<void> {
+    try {
+      const pending = this.board.pendingCommentReplies(cardId);
+      if (!pending.length) return;
+      const runs = this.board.listRuns(cardId);
+      const due = pending.flatMap(({ commentId, createdAt }) => {
+        const since = runs.filter(run => run.startedAt >= createdAt);
+        if (!since.length) return [];
+        const outcome = since.map(run => run.report ? commentOutcomes(run.report).get(commentId) : undefined).find(Boolean);
+        return [{ id: commentId, ...(outcome ? { outcome } : {}) }];
+      });
+      const claimed = new Set(this.board.claimCommentReplies(cardId, due.map(item => item.id)));
+      if (!claimed.size) return;
+      step("Answering the review comments the agent was sent");
+      await answerReviewComments(github, slug, number, sha, due.filter(item => claimed.has(item.id)));
+    } catch (error) { console.error(`Could not answer review comments on ${slug}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   /**

@@ -155,8 +155,11 @@ const ciFixUnchanged = (head: string) => `The CI fix run made no change, so CI s
  * comment to its review. `at` is when it was posted; a pending (unsubmitted) review has none and is never read.
  */
 export type PrComment = { id: string; at: string; author: string; association: string; body: string; path?: string; line?: number | null; reviewId?: string };
-/** One change a person asked Bakery for on GitHub, as the agent's prompt lists it. */
-export type PrRequest = { author: string; comment: string; path?: string; line?: number | null };
+/**
+ * One change a person asked Bakery for on GitHub, as the agent's prompt lists it. An inline review comment carries its
+ * `id`, so the agent can say whether it addressed it and Bakery can answer in its thread (see `answerReviewComments`).
+ */
+export type PrRequest = { id?: string; author: string; comment: string; path?: string; line?: number | null };
 // Only people with a say in the repository can send a card back; anyone else's comment is just a comment.
 const trustedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
 const mentionsBakery = (body: string) => /^\s*\/bakery(?![\w-])/i.test(body);
@@ -171,7 +174,7 @@ export function bakeryRequests(comments: PrComment[], since: string): { requests
   const reviews = new Set(asked.filter(item => !item.path).map(item => item.id));
   const picked = comments.filter(item => asked.includes(item) || (item.reviewId && reviews.has(item.reviewId) && item.body.trim()));
   return {
-    requests: picked.map(item => ({ author: item.author, comment: item.body.trim().slice(0, 4000), ...(item.path ? { path: item.path, line: item.line } : {}) })),
+    requests: picked.map(item => ({ ...(item.path ? { id: item.id } : {}), author: item.author, comment: item.body.trim().slice(0, 4000), ...(item.path ? { path: item.path, line: item.line } : {}) })),
     latest: asked.reduce<string | null>((max, item) => !max || item.at > max ? item.at : max, null),
     asked,
   };
@@ -180,6 +183,39 @@ export function bakeryRequests(comments: PrComment[], since: string): { requests
 const prCommentsQuery = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) {
   comments(last: 100) { nodes { id createdAt authorAssociation author { login } body } }
   reviews(last: 50) { nodes { id submittedAt authorAssociation author { login } body comments(first: 100) { nodes { id createdAt authorAssociation author { login } body path line originalLine } } } }
+} } }`;
+
+/** What the agent said it did about one inline review comment, from the `bakery-comments` block of its report. */
+export type CommentOutcome = { addressed: boolean; reason?: string };
+
+/**
+ * The outcomes in a report's last `bakery-comments` block, by comment id. A missing block, bad JSON, or a malformed
+ * entry yields nothing for it: Bakery then says the report did not say, and leaves the thread open.
+ */
+export function commentOutcomes(report: string): Map<string, CommentOutcome> {
+  const out = new Map<string, CommentOutcome>();
+  const block = [...report.matchAll(/^```bakery-comments[ \t]*\n([\s\S]*?)^```[ \t]*$/gm)].at(-1);
+  if (!block) return out;
+  let data: unknown;
+  try { data = JSON.parse(block[1]); } catch { return out; }
+  if (!Array.isArray(data)) return out;
+  for (const item of data as Record<string, unknown>[]) {
+    if (!item || typeof item.id !== "string" || typeof item.addressed !== "boolean") continue;
+    const reason = typeof item.reason === "string" && item.reason.trim() ? item.reason.trim().replace(/\s+/g, " ").slice(0, 1000) : undefined;
+    out.set(item.id, { addressed: item.addressed, ...(reason ? { reason } : {}) });
+  }
+  return out;
+}
+
+/** Bakery's reply under an inline review comment once the rework that took it is pushed as `sha`. */
+export function reviewReply(sha: string, outcome: CommentOutcome | undefined): string {
+  const short = sha.slice(0, 7);
+  if (outcome?.addressed) return `Addressed in ${short}.`;
+  return `Not addressed in ${short}: ${outcome?.reason ?? (outcome ? "the agent gave no reason" : "the agent's report did not say whether it addressed this comment")}.`.replace(/\.\.$/, ".");
+}
+
+const reviewThreadsQuery = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+  reviewThreads(last: 100) { nodes { id isResolved comments(first: 100) { nodes { id } } } }
 } } }`;
 
 /** The reaction Bakery leaves on a `/bakery` comment it has read. GitHub's set has no pie; eyes says "seen". */
@@ -317,6 +353,21 @@ export class GitHub {
   async reactToNode(nodeId: string): Promise<void> {
     await this.gh(["api", "graphql", "-f", "query=mutation($id: ID!, $content: ReactionContent!) { addReaction(input: {subjectId: $id, content: $content}) { reaction { content } } }", "-f", `id=${nodeId}`, "-f", `content=${acknowledgedReaction.toUpperCase()}`]);
   }
+  /** A PR's inline review threads, each with the node ids of its comments. */
+  async reviewThreads(repo: string, number: number): Promise<{ id: string; isResolved: boolean; commentIds: string[] }[]> {
+    const [owner, name] = repo.split("/");
+    const out = JSON.parse(await this.gh(["api", "graphql", "-f", `query=${reviewThreadsQuery}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`]));
+    const nodes = out.data.repository.pullRequest.reviewThreads.nodes as { id: string; isResolved: boolean; comments: { nodes: { id: string }[] } }[];
+    return nodes.map(node => ({ id: node.id, isResolved: node.isResolved, commentIds: node.comments.nodes.map(comment => comment.id) }));
+  }
+  /** Replies at the end of an inline review thread. */
+  async replyToThread(threadId: string, body: string): Promise<void> {
+    await this.gh(["api", "graphql", "-f", "query=mutation($thread: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) { comment { id } } }", "-f", `thread=${threadId}`, "-f", `body=${body}`]);
+  }
+  /** Marks an inline review thread resolved. */
+  async resolveThread(threadId: string): Promise<void> {
+    await this.gh(["api", "graphql", "-f", "query=mutation($thread: ID!) { resolveReviewThread(input: {threadId: $thread}) { thread { isResolved } } }", "-f", `thread=${threadId}`]);
+  }
   /** The signed-in GitHub user. */
   async viewer(): Promise<string> { return (await this.gh(["api", "user", "--jq", ".login"])).trim(); }
   /** Every comment on a PR, oldest first. */
@@ -342,6 +393,28 @@ export class GitHub {
 
 // Bakery's repo is public, so GitHub can render the icons from main. Each comment gets a random one.
 const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/bakery/main/public/icons/${repoIcons[Math.floor(Math.random() * repoIcons.length)]}.png`;
+const postedByBakery = () => `<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`;
+
+/**
+ * After a comment rework is pushed as `sha`, answers each inline review comment it took, in that comment's thread:
+ * "Addressed in <sha>" and the thread resolved, or why it was not addressed and the thread left open. Like comments
+ * and reactions this is a courtesy: every failure is logged and none reaches the push.
+ */
+export async function answerReviewComments(github: GitHub, repo: string, number: number, sha: string, comments: { id: string; outcome?: CommentOutcome }[]): Promise<void> {
+  if (!comments.length) return;
+  const what = `review comments on ${repo}#${number}`;
+  let threads: Awaited<ReturnType<GitHub["reviewThreads"]>>;
+  try { threads = await github.reviewThreads(repo, number); }
+  catch (error) { console.error(`Could not read the ${what}: ${error instanceof Error ? error.message : String(error)}`); return; }
+  for (const { id, outcome } of comments) {
+    const thread = threads.find(item => item.commentIds.includes(id));
+    if (!thread) { console.error(`Could not answer review comment ${id} on ${repo}#${number}: its thread is gone`); continue; }
+    try {
+      await github.replyToThread(thread.id, `${reviewReply(sha, outcome)}\n\n${postedByBakery()}`);
+      if (outcome?.addressed && !thread.isResolved) await github.resolveThread(thread.id);
+    } catch (error) { console.error(`Could not answer review comment ${id} on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+}
 
 /**
  * Bakery comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
@@ -349,7 +422,7 @@ const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/b
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
+  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n${postedByBakery()}`); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
@@ -571,7 +644,7 @@ export class GitHubSync {
       return undefined;
     }
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} has ${requests.length} requested change(s) from ${[...new Set(requests.map(item => item.author))].join(", ")}`);
-    this.board.recordCommentRequests(card.id, head, JSON.stringify(requests, null, 1), latest);
+    this.board.recordCommentRequests(card.id, head, JSON.stringify(requests, null, 1), latest, requests.flatMap(item => item.id ? [item.id] : []));
     await commentOnPullRequest(this.github, repo, pr.number, `Bakery sent this back to its coding agent with ${requests.length === 1 ? "the request" : `the ${requests.length} requested changes`} above. Its changes will wait for the operator's approval before they are pushed here.`);
     return this.startRework(card);
   }

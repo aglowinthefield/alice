@@ -10,7 +10,7 @@ import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 import { Integration, PushHookError, type CommitHookError } from "../server/integration.js";
 import { Readiness } from "../server/readiness.js";
-import { GitHub, GitHubSync, bakeryRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
+import { GitHub, GitHubSync, bakeryRequests, checksState, commentOutcomes, reviewReply, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 import { diffSummary, draftPrompt, draftPullRequest, maxDraftPatchChars, readPullRequestRules, type PullRequestRules } from "../server/pr-draft.js";
 import type { Card, Run } from "../server/board.js";
@@ -61,6 +61,17 @@ if (args[0] === "run" && args[1] === "view") {
   process.stdout.write(fs.readFileSync(log, "utf8")); process.exit(0);
 }
 if (args[0] === "api" && args[1] === "graphql") {
+  const query = flag("-f") ?? "";
+  // Review threads come from review-threads.json; replying and resolving fail while thread-error exists.
+  if (query.includes("reviewThreads")) {
+    const threads = path.join(dir, "review-threads.json");
+    console.log(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: fs.existsSync(threads) ? JSON.parse(fs.readFileSync(threads, "utf8")) : [] } } } } }));
+    process.exit(0);
+  }
+  if (query.includes("addPullRequestReviewThreadReply") || query.includes("resolveReviewThread")) {
+    if (fs.existsSync(path.join(dir, "thread-error"))) { console.error("GraphQL: Resource not accessible by integration"); process.exit(1); }
+    console.log("{}"); process.exit(0);
+  }
   const file = path.join(dir, "pr-comments.json");
   console.log(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : JSON.stringify({ data: { repository: { pullRequest: { comments: { nodes: [] }, reviews: { nodes: [] } } } } }));
   process.exit(0);
@@ -1553,6 +1564,88 @@ test("a /bakery request the card can't take yet is acknowledged and explained on
     assert.equal(notes.length, 1, "explained once");
     assert.match(notes[0].body, /holds work that has not been pushed/);
   } finally { f.cleanup(); }
+});
+
+/**
+ * A PR with a top-level `/bakery` comment and a `/bakery` review holding inline comments c1 and c2 (threads T1, T2),
+ * sent back to an agent whose report says it addressed c1 and declined c2. Returns once that run reaches Review.
+ */
+async function reworkedReview(f: Fixture) {
+  const promptFile = join(f.dir, "prompt.txt"), events = join(f.dir, "events.jsonl");
+  const report = "Renamed it.\n\n```bakery-comments\n[{\"id\":\"c1\",\"addressed\":true},{\"id\":\"c2\",\"addressed\":false,\"reason\":\"Out of scope for this card.\"}]\n```";
+  writeFileSync(events, `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: report }] } })}\n${JSON.stringify({ type: "agent_settled", aborted: false })}\n`);
+  const fixPi = join(f.dir, "pi-fix");
+  writeFileSync(fixPi, `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > "${promptFile}"\necho renamed >> feature.txt\ncat "${events}"\n`);
+  chmodSync(fixPi, 0o755);
+  const worker = new Worker(f.board, f.data, fixPi);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card));
+  const card = await reviewedCard(f);
+  await approve(f, card.id);
+  const [pr] = f.prs();
+  f.setPrs([{ ...pr, headRefOid: git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), statusCheckRollup: [] }]);
+  const write = (comments: unknown[], reviews: unknown[]) => writeFileSync(join(f.ghDir, "pr-comments.json"), JSON.stringify({ data: { repository: { pullRequest: { comments: { nodes: comments }, reviews: { nodes: reviews } } } } }));
+  write([], []);
+  await sync.syncBoard(f.repoBoard.id);
+  const at = new Date(Date.now() + 60_000).toISOString(), who = { authorAssociation: "MEMBER", author: { login: "sam" } };
+  write([{ id: "top", createdAt: at, ...who, body: "/bakery also update the README" }], [{ id: "r1", submittedAt: at, ...who, body: "/bakery address these", comments: { nodes: [
+    { id: "c1", createdAt: at, ...who, body: "Rename this", path: "feature.txt", line: 1 },
+    { id: "c2", createdAt: at, ...who, body: "Also rewrite the build", path: "README.md", line: 1 },
+  ] } }]);
+  writeFileSync(join(f.ghDir, "review-threads.json"), JSON.stringify([
+    { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1" }] } },
+    { id: "T2", isResolved: false, comments: { nodes: [{ id: "c2" }] } },
+  ]));
+  await sync.syncBoard(f.repoBoard.id);
+  await waitFor(() => f.board.getCard(card.id)!.status === "review" && f.board.listRuns(card.id).length === 2);
+  await waitFor(() => f.board.listRuns(card.id)[0].status !== "running");
+  return { card, prompt: readFileSync(promptFile, "utf8") };
+}
+const threadCalls = (f: Fixture, mutation: string) => f.calls().filter(call => call.some(arg => arg.includes(mutation)))
+  .map(call => ({ thread: call.find(arg => arg.startsWith("thread="))!.slice(7), body: call.find(arg => arg.startsWith("body="))?.slice(5) }));
+
+test("github-pr: once a comment rework is pushed, Bakery answers each inline comment in its thread and resolves the addressed ones", async () => {
+  const f = fixture();
+  try {
+    const { card, prompt } = await reworkedReview(f);
+    assert.match(prompt, /"id": "c1"/, "inline comments reach the agent with their ids");
+    assert.match(prompt, /fenced block tagged bakery-comments/);
+    assert.deepEqual(threadCalls(f, "addPullRequestReviewThreadReply"), [], "nothing is said before the fix is pushed");
+    await approve(f, card.id);
+    const short = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`).slice(0, 7);
+    const replies = threadCalls(f, "addPullRequestReviewThreadReply");
+    assert.deepEqual(replies.map(item => [item.thread, item.body!.split("\n")[0]]), [
+      ["T1", `Addressed in ${short}.`],
+      ["T2", `Not addressed in ${short}: Out of scope for this card.`],
+    ], "one reply per inline comment, none for the top-level comment or the review summary");
+    assert.deepEqual(threadCalls(f, "resolveReviewThread").map(item => item.thread), ["T1"], "only the addressed thread is resolved");
+    const reactions = f.calls().filter(call => call.some(arg => arg.includes("addReaction"))).map(call => call.find(arg => arg.startsWith("id=")));
+    assert.deepEqual(reactions.sort(), ["id=r1", "id=top"], "the top-level comment and the review still only get the reaction");
+    assert.deepEqual(f.board.pendingCommentReplies(card.id), [], "each comment is answered once");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a reply GitHub refuses is logged and the comment rework is still pushed", async () => {
+  const f = fixture();
+  const errors: string[] = [], original = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  try {
+    const { card } = await reworkedReview(f);
+    writeFileSync(join(f.ghDir, "thread-error"), "");
+    const before = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
+    await approve(f, card.id);
+    assert.notEqual(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), before, "the push landed");
+    assert.equal(threadCalls(f, "addPullRequestReviewThreadReply").length, 2);
+    assert.deepEqual(threadCalls(f, "resolveReviewThread"), [], "a thread whose reply failed is not resolved");
+    assert.equal(errors.filter(line => /Could not answer review comment c[12] on acme\/widgets#\d+: .*Resource not accessible/.test(line)).length, 2);
+  } finally { console.error = original; f.cleanup(); }
+});
+
+test("commentOutcomes and reviewReply: a comment the report does not mention stays open with a reason", () => {
+  const outcomes = commentOutcomes("Done.\n\n```bakery-comments\n[{\"id\":\"a\",\"addressed\":true},{\"id\":\"b\",\"addressed\":\"yes\"},{\"id\":\"c\",\"addressed\":false}]\n```");
+  assert.deepEqual([...outcomes], [["a", { addressed: true }], ["c", { addressed: false }]], "a malformed entry is dropped");
+  assert.equal(commentOutcomes("```bakery-comments\nnot json\n```").size, 0);
+  assert.equal(reviewReply("0123456789ab", undefined), "Not addressed in 0123456: the agent's report did not say whether it addressed this comment.");
+  assert.equal(reviewReply("0123456789ab", { addressed: false }), "Not addressed in 0123456: the agent gave no reason.");
 });
 
 test("a sync pass still running at shutdown ends quietly once the database is closed", async () => {

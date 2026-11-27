@@ -239,6 +239,8 @@ export class Board {
       CREATE TABLE IF NOT EXISTS card_events (id INTEGER PRIMARY KEY AUTOINCREMENT, cardId TEXT NOT NULL, at TEXT NOT NULL, fromStatus TEXT, toStatus TEXT, reason TEXT NOT NULL DEFAULT '');
       CREATE INDEX IF NOT EXISTS card_events_card ON card_events(cardId, id);
       CREATE TABLE IF NOT EXISTS pr_request_acks (commentId TEXT PRIMARY KEY, at TEXT NOT NULL);
+      -- Inline review comments sent back to a card's agent that Bakery has yet to answer in their threads.
+      CREATE TABLE IF NOT EXISTS pr_comment_replies (cardId TEXT NOT NULL, commentId TEXT NOT NULL, createdAt TEXT NOT NULL, PRIMARY KEY(cardId, commentId));
       -- Every status change lands here, whichever code path made it. The method that made it then fills in the reason (see explain).
       CREATE TRIGGER IF NOT EXISTS card_status_events AFTER UPDATE OF status ON cards WHEN OLD.status IS NOT NEW.status BEGIN
         INSERT INTO card_events(cardId, at, fromStatus, toStatus) VALUES (NEW.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), OLD.status, NEW.status);
@@ -629,16 +631,28 @@ export class Board {
   /**
    * People asked Bakery for changes on the PR (`requests`, as JSON). Keeps them for the card's next run and moves the
    * comment cursor past them so each is sent once. Like a refused push, the result waits for Approve: unlike a CI
-   * failure, a request is not something the operator authorized in advance.
+   * failure, a request is not something the operator authorized in advance. `inlineCommentIds` are the inline review
+   * comments among them, which Bakery answers in their threads once the rework is pushed.
    */
-  recordCommentRequests(cardId: string, headSha: string, requests: string, seen: string): void {
+  recordCommentRequests(cardId: string, headSha: string, requests: string, seen: string, inlineCommentIds: string[] = []): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare("UPDATE cards SET prCommentsSeen=? WHERE id=?").run(seen, cardId);
+      const reply = this.db.prepare("INSERT OR IGNORE INTO pr_comment_replies(cardId, commentId, createdAt) VALUES (?, ?, ?)");
+      for (const id of inlineCommentIds) reply.run(cardId, id, now());
       this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, 'comment') ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source='comment'")
         .run(cardId, headSha, requests.slice(0, 20_000), now());
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Inline review comments sent back on this card that Bakery has not answered on GitHub yet, with when they were sent. */
+  pendingCommentReplies(cardId: string): { commentId: string; createdAt: string }[] {
+    return this.db.prepare("SELECT commentId, createdAt FROM pr_comment_replies WHERE cardId=? ORDER BY createdAt, commentId").all(cardId) as { commentId: string; createdAt: string }[];
+  }
+  /** Takes the pending replies in `commentIds` and returns those no other caller took first, so each is answered once. */
+  claimCommentReplies(cardId: string, commentIds: string[]): string[] {
+    const take = this.db.prepare("DELETE FROM pr_comment_replies WHERE cardId=? AND commentId=?");
+    return commentIds.filter(id => take.run(cardId, id).changes > 0);
   }
   /**
    * Records `keys` as done and returns the ones not done before: how Bakery's GitHub acknowledgements (a reaction on a

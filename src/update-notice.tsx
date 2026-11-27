@@ -33,8 +33,8 @@ const installHint = (updates: Updates, activeRuns: number) =>
       ? `Restarts after ${runs(activeRuns)} finish.`
       : "Nothing is running, so it restarts right away.";
 
-// Every card commit starts "Bakery card: ", which says nothing in a list of mostly card commits.
-const subjectText = (subject: string) => subject.replace(/^Bakery card: /, "");
+// Every card commit starts "Alice card: " ("Bakery card: " before the rename), which says nothing in a list of mostly card commits.
+const subjectText = (subject: string) => subject.replace(/^(?:Alice|Bakery) card: /, "");
 
 /** The pending commits, newest first: short hash in a fixed column so wrapped subjects line up. */
 function Changelog({
@@ -117,7 +117,7 @@ export function UpdateNotice({
         className="fixed bottom-3 left-3 z-50 lg:bottom-20 flex items-center gap-3 rounded-lg border border-border bg-popover py-1.5 pr-1.5 pl-3 text-sm text-foreground shadow-lg"
       >
         <span className="size-2 shrink-0 rounded-full bg-status-review" />
-        Bakery's interface was updated.
+        Alice's interface was updated.
         <Button
           size="sm"
           variant="outline"
@@ -252,7 +252,7 @@ export function UpdatesPanel() {
     return (
       <p className="text-sm text-muted-foreground">
         {failed
-          ? "Bakery is not responding. It may be restarting."
+          ? "Alice is not responding. It may be restarting."
           : "Loading…"}
       </p>
     );

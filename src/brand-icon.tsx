@@ -3,7 +3,7 @@ import { repoIcons } from "./repo-appearance.js";
 
 const brandIcons: readonly string[] = repoIcons;
 
-const storageKey = "bakery-icon";
+const storageKey = "alice-icon";
 
 function readIcon() {
   try {

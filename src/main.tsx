@@ -39,6 +39,10 @@ import {
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  Play,
+  Palette,
+  FolderGit2,
+  Keyboard,
   Coins,
   type LucideIcon,
 } from "lucide-react";
@@ -78,7 +82,7 @@ import { featureOffMessage } from "./features.js";
 import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
-import { needsYouStatuses, reviewOrder, Today } from "./today.js";
+import { Today } from "./today.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
@@ -110,10 +114,12 @@ import {
   sharedDropTargets,
   readyCompanions,
   needsYourReview,
+  needsYouStatuses,
   agentApproved,
   reviewActionText,
+  reviewOrder,
   reviewWaitText,
-  type BakerySettings,
+  type AliceSettings,
   type Board,
   type Card,
   type CountKey,
@@ -133,6 +139,13 @@ import { Logs } from "./logs.js";
 import { applyTheme } from "./apply-theme.js";
 import { UpdateNotice } from "./update-notice.js";
 import { ConfirmHost, confirmAction } from "./confirm.js";
+import {
+  CommandPalette,
+  modKey,
+  type PaletteGroup,
+  type PaletteItem,
+} from "./command-palette.js";
+import { themeNames, themes } from "./themes.js";
 import { ReadyCheckHost, checkBeforeReady } from "./ready-check.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
@@ -152,7 +165,7 @@ function ServerHost() {
       .then((status) => setHost(status.hostname ?? ""))
       .catch(() => {});
   }, []);
-  return <span data-testid="server-host">{host || "Bakery"}</span>;
+  return <span data-testid="server-host">{host || "Alice"}</span>;
 }
 
 /** Count of cards created outside this UI that the operator has not seen yet. */
@@ -181,7 +194,7 @@ function filterCards(cards: Card[], query: string) {
 }
 
 // Per-tab state in sessionStorage survives a page reload, such as Vite reloading
-// after Bakery merges a card into its own checkout, without leaking into other tabs.
+// after Alice merges a card into its own checkout, without leaking into other tabs.
 function readTab(key: string) {
   try {
     return sessionStorage.getItem(key);
@@ -200,21 +213,21 @@ function writeTab(key: string, value: string | null) {
 }
 
 // Older servers send no density; anything unknown renders as Default.
-function applyDensity(value: BakerySettings["density"] | undefined) {
+function applyDensity(value: AliceSettings["density"] | undefined) {
   const density = value === "compact" || value === "cozy" ? value : "default";
   const root = document.documentElement;
   if (density === "default") delete root.dataset.density;
   else root.dataset.density = density;
   try {
-    localStorage.setItem("bakery-density", density);
+    localStorage.setItem("alice-density", density);
   } catch {
     // Private or full storage must not prevent settings from loading or saving.
   }
 }
 
-function cacheTheme(theme: BakerySettings["theme"]) {
+function cacheTheme(theme: AliceSettings["theme"]) {
   try {
-    localStorage.setItem("bakery-theme", theme);
+    localStorage.setItem("alice-theme", theme);
   } catch {
     // Private or full storage must not prevent settings from loading or saving.
   }
@@ -635,7 +648,7 @@ export function App() {
   const [initialRoute] = useState(() => parseRoute(location.pathname));
   const [boards, setBoards] = useState<Board[]>([]);
   const [boardId, setBoardId] = useState<string | null>(null);
-  const [settings, setSettings] = useState<BakerySettings | null>(null);
+  const [settings, setSettings] = useState<AliceSettings | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(
     () => initialRoute?.section ?? "general",
   );
@@ -685,7 +698,7 @@ export function App() {
   // Today is the landing page until you pick a board; the last choice persists.
   const [view, setView] = useState<RouteView>(() => {
     if (initialRoute) return initialRoute.view;
-    const saved = readTab("bakery-view") ?? localStorage.getItem("bakery-view");
+    const saved = readTab("alice-view") ?? localStorage.getItem("alice-view");
     return saved === "board" ||
       (saved === "pulls" && features.pullRequests) ||
       saved === "visualizer" ||
@@ -698,17 +711,17 @@ export function App() {
       : "today";
   });
   const [reposCollapsed, setReposCollapsed] = useState(
-    () => localStorage.getItem("bakery-repos-collapsed") === "true",
+    () => localStorage.getItem("alice-repos-collapsed") === "true",
   );
   const toggleRepos = () => {
     const next = !reposCollapsed;
     setReposCollapsed(next);
-    localStorage.setItem("bakery-repos-collapsed", String(next));
+    localStorage.setItem("alice-repos-collapsed", String(next));
   };
   // Repos start collapsed except the open one; the user's toggles persist.
   const [repoOpen, setRepoOpen] = useState<Record<string, boolean>>(() => {
     try {
-      return JSON.parse(localStorage.getItem("bakery-repo-open") ?? "{}");
+      return JSON.parse(localStorage.getItem("alice-repo-open") ?? "{}");
     } catch {
       return {};
     }
@@ -716,12 +729,12 @@ export function App() {
   const toggleRepoOpen = (id: string, open: boolean) =>
     setRepoOpen((previous) => {
       const next = { ...previous, [id]: !open };
-      localStorage.setItem("bakery-repo-open", JSON.stringify(next));
+      localStorage.setItem("alice-repo-open", JSON.stringify(next));
       return next;
     });
   const [repoOrder, setRepoOrder] = useState<string[]>(() => {
     try {
-      return JSON.parse(localStorage.getItem("bakery-repo-order") ?? "[]");
+      return JSON.parse(localStorage.getItem("alice-repo-order") ?? "[]");
     } catch {
       return [];
     }
@@ -733,7 +746,7 @@ export function App() {
     if (dragRepo && dragRepo !== before) {
       const next = moveId(sortedBoards, dragRepo, before);
       setRepoOrder(next);
-      localStorage.setItem("bakery-repo-order", JSON.stringify(next));
+      localStorage.setItem("alice-repo-order", JSON.stringify(next));
     }
     setDragRepo(null);
     setDropRepo(null);
@@ -741,19 +754,16 @@ export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     Math.min(
       480,
-      Math.max(
-        180,
-        Number(localStorage.getItem("bakery-sidebar-width")) || 228,
-      ),
+      Math.max(180, Number(localStorage.getItem("alice-sidebar-width")) || 228),
     ),
   );
   const [sidebarHidden, setSidebarHidden] = useState(
-    () => localStorage.getItem("bakery-sidebar-hidden") === "true",
+    () => localStorage.getItem("alice-sidebar-hidden") === "true",
   );
   const toggleSidebar = () => {
     const next = !sidebarHidden;
     setSidebarHidden(next);
-    localStorage.setItem("bakery-sidebar-hidden", String(next));
+    localStorage.setItem("alice-sidebar-hidden", String(next));
   };
   const startSidebarResize = (event: React.PointerEvent) => {
     event.preventDefault();
@@ -767,7 +777,7 @@ export function App() {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      localStorage.setItem("bakery-sidebar-width", String(width));
+      localStorage.setItem("alice-sidebar-width", String(width));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -775,12 +785,12 @@ export function App() {
   const [allCards, setAllCards] = useState<Card[]>([]);
   const [since] = useState(
     () =>
-      localStorage.getItem("bakery-last-visit") ??
+      localStorage.getItem("alice-last-visit") ??
       new Date(Date.now() - 86_400_000).toISOString(),
   );
   useEffect(() => {
     try {
-      localStorage.setItem("bakery-last-visit", new Date().toISOString());
+      localStorage.setItem("alice-last-visit", new Date().toISOString());
     } catch {
       // Without storage, "since your last visit" falls back to the last 24 hours.
     }
@@ -790,7 +800,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [cardSort, setCardSort] = useState<CardSort>(() => {
     try {
-      const saved = localStorage.getItem("bakery-card-sort");
+      const saved = localStorage.getItem("alice-card-sort");
       return isCardSort(saved) ? saved : "priority";
     } catch {
       return "priority";
@@ -798,7 +808,7 @@ export function App() {
   });
   useEffect(() => {
     try {
-      localStorage.setItem("bakery-card-sort", cardSort);
+      localStorage.setItem("alice-card-sort", cardSort);
     } catch {
       // Private or full storage must not break the board.
     }
@@ -830,6 +840,32 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  // The palette opens over anything, inputs and dialogs included. It remembers the card tile that had focus so
+  // Move to Ready and Start act on it.
+  const [palette, setPalette] = useState<{ open: boolean; cardId?: string }>({
+    open: false,
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "k" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      )
+        return;
+      event.preventDefault();
+      const tile = (
+        document.activeElement as HTMLElement | null
+      )?.closest<HTMLElement>("[data-card-id]");
+      setPalette((current) => ({
+        open: !current.open,
+        cardId: tile?.dataset.cardId,
+      }));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const shortcutState = useRef({
     canCreate: false,
     open: (_view: RouteView) => {},
@@ -934,7 +970,7 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(null);
   // The card this tab had open before a reload; reopened once the first poll finds it.
   const restoreCard = useRef(
-    initialRoute ? initialRoute.cardId : readTab("bakery-card"),
+    initialRoute ? initialRoute.cardId : readTab("alice-card"),
   );
   const routeReady = useRef(false);
   const firstSync = useRef(true);
@@ -942,14 +978,14 @@ export function App() {
   const [routeTick, setRouteTick] = useState(0);
   useEffect(() => {
     if (selected === null && restoreCard.current) return;
-    writeTab("bakery-card", selected);
+    writeTab("alice-card", selected);
   }, [selected]);
   const reopenCard = (scope: Card[]) => {
     const id = restoreCard.current;
     if (!id) return;
     restoreCard.current = null;
     if (scope.some((item) => item.id === id)) setSelected(id);
-    else writeTab("bakery-card", null);
+    else writeTab("alice-card", null);
   };
   const [remoteUrlDraft, setRemoteUrlDraft] = useState("");
   const [budgetDraft, setBudgetDraft] = useState("");
@@ -987,9 +1023,9 @@ export function App() {
         setBoards(items);
         setBoardId(
           items.find((item) => item.id === initialRoute?.boardId)?.id ??
-            items.find((item) => item.id === readTab("bakery-board"))?.id ??
+            items.find((item) => item.id === readTab("alice-board"))?.id ??
             items.find(
-              (item) => item.id === localStorage.getItem("bakery-board"),
+              (item) => item.id === localStorage.getItem("alice-board"),
             )?.id ??
             items[0]?.id ??
             null,
@@ -998,7 +1034,7 @@ export function App() {
         setRouteTick((n) => n + 1);
       })
       .catch((err) => setError(String(err)));
-    void api<BakerySettings>("/settings")
+    void api<AliceSettings>("/settings")
       .then((next) => {
         applyTheme(next.theme);
         cacheTheme(next.theme);
@@ -1012,8 +1048,8 @@ export function App() {
     const remember = () => {
       if (document.visibilityState !== "visible") return;
       try {
-        localStorage.setItem("bakery-view", view);
-        if (boardId) localStorage.setItem("bakery-board", boardId);
+        localStorage.setItem("alice-view", view);
+        if (boardId) localStorage.setItem("alice-board", boardId);
       } catch {
         // Without storage, a new tab opens Today and the first repo.
       }
@@ -1027,8 +1063,8 @@ export function App() {
     };
   }, [view, boardId]);
   useEffect(() => {
-    writeTab("bakery-view", view);
-    if (boardId) writeTab("bakery-board", boardId);
+    writeTab("alice-view", view);
+    if (boardId) writeTab("alice-board", boardId);
   }, [view, boardId]);
   // Keep the URL in step with the screen so the browser's back/forward buttons walk between screens.
   useEffect(() => {
@@ -1083,11 +1119,11 @@ export function App() {
   const refresh = () => setRefreshKey((value) => value + 1);
   const openBoard = (id: string) => {
     setView("board");
-    localStorage.setItem("bakery-view", "board");
+    localStorage.setItem("alice-view", "board");
     restoreCard.current = null;
     if (boardId === id) return;
     setBoardId(id);
-    localStorage.setItem("bakery-board", id);
+    localStorage.setItem("alice-board", id);
     setSelected(null);
     setCards([]);
     setMergeConflicts([]);
@@ -1107,32 +1143,32 @@ export function App() {
     setPullHighlight(highlight);
     openBoard(id);
     setView("pulls");
-    localStorage.setItem("bakery-view", "pulls");
+    localStorage.setItem("alice-view", "pulls");
   };
   const openVisualizer = (id: string) => {
     openBoard(id);
     setView("visualizer");
-    localStorage.setItem("bakery-view", "visualizer");
+    localStorage.setItem("alice-view", "visualizer");
   };
   const openSentinels = (id: string) => {
     openBoard(id);
     setView("sentinels");
-    localStorage.setItem("bakery-view", "sentinels");
+    localStorage.setItem("alice-view", "sentinels");
   };
   const openChat = (id: string) => {
     openBoard(id);
     setView("chat");
-    localStorage.setItem("bakery-view", "chat");
+    localStorage.setItem("alice-view", "chat");
   };
   const openPage = (page: "stats" | "logs" | "settings") => {
     setView(page);
-    localStorage.setItem("bakery-view", page);
+    localStorage.setItem("alice-view", page);
     restoreCard.current = null;
     setSelected(null);
   };
   const openToday = () => {
     setView("today");
-    localStorage.setItem("bakery-view", "today");
+    localStorage.setItem("alice-view", "today");
     restoreCard.current = null;
     setSelected(null);
   };
@@ -1348,7 +1384,7 @@ export function App() {
       editing?.id === updated.id ? updated : editing,
     );
   };
-  const saveSettings = (patch: Partial<BakerySettings>) => {
+  const saveSettings = (patch: Partial<AliceSettings>) => {
     if (!settings) return;
     const previous = settings;
     setSettings({ ...settings, ...patch });
@@ -1356,7 +1392,7 @@ export function App() {
     if (patch.density) applyDensity(patch.density);
     void action(async () => {
       try {
-        const saved = await api<BakerySettings>("/settings", {
+        const saved = await api<AliceSettings>("/settings", {
           method: "PATCH",
           body: JSON.stringify(patch),
         });
@@ -1460,8 +1496,8 @@ export function App() {
       if (boardId === item.id) {
         const next = remaining[0]?.id ?? null;
         setBoardId(next);
-        if (next) localStorage.setItem("bakery-board", next);
-        else localStorage.removeItem("bakery-board");
+        if (next) localStorage.setItem("alice-board", next);
+        else localStorage.removeItem("alice-board");
         setSelected(null);
         setCards([]);
         setMergeConflicts([]);
@@ -1547,14 +1583,19 @@ export function App() {
     });
   };
   // Each drop calls the same endpoint as the matching button in the card's details.
-  const moveCard = async (card: Card, to: Status, along: Card[] = []) => {
-    if (!boardId || !dropTargets(card).includes(to)) return;
-    const path = `/boards/${boardId}/cards`;
+  const moveCard = async (
+    card: Card,
+    to: Status,
+    along: Card[] = [],
+    board = boardId,
+  ) => {
+    if (!board || !dropTargets(card).includes(to)) return;
+    const path = `/boards/${board}/cards`;
     if (to === "ready" && !(await readyAfterCheck([card, ...along]))) return;
     if (to === "ready" && along.length > 0) {
       const total = along.length + 1;
       if (
-        currentBoard?.autoPickupEnabled &&
+        boards.find((item) => item.id === board)?.autoPickupEnabled &&
         settings?.confirmRunStart &&
         !(await confirmAction(
           `Move ${total} cards to Ready ("${card.title}" and the ${along.length} ${along.length === 1 ? "card" : "cards"} it waits on)? Auto pickup is on, so they may start and use paid model tokens. Cards that wait on others start after them.`,
@@ -1611,6 +1652,201 @@ export function App() {
       [boardId]: { ...previous[boardId], [lane]: !collapsed },
     }));
   };
+  // Commands for the palette. Card actions use the same moves as dragging, on the focused or open card when
+  // there is one, otherwise through a list of the cards that can make that move.
+  const paletteGroups = ((): PaletteGroup[] => {
+    if (!palette.open) return [];
+    const ownBoard = (item: Card) =>
+      view === "today"
+        ? boards.find((board) => board.repo === item.repo)?.id
+        : boardId;
+    const target =
+      scopeCards.find((item) => item.id === palette.cardId) ?? card;
+    const lane = (item: Card) =>
+      columns.find((column) => column.status === item.status)?.label ?? "";
+    const cardMove = (
+      id: string,
+      label: string,
+      icon: LucideIcon,
+      to: Status,
+      placeholder: string,
+    ): PaletteItem[] => {
+      const run = (item: Card) =>
+        void moveCard(
+          item,
+          to,
+          to === "ready" ? readyCompanions(item, scopeCards) : [],
+          ownBoard(item),
+        );
+      if (target && dropTargets(target).includes(to))
+        return [
+          { id, label, icon, detail: target.title, run: () => run(target) },
+        ];
+      const eligible = scopeCards.filter((item) =>
+        dropTargets(item).includes(to),
+      );
+      if (!eligible.length) return [];
+      return [
+        {
+          id,
+          label: `${label}…`,
+          icon,
+          page: {
+            placeholder,
+            items: eligible.map((item) => ({
+              id: `${id}-${item.id}`,
+              label: item.title,
+              detail: lane(item),
+              keywords: item.id,
+              run: () => run(item),
+            })),
+          },
+        },
+      ];
+    };
+    const goTo: PaletteItem[] = [
+      {
+        id: "go-today",
+        label: "Go to Today",
+        icon: Sun,
+        keys: ["g", "t"],
+        run: openToday,
+      },
+      ...(boardId
+        ? [
+            {
+              id: "go-board",
+              label: "Go to Board",
+              icon: Kanban,
+              keys: ["g", "b"],
+              run: () => openBoard(boardId),
+            },
+          ]
+        : []),
+      ...(boardId && currentBoard && supportsPullRequests(currentBoard)
+        ? [
+            {
+              id: "go-pulls",
+              label: "Go to Pull requests",
+              icon: GitPullRequest,
+              keys: ["g", "p"],
+              run: () => openPulls(boardId),
+            },
+          ]
+        : []),
+      {
+        id: "go-stats",
+        label: "Go to Statistics",
+        icon: BarChart3,
+        keys: ["g", "s"],
+        run: () => openPage("stats"),
+      },
+      {
+        id: "go-logs",
+        label: "Go to Logs",
+        icon: ScrollText,
+        keys: ["g", "l"],
+        run: () => openPage("logs"),
+      },
+    ];
+    const commands: PaletteItem[] = [
+      ...(boardId
+        ? [
+            {
+              id: "new-card",
+              label: "New card",
+              icon: Plus,
+              keys: ["n"],
+              run: () => {
+                if (view !== "board" && view !== "today") openBoard(boardId);
+                setCreating(true);
+              },
+            },
+          ]
+        : []),
+      ...cardMove(
+        "ready",
+        "Move to Ready",
+        ListTodo,
+        "ready",
+        "Move which card to Ready?",
+      ),
+      ...cardMove("start", "Start", Play, "running", "Start which card?"),
+      ...(boards.length > 1
+        ? [
+            {
+              id: "board",
+              label: "Switch board…",
+              icon: FolderGit2,
+              page: {
+                placeholder: "Switch to which board?",
+                items: boards.map((item) => ({
+                  id: `board-${item.id}`,
+                  label: repoName(item.repo),
+                  detail: item.repo,
+                  keywords: item.repo,
+                  current: item.id === boardId,
+                  run: () => openBoard(item.id),
+                })),
+              },
+            },
+          ]
+        : []),
+      {
+        id: "theme",
+        label: "Switch theme…",
+        icon: Palette,
+        page: {
+          placeholder: "Switch to which theme?",
+          items: themeNames.map((name) => ({
+            id: `theme-${name}`,
+            label: themes[name].label,
+            current: name === settings?.theme,
+            run: () => saveSettings({ theme: name }),
+          })),
+        },
+      },
+      {
+        id: "settings",
+        label: "Open settings",
+        icon: Settings2,
+        // The desktop app's menu has Cmd+, for this; the web app has no shortcut.
+        keys: document.documentElement.dataset.desktop
+          ? [modKey, ","]
+          : undefined,
+        run: () => openPage("settings"),
+      },
+      ...goTo,
+      {
+        id: "shortcuts",
+        label: "Show keyboard shortcuts",
+        icon: Keyboard,
+        keys: ["?"],
+        run: () => setShowShortcuts(true),
+      },
+    ];
+    const openCard = (item: Card) => {
+      if (view !== "board" && view !== "today" && boardId) openBoard(boardId);
+      setSelected(item.id);
+    };
+    return [
+      { heading: "Commands", items: commands },
+      {
+        heading: "Cards",
+        whenSearching: true,
+        items: scopeCards.map((item) => ({
+          id: `card-${item.id}`,
+          label: item.title,
+          detail:
+            view === "today"
+              ? `${lane(item)} · ${repoName(item.repo)}`
+              : lane(item),
+          keywords: item.id,
+          run: () => openCard(item),
+        })),
+      },
+    ];
+  })();
   if (!settings && !error) return null;
   return (
     <div className="min-h-screen lg:flex">
@@ -1655,14 +1891,14 @@ export function App() {
           onPointerDown={startSidebarResize}
           onDoubleClick={() => {
             setSidebarWidth(228);
-            localStorage.setItem("bakery-sidebar-width", "228");
+            localStorage.setItem("alice-sidebar-width", "228");
           }}
           className="absolute -right-1 top-0 z-20 hidden h-full w-2 cursor-col-resize hover:bg-primary/30 lg:block"
         />
         <div className="desktop-sidebar-head flex items-center gap-3 px-5 py-5">
           <BrandIcon />
           <span className="text-[18px] font-semibold tracking-[-.04em]">
-            bakery<span className="text-primary">.</span>
+            alice<span className="text-primary">.</span>
           </span>
           <button
             aria-label="Hide sidebar"
@@ -2128,7 +2364,7 @@ export function App() {
                 >
                   {currentBoard.integration === "github-pr"
                     ? "Approve opens a GitHub pull request. The card is Done once the PR merges."
-                    : "Approve merges into local main. Bakery does not push to the remote."}
+                    : "Approve merges into local main. Alice does not push to the remote."}
                 </span>
                 {currentBoard.integration === "github-pr" ? (
                   <GitPullRequest size={13} aria-hidden="true" />
@@ -2387,7 +2623,7 @@ export function App() {
                 {currentBoard.integrationConfigured === "github-pr"
                   ? "this board is set to GitHub pull requests"
                   : "main on GitHub only accepts pull requests"}
-                , and pull requests are turned off in this build, so Bakery will
+                , and pull requests are turned off in this build, so Alice will
                 not merge into local main instead.{" "}
                 {featureOffMessage("pullRequests")} You can also keep Local
                 merge for this board.
@@ -2825,7 +3061,7 @@ export function App() {
                                       <span
                                         data-testid="failure-summary"
                                         title="Why the latest attempt failed. Open the card for the full error."
-                                        className="flex items-center gap-1 rounded border border-status-failed/40 bg-status-failed/10 px-2 py-0.5 text-[10px] font-medium text-status-failed"
+                                        className="flex items-center gap-1 rounded border border-status-failed/40 bg-status-failed/10 px-2 py-0.5 text-[11px] font-medium text-status-failed"
                                       >
                                         <CircleX size={10} aria-hidden />
                                         {item.failureSummary}
@@ -2996,6 +3232,7 @@ export function App() {
                               }}
                               onDragEnd={endDrag}
                               data-card-tile={item.status}
+                              data-card-id={item.id}
                               data-new={newCardIds.has(item.id) || undefined}
                               data-stripe={
                                 needsYourReview(item)
@@ -3035,7 +3272,7 @@ export function App() {
                                 <div
                                   role="separator"
                                   aria-label="Your turn"
-                                  className="flex items-center gap-2 px-1 text-[10px] font-semibold uppercase tracking-[.14em] text-foreground"
+                                  className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-[.14em] text-foreground"
                                 >
                                   Your turn
                                   <span className="h-px flex-1 bg-status-review" />
@@ -3052,7 +3289,7 @@ export function App() {
                               <div
                                 role="separator"
                                 aria-label="Not your turn yet"
-                                className="flex items-center gap-2 px-1 pt-2 text-[10px] font-semibold uppercase tracking-[.14em] text-muted-foreground"
+                                className="flex items-center gap-2 px-1 pt-2 text-[11px] font-semibold uppercase tracking-[.14em] text-muted-foreground"
                               >
                                 Not your turn yet
                                 <span className="h-px flex-1 bg-border" />
@@ -3288,7 +3525,7 @@ export function App() {
               <div className="text-sm font-medium">Remote repository</div>
               <p className="mt-1 text-xs text-muted-foreground">
                 Optional link to the remote this repository tracks, such as its
-                GitHub page. It appears below the board heading. Bakery never
+                GitHub page. It appears below the board heading. Alice never
                 pushes to it.
               </p>
               <div className="mt-4 flex gap-2">
@@ -3327,11 +3564,11 @@ export function App() {
               {features.pullRequests && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   Local: Approve merges the card into local main. GitHub pull
-                  requests: Approve pushes bakery/&lt;card&gt; and opens a PR
+                  requests: Approve pushes alice/&lt;card&gt; and opens a PR
                   with gh; the card is Done once the PR merges and the merge is
                   on origin/main. Local main is then only fast-forwarded to
                   origin/main. Needs gh signed in and a GitHub remote link. When
-                  a GitHub remote is set, Bakery picks GitHub pull requests if
+                  a GitHub remote is set, Alice picks GitHub pull requests if
                   main only accepts pull requests.
                 </p>
               )}
@@ -3974,7 +4211,7 @@ export function App() {
                 disabled={busy}
                 onClick={() => removeBoard(editingBoard)}
               >
-                Remove repository from Bakery
+                Remove repository from Alice
               </Button>
             </div>
           )}
@@ -4032,7 +4269,7 @@ export function App() {
           className="fixed right-3 bottom-3 z-40 rounded-md border bg-card/60 px-3 py-2 text-xs backdrop-blur-md"
         >
           <div className="mb-1 text-muted-foreground">
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+            <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
               g
             </kbd>{" "}
             then…
@@ -4043,7 +4280,7 @@ export function App() {
               .map(([keys, label]) => (
                 <Fragment key={keys}>
                   <dt>
-                    <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+                    <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
                       {keys.slice(2)}
                     </kbd>
                   </dt>
@@ -4060,12 +4297,17 @@ export function App() {
           className="fixed right-3 bottom-3 z-40 flex items-center gap-1.5 rounded-md border bg-card/60 px-2 py-1 text-xs text-muted-foreground opacity-60 backdrop-blur-md transition-opacity hover:opacity-100"
         >
           Press
-          <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+          <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
             ?
           </kbd>
           for shortcuts
         </button>
       )}
+      <CommandPalette
+        open={palette.open}
+        onOpenChange={(open) => setPalette((current) => ({ ...current, open }))}
+        groups={paletteGroups}
+      />
       <Dialog open={showShortcuts} onOpenChange={setShowShortcuts}>
         <DialogContent
           className="bg-card/80 backdrop-blur-md"
@@ -4332,7 +4574,8 @@ const shortcutList: [string, string][] = [
   ["g p", "Go to Pull requests"],
   ["g s", "Go to Statistics"],
   ["g l", "Go to Logs"],
-  ["⌘ Enter", "Create or save card in the form"],
+  [`${modKey} K`, "Command palette"],
+  [`${modKey} Enter`, "Create or save card in the form"],
   ["?", "Show or hide this cheat sheet"],
 ];
 function CardForm({

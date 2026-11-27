@@ -8,7 +8,7 @@ import { unionMergeLine } from "../src/gitattributes.js";
 
 // Git is the judge: each suggested line must give merge=union to its own file and to no other path.
 test("the suggested merge=union line matches exactly its file, whatever the name holds", () => {
-  const repo = mkdtempSync(join(tmpdir(), "bakery-gitattributes-"));
+  const repo = mkdtempSync(join(tmpdir(), "alice-gitattributes-"));
   try {
     execFileSync("git", ["init", "-q", repo]);
     const files = ["README.md", "docs/agent-map/api.md", "notes ü.md", "a b.md", "weird[1]*?.md", 'say "hi".md', "back\\slash.md"];

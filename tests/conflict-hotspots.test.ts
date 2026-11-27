@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Board, conflictHotspotDays } from "../server/board.js";
 
 const withBoard = (run: (board: Board, dir: string) => void) => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   const board = new Board(join(dir, "board.sqlite"));
   try { run(board, dir); } finally { board.close(); rmSync(dir, { recursive: true, force: true }); }
 };

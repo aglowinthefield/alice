@@ -13,7 +13,7 @@ test("files that keep conflicting get board notices with fixes; the rest expand,
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     let hotspots = [hotspot("docs/agent-map/api.md", 5), hotspot("config/allowlist.txt", 4), hotspot("README.md", 3), hotspot("notes ü [draft].md", 3)];
     const dismissed: unknown[] = [];
-    const theme = process.env.BAKERY_HOTSPOT_THEME ?? "default";
+    const theme = process.env.ALICE_HOTSPOT_THEME ?? "default";
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/status") return route.fulfill({ json: { draining: false, activeRuns: 0 } });
@@ -43,7 +43,7 @@ test("files that keep conflicting get board notices with fixes; the rest expand,
     assert.equal(await page.getByTestId("conflict-hotspot").count(), 3, "three at first");
 
     // The fourth file is folded away, not dismissed: expanding shows it with its escaped .gitattributes line.
-    if (process.env.BAKERY_HOTSPOT_SCREENSHOT) await page.screenshot({ path: process.env.BAKERY_HOTSPOT_SCREENSHOT.replace(/\.png$/, "-collapsed.png") });
+    if (process.env.ALICE_HOTSPOT_SCREENSHOT) await page.screenshot({ path: process.env.ALICE_HOTSPOT_SCREENSHOT.replace(/\.png$/, "-collapsed.png") });
     const fourth = page.getByRole("status", { name: "Conflict hint for notes ü [draft].md" });
     assert.equal(await fourth.count(), 0);
     await page.getByRole("button", { name: "Show 1 more file" }).click();
@@ -51,7 +51,7 @@ test("files that keep conflicting get board notices with fixes; the rest expand,
     assert.match(await fourth.innerText(), /"\/notes ü \\\\\[draft\\\\\]\.md" merge=union/);
     assert.equal(await page.getByTestId("conflict-hotspot").count(), 4);
     assert.deepEqual(dismissed, [], "expanding dismisses nothing");
-    if (process.env.BAKERY_HOTSPOT_SCREENSHOT) await page.screenshot({ path: process.env.BAKERY_HOTSPOT_SCREENSHOT, fullPage: true });
+    if (process.env.ALICE_HOTSPOT_SCREENSHOT) await page.screenshot({ path: process.env.ALICE_HOTSPOT_SCREENSHOT, fullPage: true });
 
     await page.getByRole("button", { name: "Dismiss conflict hint for docs/agent-map/api.md" }).click();
     await notice.waitFor({ state: "detached" });

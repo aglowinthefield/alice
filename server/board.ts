@@ -21,9 +21,9 @@ export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | 
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
-export type BakerySettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean; maxActiveAgents: number };
+export type AliceSettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean; maxActiveAgents: number };
 type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string };
-/** `integration` is what the build lets Bakery do: github-pr only with the pull requests feature. `integrationConfigured` is what is stored, kept while the feature is off. The stored sync error and warning are kept too but read empty while it is off, so they never hold back pickup. */
+/** `integration` is what the build lets Alice do: github-pr only with the pull requests feature. `integrationConfigured` is what is stored, kept while the feature is off. The stored sync error and warning are kept too but read empty while it is off, so they never hold back pickup. */
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullRequests: boolean): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl,
   autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewConcurrency: row.autoReviewConcurrency, autoReviewMaxFiles: row.autoReviewMaxFiles, autoReviewMaxPatchChars: row.autoReviewMaxPatchChars, pickupConcurrency: row.pickupConcurrency,
@@ -39,7 +39,7 @@ const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number, pullReque
   limitsEnabled: row.limitsEnabled !== 0,
 });
 const limitSettings = (row: BoardRow) => ({ ...row, limitsEnabled: row.limitsEnabled !== 0 });
-// Token and cost columns are NULL for attempts recorded before Bakery tracked usage; new attempts start at 0.
+// Token and cost columns are NULL for attempts recorded before Alice tracked usage; new attempts start at 0.
 const usageColumns = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "cost"] as const;
 type UsageFields = { [Key in keyof Usage]: number | null };
 const usageDefinitions = "inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheWriteTokens INTEGER, cost REAL";
@@ -62,11 +62,11 @@ export function parsePriority(value: unknown): CardPriority {
 export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment";
 /**
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
- * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
+ * `prCiPending` is set while Alice holds a CI failure to send back to Pi (waiting for the other checks to settle).
  */
 export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number; conflictRepairs: number; conflictRepairKey: string | null; prCommentsSeen: string | null };
 /**
- * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
+ * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Alice is about to send
  * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
  */
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
@@ -83,7 +83,7 @@ export type ReviewAction = "pr_ready" | "accept_findings" | "agent_approved" | "
 /** Mirrors `reviewActionLabels` in src/model.ts. */
 export const reviewActionLabels: Record<ReviewAction, string> = { pr_ready: "PR ready", accept_findings: "Accept findings", agent_approved: "Agent approved", needs_you: "Needs you" };
 /**
- * Sentinel jobs are the cards a sentinel makes for the work it finds: a fix for a broken PR or a `/bakery` comment on
+ * Sentinel jobs are the cards a sentinel makes for the work it finds: a fix for a broken PR or a `/alice` comment on
  * a PR. They carry provenance (`sentinelId`, `sentinelRunId`, `findingKey`) and the sentinel starts them itself, so they
  * live outside the kanban's workflow: auto-pickup never picks them, its limits and pauses do not hold them, they take
  * no run slot from other cards, and they are left out of lane counts, review automation and statistics. Cards made
@@ -94,7 +94,29 @@ export const isSentinelJob = (card: { sentinelId?: string | null; idempotencyKey
 const notSentinelJob = "(cards.sentinelId IS NULL AND (cards.idempotencyKey IS NULL OR (cards.idempotencyKey NOT LIKE 'sentinel:%' AND cards.idempotencyKey NOT LIKE 'request:%')))";
 /** Where a job card came from: the sentinel, the run that found it and the finding's stable key. */
 export type CardProvenance = { sentinelId: string; sentinelRunId: string; findingKey: string };
-export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: "manual"; priority: CardPriority; idempotencyKey: string | null;
+/**
+ * Where a card came from: `ui`, `cli`, `plan`, `follow-up`, `sentinel`, `pr-comment`, `api` (an API caller that named
+ * none) or the agent name an API caller supplied (Hermes sends `hermes`). `manual` marks older cards whose source is unknown.
+ */
+export type CardSource = string;
+/** Sources only Alice itself sets; API callers may not claim them. */
+const serverOnlySources = new Set(["manual", "plan", "sentinel", "pr-comment"]);
+/** A source from an API caller: a lower-case name of up to 40 letters, digits, dots, dashes or underscores. */
+export function parseCardSource(value: unknown): CardSource | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9._-]{0,39}$/.test(value)) throw new Error("Source must be a lower-case name of up to 40 letters, digits, dots, dashes or underscores, such as hermes");
+  if (serverOnlySources.has(value)) throw new Error(`Source ${value} is set by Alice itself`);
+  return value;
+}
+/**
+ * The source an idempotency key's prefix implies, or null when it implies none. Only prefixes one path writes count:
+ * `bakery-local-` keys came from a bulk copy of plan, follow-up and typed cards alike, so they say nothing.
+ */
+export function sourceFromKey(key: string | null): CardSource | null {
+  const prefix = key?.match(/^(hermes|plan|follow-up|sentinel|request):/)?.[1];
+  return prefix === "request" ? "pr-comment" : prefix ?? null;
+}
+export type Card = { id: string; title: string; body: string; repo: string; status: CardStatus; source: CardSource; priority: CardPriority; idempotencyKey: string | null;
   /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
   sentinelId: string | null; sentinelRunId: string | null; findingKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
@@ -113,8 +135,10 @@ export type Card = { id: string; title: string; body: string; repo: string; stat
   reviewQueue: { position: number; of: number } | null;
   /** See `ReviewAction`. */
   reviewAction: ReviewAction | null;
-  /** A start was asked for during a restart drain and runs after the restart. */
+  /** A start is queued: asked for during a restart drain, or refused by the run limit (see `startQueuedForSlot`). */
   startQueued: boolean;
+  /** The queued start waits for a free run slot on the card's board, not for a restart. */
+  startQueuedForSlot: boolean;
   /** Files attached to the card, including those sent with discussion messages. */
   attachmentCount: number;
   /** A Failed card's reason in a few words (see `summarizeFailure`); null on other cards. */
@@ -127,11 +151,11 @@ export type CardRef = { id: string; title: string; status: CardStatus };
 const finishedStatuses = "('done', 'archived')";
 /** Unstarted blocked cards wait; a card that already has attempts has its worktree and may retry. */
 export const waitsOnDependencies = (card: Pick<Card, "blocked" | "attempts">) => card.blocked && card.attempts === 0;
-type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "locallyMerged" | "planOnly" | "createdCardIds" | "failureSummary"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number; failedError: string | null; failedKind: string | null };
+type CardRow = Omit<Card, "dependsOn" | "blocked" | "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "startQueuedForSlot" | "locallyMerged" | "planOnly" | "createdCardIds" | "failureSummary"> & { createdCardIds: string | null; dependsOn: string; blocked: number; locallyMerged: number; planOnly: number; failedError: string | null; failedKind: string | null };
 /** A file on a card. `messageId` is set when it was sent with a discussion message. */
 export type Attachment = { id: string; cardId: string; messageId: string | null; name: string; type: string; size: number; createdAt: string };
 export type DiscussionMessage = { id: string; cardId: string; role: "user" | "agent" | "error"; body: string; createdAt: string; attachments: Attachment[] };
-/** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Bakery keeps what to show. */
+/** A board chat: a general agent session about one repo and its board. Pi keeps the conversation; Alice keeps what to show. */
 /**
  * `title` is the first line of the first message; `topic` is a few-word summary of it, empty until one is written.
  * `model` and `thinking` are this chat's Pi choice; "" leaves that flag to Pi's own default.
@@ -146,9 +170,11 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   failureKind: ProviderFailureKind | null;
   /** Id of the failed run whose rejected session this run replaced with a fresh one; null for ordinary runs. */
   recoveryOf: string | null;
+  /** Pi's session file for this run, as Pi itself reported it at startup; null when unknown (older runs, or Pi never got that far). */
+  sessionFile: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
-  /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
+  /** Files the run's work changes against main, as of the last time Alice looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
@@ -179,13 +205,13 @@ const cardQuery = `SELECT cards.*, COALESCE(SUM(runs.turns), 0) AS turns, COALES
   (SELECT json_group_array(edge.dependsOn) FROM (SELECT d.dependsOn FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id ORDER BY parent.createdAt, parent.rowid) edge) AS dependsOn,
   EXISTS (SELECT 1 FROM card_dependencies d JOIN cards parent ON parent.id=d.dependsOn WHERE d.cardId=cards.id AND parent.status NOT IN ${finishedStatuses}) AS blocked,
   EXISTS (SELECT 1 FROM approvals merged WHERE merged.cardId=cards.id AND merged.merged=1) AS locallyMerged,
-  COALESCE((SELECT latest.report LIKE '%bakery-plan%' FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), 0) AS planOnly,
+  COALESCE((SELECT (latest.report LIKE '%alice-plan%' OR latest.report LIKE '%bakery-plan%') FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1), 0) AS planOnly,
   CASE WHEN cards.status='failed' THEN (SELECT latest.error FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedError,
   CASE WHEN cards.status='failed' THEN (SELECT latest.failureKind FROM runs latest WHERE latest.cardId=cards.id ORDER BY latest.attempt DESC LIMIT 1) END AS failedKind
   FROM cards LEFT JOIN runs ON runs.cardId=cards.id`;
 
 /**
- * Older runs kept only the transcript. Their final message is the text after the last turn summary, since Bakery
+ * Older runs kept only the transcript. Their final message is the text after the last turn summary, since Alice
  * writes a "Turn N:" line only for turns that used tools and the final reply uses none.
  */
 export function reportFromOutput(output: string): string | null {
@@ -223,6 +249,7 @@ export class Board {
       CREATE TABLE IF NOT EXISTS conflict_events (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, cardId TEXT NOT NULL, file TEXT NOT NULL, createdAt TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS conflict_events_window ON conflict_events(createdAt, repo, file);
       CREATE TABLE IF NOT EXISTS conflict_hotspot_dismissals (repo TEXT NOT NULL, file TEXT NOT NULL, lastEventId INTEGER NOT NULL, PRIMARY KEY(repo, file));
+      CREATE TABLE IF NOT EXISTS dependent_updates (cardId TEXT PRIMARY KEY, parentId TEXT NOT NULL, deferredAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','approved','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pr_readiness (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, data TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -258,6 +285,14 @@ export class Board {
       this.db.exec("UPDATE cards SET priority = CASE priority WHEN -1 THEN -10 WHEN 1 THEN 50 WHEN 2 THEN 100 ELSE priority END; PRAGMA user_version = 1");
     }
     if (!cardColumns.has("idempotencyKey")) this.db.exec("ALTER TABLE cards ADD COLUMN idempotencyKey TEXT");
+    // Every card was 'manual' before sources were recorded. Cards whose key prefix names their path get that source once.
+    if ((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version < 2) {
+      this.db.exec("BEGIN IMMEDIATE");
+      const keyed = this.db.prepare("SELECT id, idempotencyKey FROM cards WHERE source='manual' AND idempotencyKey IS NOT NULL").all() as { id: string; idempotencyKey: string }[];
+      const update = this.db.prepare("UPDATE cards SET source=? WHERE id=?");
+      for (const row of keyed) { const source = sourceFromKey(row.idempotencyKey); if (source) update.run(source, row.id); }
+      this.db.exec("PRAGMA user_version = 2; COMMIT");
+    }
     for (const column of ["sentinelId TEXT", "sentinelRunId TEXT", "findingKey TEXT"]) if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     this.db.exec("CREATE INDEX IF NOT EXISTS cards_sentinel_finding ON cards(sentinelId, findingKey) WHERE sentinelId IS NOT NULL");
     // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
@@ -275,6 +310,9 @@ export class Board {
     this.db.exec("CREATE TABLE IF NOT EXISTS ci_feedback (cardId TEXT PRIMARY KEY REFERENCES cards(id), headSha TEXT NOT NULL, failures TEXT NOT NULL, createdAt TEXT NOT NULL)");
     // 'ci' for a PR's failed checks, 'push' for a pre-push hook that refused the push, 'commit' for a commit hook that refused the commit.
     if (!(this.db.prepare("PRAGMA table_info(ci_feedback)").all() as { name: string }[]).some(column => column.name === "source")) this.db.exec("ALTER TABLE ci_feedback ADD COLUMN source TEXT NOT NULL DEFAULT 'ci'");
+    // A start the run limit refused waits for a free slot (untilSlot=1) with the reason its history line gives.
+    const queuedColumns = new Set((this.db.prepare("PRAGMA table_info(queued_starts)").all() as { name: string }[]).map(column => column.name));
+    for (const column of ["untilSlot INTEGER NOT NULL DEFAULT 0", "why TEXT NOT NULL DEFAULT ''"]) if (!queuedColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE queued_starts ADD COLUMN ${column}`);
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cards_idempotency_key ON cards(repo, idempotencyKey) WHERE idempotencyKey IS NOT NULL");
     const commentColumns = new Set((this.db.prepare("PRAGMA table_info(review_comments)").all() as { name: string }[]).map(column => column.name));
     const chatColumns = new Set((this.db.prepare("PRAGMA table_info(chats)").all() as { name: string }[]).map(column => column.name));
@@ -341,7 +379,7 @@ export class Board {
     if (!boardColumns.has("agentModels")) this.db.exec("ALTER TABLE boards ADD COLUMN agentModels TEXT NOT NULL DEFAULT '{}'");
     if (!boardColumns.has("integration")) this.db.exec("ALTER TABLE boards ADD COLUMN integration TEXT NOT NULL DEFAULT 'local' CHECK(integration IN ('local', 'github-pr'))");
     if (!boardColumns.has("integrationError")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationError TEXT NOT NULL DEFAULT ''");
-    // integrationWarning: a sync problem Bakery is riding out (a failed fetch it retries). integrationSyncedAt: last full sync.
+    // integrationWarning: a sync problem Alice is riding out (a failed fetch it retries). integrationSyncedAt: last full sync.
     if (!boardColumns.has("integrationWarning")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationWarning TEXT NOT NULL DEFAULT ''");
     if (!boardColumns.has("integrationSyncedAt")) this.db.exec("ALTER TABLE boards ADD COLUMN integrationSyncedAt TEXT");
     // integrationChosen: the operator picked the mode, so detection never changes it. githubMainProtected: NULL until checked.
@@ -397,6 +435,8 @@ export class Board {
     }
     // The failed run a fresh-session recovery run replaced. Later runs on the card resume the recovery run's session.
     if (!runColumns.has("recoveryOf")) this.db.exec("ALTER TABLE runs ADD COLUMN recoveryOf TEXT");
+    // Lets the attempt after a run timeout check the session is still there before continuing it.
+    if (!runColumns.has("sessionFile")) this.db.exec("ALTER TABLE runs ADD COLUMN sessionFile TEXT");
     if (!runColumns.has("retryScheduled")) this.db.exec("ALTER TABLE runs ADD COLUMN retryScheduled INTEGER NOT NULL DEFAULT 0");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
@@ -449,28 +489,37 @@ export class Board {
       details=CASE WHEN interruptions=0 THEN 'Server restarted during agent review; it will be reviewed again'
         ELSE 'Server restarted during agent review twice; inspect manually' END WHERE state='running'`).run(now());
   }
-  /** Remember a run start asked for during a restart drain; the next server process replays it. */
-  queueStart(cardId: string) {
+  /**
+   * Remember a run start asked for during a restart drain; the next server process replays it. With `untilSlot`, the
+   * start was refused by the board's run limit instead: `AutoPickup` starts it once a run finishes, and `why`
+   * finishes its "Attempt N started …" history line.
+   */
+  queueStart(cardId: string, untilSlot?: { why: string }) {
     const card = this.getCard(cardId);
     if (!card) throw new Error("Card not found");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
-    this.db.prepare("INSERT OR IGNORE INTO queued_starts(cardId, queuedAt) VALUES (?, ?)").run(cardId, now());
+    this.db.prepare("INSERT OR IGNORE INTO queued_starts(cardId, queuedAt, untilSlot, why) VALUES (?, ?, ?, ?)").run(cardId, now(), untilSlot ? 1 : 0, untilSlot?.why ?? "");
+  }
+  /** Starts waiting for a free run slot, oldest first, with the reason each was queued for. */
+  listSlotQueuedStarts(): { card: Card; why: string }[] {
+    const rows = this.db.prepare("SELECT cardId, why FROM queued_starts WHERE untilSlot=1 ORDER BY queuedAt, rowid").all() as { cardId: string; why: string }[];
+    return rows.flatMap(row => { const card = this.getCard(row.cardId); return card ? [{ card, why: row.why }] : []; });
   }
   /** Drops a start queued during a restart drain. Returns whether one was queued. */
   cancelQueuedStart(cardId: string): boolean { return this.db.prepare("DELETE FROM queued_starts WHERE cardId=?").run(cardId).changes > 0; }
   isStartQueued(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM queued_starts WHERE cardId=?").get(cardId); }
-  /** Returns queued card ids oldest first and empties the queue. */
+  /** Returns the card ids queued during a restart drain, oldest first, and empties that queue. Starts waiting for a run slot stay. */
   takeQueuedStarts(): string[] {
-    const ids = (this.db.prepare("SELECT cardId FROM queued_starts ORDER BY queuedAt, rowid").all() as { cardId: string }[]).map(row => row.cardId);
-    this.db.exec("DELETE FROM queued_starts");
+    const ids = (this.db.prepare("SELECT cardId FROM queued_starts WHERE untilSlot=0 ORDER BY queuedAt, rowid").all() as { cardId: string }[]).map(row => row.cardId);
+    this.db.exec("DELETE FROM queued_starts WHERE untilSlot=0");
     return ids;
   }
   close() { if (this.db.isOpen) this.db.close(); }
-  getSettings(): BakerySettings {
-    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, density, showCardModels, agentModels, discordWebhookUrl, telemetryEnabled, maxActiveAgents FROM settings WHERE id=1").get() as { maxActiveAgents: number; telemetryEnabled: number; discordWebhookUrl: string; confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: BakerySettings["cardDetailsLayout"]; theme: BakerySettings["theme"]; density: BakerySettings["density"]; showCardModels: number; agentModels: string };
+  getSettings(): AliceSettings {
+    const row = this.db.prepare("SELECT confirmRunStart, notifyOnReview, cardDetailsLayout, theme, density, showCardModels, agentModels, discordWebhookUrl, telemetryEnabled, maxActiveAgents FROM settings WHERE id=1").get() as { maxActiveAgents: number; telemetryEnabled: number; discordWebhookUrl: string; confirmRunStart: number; notifyOnReview: number; cardDetailsLayout: AliceSettings["cardDetailsLayout"]; theme: AliceSettings["theme"]; density: AliceSettings["density"]; showCardModels: number; agentModels: string };
     return { confirmRunStart: row.confirmRunStart === 1, notifyOnReview: row.notifyOnReview === 1, cardDetailsLayout: row.cardDetailsLayout, theme: row.theme, density: row.density, showCardModels: row.showCardModels === 1, agentModels: parseAgentModels(row.agentModels), discordWebhookUrl: row.discordWebhookUrl, telemetryEnabled: row.telemetryEnabled === 1, maxActiveAgents: row.maxActiveAgents };
   }
-  updateSettings(settings: Partial<BakerySettings>): BakerySettings {
+  updateSettings(settings: Partial<AliceSettings>): AliceSettings {
     const current = this.getSettings();
     const agentModels = settings.agentModels ? validateAgentModels(settings.agentModels) : current.agentModels;
     const maxActiveAgents = settings.maxActiveAgents ?? current.maxActiveAgents;
@@ -529,7 +578,7 @@ export class Board {
     if (value !== this.getBoard(id)!.remoteUrl) this.db.prepare("UPDATE boards SET remoteUrl=?, githubMainProtected=NULL, integrationNote='' WHERE id=?").run(value, id);
     return this.getBoard(id)!;
   }
-  /** github-pr needs a GitHub remote so Bakery knows which repository `gh` should query. */
+  /** github-pr needs a GitHub remote so Alice knows which repository `gh` should query. */
   setIntegration(id: string, mode: unknown): RepoBoard {
     const board = this.getBoard(id);
     if (!board) throw new Error("Board not found");
@@ -556,7 +605,7 @@ export class Board {
   setIntegrationError(id: string, error: string): void {
     this.db.prepare("UPDATE boards SET integrationError=?, integrationWarning='' WHERE id=?").run(error.slice(0, 2000), id);
   }
-  /** A sync problem that does not pause pickup yet: Bakery retries, and escalates to an error if it lasts. */
+  /** A sync problem that does not pause pickup yet: Alice retries, and escalates to an error if it lasts. */
   setIntegrationWarning(id: string, warning: string): void {
     this.db.prepare("UPDATE boards SET integrationWarning=? WHERE id=?").run(warning.slice(0, 2000), id);
   }
@@ -569,7 +618,7 @@ export class Board {
     if (!this.features.pullRequests) return "local";
     return (this.db.prepare("SELECT integration FROM boards WHERE repo=?").get(repo) as { integration: IntegrationMode } | undefined)?.integration ?? "local";
   }
-  /** A PR URL that overrides the `bakery/<id>` branch lookup; an empty value restores the lookup. */
+  /** A PR URL that overrides the `alice/<id>` branch lookup; an empty value restores the lookup. */
   setPullRequestOverride(cardId: string, url: string): Card {
     const card = this.getCard(cardId);
     if (!card) throw new Error("Card not found");
@@ -634,7 +683,7 @@ export class Board {
     this.db.prepare("UPDATE cards SET conflictRepairKey=? WHERE id=?").run(key, cardId);
   }
   /**
-   * People asked Bakery for changes on the PR (`requests`, as JSON). Keeps them for the card's next run and moves the
+   * People asked Alice for changes on the PR (`requests`, as JSON). Keeps them for the card's next run and moves the
    * comment cursor past them so each is sent once. Like a refused push, the result waits for Approve: unlike a CI
    * failure, a request is not something the operator authorized in advance.
    */
@@ -648,8 +697,8 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /**
-   * Records `keys` as done and returns the ones not done before: how Bakery's GitHub acknowledgements (a reaction on a
-   * `/bakery` comment, a note that a request is waiting) happen once however many passes see the same comment.
+   * Records `keys` as done and returns the ones not done before: how Alice's GitHub acknowledgements (a reaction on a
+   * `/alice` comment, a note that a request is waiting) happen once however many passes see the same comment.
    */
   firstTime(keys: string[]): string[] {
     const insert = this.db.prepare("INSERT OR IGNORE INTO pr_request_acks(commentId, at) VALUES (?, ?)");
@@ -712,7 +761,7 @@ export class Board {
       return this.getCard(cardId)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
-  /** Done cards on this board that Bakery merged into local main (`approvals.merged=1`), with the approved candidate. */
+  /** Done cards on this board that Alice merged into local main (`approvals.merged=1`), with the approved candidate. */
   listLocalMerges(repo: string): { card: Card; candidate: string }[] {
     const rows = this.db.prepare(`SELECT approvals.cardId, approvals.candidate FROM approvals JOIN cards ON cards.id=approvals.cardId
       WHERE cards.repo=? AND cards.status='done' AND approvals.merged=1
@@ -773,11 +822,11 @@ export class Board {
   recordCacheUsage(runId: string, usage: CacheUsage): void {
     this.db.prepare("UPDATE runs SET cacheTasks=?, cacheHits=?, cacheSavedMs=? WHERE id=?").run(usage.tasks, usage.hits, Math.round(usage.savedMs), runId);
   }
-  /** Environment that points commands Bakery runs for `repo` at its shared caches; empty when none are enabled. */
+  /** Environment that points commands Alice runs for `repo` at its shared caches; empty when none are enabled. */
   sharedCacheEnvFor(repo: string): Record<string, string> {
     return sharedCacheEnv(repo, this.boardForRepo(repo)?.sharedCaches ?? []);
   }
-  /** Local-merge boards only: after Bakery merges a card into local main it pushes main to origin. Off by default. */
+  /** Local-merge boards only: after Alice merges a card into local main it pushes main to origin. Off by default. */
   setPushMainAfterMerge(id: string, enabled: boolean): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");
     this.db.prepare("UPDATE boards SET pushMainAfterMerge=? WHERE id=?").run(enabled ? 1 : 0, id);
@@ -922,7 +971,7 @@ export class Board {
     return result.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
   }
   /**
-   * Review cards whose pull request Bakery should open without Approve, oldest finished run first. See
+   * Review cards whose pull request Alice should open without Approve, oldest finished run first. See
    * `setAutoPullRequest`. With auto-review on, the agent reviewer's approval opens the PR instead, so this stays out.
    * Only a card's first PR is opened this way: updating a pushed PR still takes Approve (CI fixes excepted, which
    * GitHub sync pushes). Each run is tried once, and a card at most `loopGuards.autoPullRequestPushes` times, so a pre-push
@@ -945,7 +994,7 @@ export class Board {
       !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !attempts.tried && attempts.n < loopGuards.autoPullRequestPushes &&
       !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id);
   }
-  /** Records that Bakery is opening `runId`'s pull request on its own. False when the run is no longer a candidate. */
+  /** Records that Alice is opening `runId`'s pull request on its own. False when the run is no longer a candidate. */
   claimAutoPullRequest(cardId: string, runId: string): boolean {
     if (!this.listAutoPullRequestCandidates().some(item => item.card.id === cardId && item.run.id === runId)) return false;
     return this.db.prepare("INSERT OR IGNORE INTO auto_pull_requests(runId, cardId, at) VALUES (?, ?, ?)").run(runId, cardId, now()).changes === 1;
@@ -961,6 +1010,16 @@ export class Board {
     }
     return waiting.sort((a, b) => a.run.finishedAt!.localeCompare(b.run.finishedAt!));
   }
+  /**
+   * Alice changed a Review card's work itself (brought it up to date with main), so a finished agent review of the
+   * old work no longer counts and the card goes back in the queue. Returns whether an agent review is now waiting.
+   */
+  requeueAutoReview(cardId: string, runId: string): boolean {
+    const card = this.getCard(cardId), run = this.getRun(runId), repoBoard = card && this.boardForRepo(card.repo);
+    if (!repoBoard?.autoReviewEnabled || !run) return false;
+    this.db.prepare("UPDATE auto_review_jobs SET requeued=1 WHERE runId=? AND state!='running'").run(runId);
+    return this.awaitsAutoReview(repoBoard, cardId, run);
+  }
   /** The run finished after auto-review was enabled and nothing (a person, an earlier job) has handled it yet. */
   private awaitsAutoReview(repoBoard: RepoBoard, cardId: string, run: Run): boolean {
     return repoBoard.autoReviewEnabled &&
@@ -969,7 +1028,7 @@ export class Board {
       !this.hasRequestedChanges(cardId, run.id) && !this.hasDraftReviewComments(cardId, run.id);
   }
   /** See `ReviewWait`. Anything this does not recognize as someone else's turn is the person's turn. */
-  private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued">, repoBoard: RepoBoard | undefined, run = this.listRuns(card.id)[0]): ReviewWait | null {
+  private reviewWait(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "startQueuedForSlot">, repoBoard: RepoBoard | undefined, run = this.listRuns(card.id)[0]): ReviewWait | null {
     if (card.status !== "review" || !repoBoard) return null;
     if (run?.status !== "review") return null;
     if (repoBoard.integration === "github-pr") {
@@ -986,7 +1045,7 @@ export class Board {
     return null;
   }
   /** See `ReviewAction`. Mirrors when card details offer Approve or Accept findings. */
-  private reviewAction(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued">, wait: ReviewWait | null, run: Run | undefined): ReviewAction | null {
+  private reviewAction(card: Omit<Card, "reviewWait" | "reviewQueue" | "reviewAction" | "startQueued" | "startQueuedForSlot">, wait: ReviewWait | null, run: Run | undefined): ReviewAction | null {
     if (card.status !== "review" || wait || run?.status !== "review" || run.changedFiles === null) return null;
     if (this.getApproval(card.id) || this.getMergeFailure(card.id)) return null;
     if (run.changedFiles === 0) return "accept_findings";
@@ -997,7 +1056,7 @@ export class Board {
     return "pr_ready";
   }
   /** Records how many files a run changes; see `Run.changedFiles`. */
-  /** What Bakery prepared for opening a run's pull request when the run reached Review (see `Readiness`), as stored JSON. */
+  /** What Alice prepared for opening a run's pull request when the run reached Review (see `Readiness`), as stored JSON. */
   getReadiness(runId: string): string | undefined {
     return (this.db.prepare("SELECT data FROM pr_readiness WHERE runId=?").get(runId) as { data: string } | undefined)?.data;
   }
@@ -1020,14 +1079,14 @@ export class Board {
       const queue = reviewQueues.get(card.repo)!, index = queue.findIndex(item => item.cardId === card.id);
       return index < 0 ? null : { position: index + 1, of: queue.length };
     };
-    const queued = new Set((this.db.prepare("SELECT cardId FROM queued_starts").all() as { cardId: string }[]).map(item => item.cardId));
+    const queued = new Map((this.db.prepare("SELECT cardId, untilSlot FROM queued_starts").all() as { cardId: string; untilSlot: number }[]).map(item => [item.cardId, item.untilSlot === 1]));
     return rows.map(row => {
       const { failedError, failedKind, ...fields } = row;
       const failureSummary = row.status === "failed" ? summarizeFailure({ error: failedError, failureKind: failedKind, prState: row.prState }) : null;
       const card = { ...fields, failureSummary, createdCardIds: row.createdCardIds === null ? null : JSON.parse(row.createdCardIds) as string[], dependsOn: JSON.parse(row.dependsOn) as string[], blocked: row.blocked !== 0, locallyMerged: row.locallyMerged !== 0, planOnly: row.planOnly !== 0 };
       const run = card.status === "review" ? this.listRuns(card.id)[0] : undefined;
       const reviewWait = card.status === "review" ? this.reviewWait(card, boards.get(card.repo), run) : null;
-      return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), reviewAction: this.reviewAction(card, reviewWait, run), startQueued: queued.has(card.id) };
+      return { ...card, reviewWait, reviewQueue: reviewQueue(card, reviewWait), reviewAction: this.reviewAction(card, reviewWait, run), startQueued: queued.has(card.id), startQueuedForSlot: queued.get(card.id) ?? false };
     });
   }
   getAutoReviewJob(runId: string): AutoReviewJob | undefined {
@@ -1135,7 +1194,7 @@ export class Board {
   listCards(repo?: string): Card[] { return this.toCards((repo === undefined
     ? this.db.prepare(`${cardQuery} GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all()
     : this.db.prepare(`${cardQuery} WHERE cards.repo=? GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt DESC, cards.rowid DESC`).all(repo)) as CardRow[]); }
-  /** The commit that put each integrated card on local main: Bakery's merge, or the merge found by reconciliation. */
+  /** The commit that put each integrated card on local main: Alice's merge, or the merge found by reconciliation. */
   listMergeCommits(repo: string): Map<string, string> {
     const rows = this.db.prepare(`SELECT cards.id AS cardId, COALESCE(a.preparedHead, e.mergeCommit) AS mergeCommit FROM cards
       LEFT JOIN approvals a ON a.cardId=cards.id AND a.merged=1 LEFT JOIN external_integrations e ON e.cardId=cards.id
@@ -1193,6 +1252,7 @@ export class Board {
   }
   /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
   createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin; provenance?: CardProvenance;
+    /** Defaults to what the key's prefix implies (see `sourceFromKey`), then `ui` or `api` by origin. */ source?: CardSource;
     /** Makes the card Ready in the same transaction, with this reason in its history. */ ready?: string;
     /** Runs inside the same transaction, after the card exists. If it throws, no card is made. */ inTransaction?: (card: Card) => void }): Card {
     const key = input.idempotencyKey ?? null;
@@ -1203,8 +1263,8 @@ export class Board {
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen, sentinelId, sentinelRunId, findingKey) VALUES (?, ?, ?, ?, 'triage', 'manual', ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1, input.provenance?.sentinelId ?? null, input.provenance?.sentinelRunId ?? null, input.provenance?.findingKey ?? null);
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen, sentinelId, sentinelRunId, findingKey) VALUES (?, ?, ?, ?, 'triage', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, input.source ?? sourceFromKey(key) ?? (input.origin === "ui" ? "ui" : "api"), key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1, input.provenance?.sentinelId ?? null, input.provenance?.sentinelRunId ?? null, input.provenance?.findingKey ?? null);
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);
@@ -1233,7 +1293,7 @@ export class Board {
     const made = new Map<string, string>();
     for (const task of plan.subtasks) {
       made.set(task.id, this.createCard({ title: task.title, body: `${task.body}\n\nPart of the plan from card ${card.id}: ${card.title}`, repo: card.repo,
-        idempotencyKey: `plan:${card.id}:${task.id}`, dependsOn: task.dependsOn.map(dep => made.get(dep)!) }).id);
+        idempotencyKey: `plan:${card.id}:${task.id}`, source: "plan", dependsOn: task.dependsOn.map(dep => made.get(dep)!) }).id);
     }
     this.db.prepare("UPDATE cards SET createdCardIds=? WHERE id=?").run(JSON.stringify([...made.values()]), cardId);
     return this.getCard(cardId)!;
@@ -1523,6 +1583,20 @@ export class Board {
     this.db.prepare("INSERT INTO conflict_hotspot_dismissals(repo, file, lastEventId) VALUES (?, ?, ?) ON CONFLICT(repo, file) DO UPDATE SET lastEventId=excluded.lastEventId").run(repo, file, last.id);
   }
   clearMergeFailure(cardId: string): void { this.db.prepare("DELETE FROM merge_failures WHERE cardId=?").run(cardId); }
+  /**
+   * A card whose parent merged while Alice could not touch its worktree (an agent review or approval in progress)
+   * waits here to be brought up to date with main later. Returns whether the card was not already waiting.
+   */
+  deferDependentUpdate(cardId: string, parentId: string): boolean {
+    const waiting = !!this.db.prepare("SELECT 1 FROM dependent_updates WHERE cardId=?").get(cardId);
+    this.db.prepare("INSERT INTO dependent_updates(cardId, parentId, deferredAt) VALUES (?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET parentId=excluded.parentId").run(cardId, parentId, now());
+    return !waiting;
+  }
+  listDeferredDependentUpdates(): { cardId: string; parentId: string }[] {
+    return this.db.prepare("SELECT cardId, parentId FROM dependent_updates ORDER BY deferredAt, rowid").all() as { cardId: string; parentId: string }[];
+  }
+  hasDeferredDependentUpdate(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM dependent_updates WHERE cardId=?").get(cardId); }
+  clearDeferredDependentUpdate(cardId: string): void { this.db.prepare("DELETE FROM dependent_updates WHERE cardId=?").run(cardId); }
   getApproval(cardId: string): Approval | undefined {
     return this.db.prepare("SELECT * FROM approvals WHERE cardId=? AND merged=0").get(cardId) as Approval | undefined;
   }
@@ -1546,7 +1620,7 @@ export class Board {
       this.db.prepare("INSERT INTO external_integrations(cardId, runId, candidate, mergeCommit, integratedAt) VALUES (?, ?, ?, ?, ?)")
         .run(cardId, runId, candidate, mergeCommit, now());
       this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=?").run(now(), cardId);
-      this.explain(cardId, `Merged outside Bakery; ${mergeCommit.slice(0, 7)} contains this card's work`);
+      this.explain(cardId, `Merged outside Alice; ${mergeCommit.slice(0, 7)} contains this card's work`);
       this.clearMergeFailure(cardId);
       this.db.exec("COMMIT");
       return this.getCard(cardId)!;
@@ -1618,7 +1692,7 @@ export class Board {
       if (repoBoard?.autoPickupEnabled && !isSentinelJob(card) && atRunCapacity(repoBoard, this.runningCount(card.repo)))
         throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (!byPerson && this.atMachineCapacity())
-        throw new RunLimitError(`Bakery is at its limit of ${machineAgentLimit(this.getSettings().maxActiveAgents)} agents at once across all boards`);
+        throw new RunLimitError(`Alice is at its limit of ${machineAgentLimit(this.getSettings().maxActiveAgents)} agents at once across all boards`);
       if (startedBy === "auto" && (card.status !== "ready" || !repoBoard?.autoPickupEnabled ||
         this.autoStartRefusal(repoBoard) || repoBoard.integrationError || this.autoPickupBlocker(repoBoard) ||
         (card.autoRetryAt !== null && card.autoRetryAt > now())))
@@ -1626,10 +1700,12 @@ export class Board {
       const attempt = Number((this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE cardId=?").get(cardId) as { n: number }).n) + 1;
       // Later runs resume the session the card's latest run used, which is a fresh one after a recovery or a narration-free retry.
       const latest = this.db.prepare("SELECT sessionId FROM runs WHERE cardId=? ORDER BY attempt DESC LIMIT 1").get(cardId) as { sessionId: string } | undefined;
-      const id = randomUUID(), sessionId = freshSession || recoveryOf ? `bakery-${cardId}-${attempt}` : latest?.sessionId ?? `bakery-${cardId}`;
+      const id = randomUUID(), sessionId = freshSession || recoveryOf ? `alice-${cardId}-${attempt}` : latest?.sessionId ?? `alice-${cardId}`;
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, recoveryOf, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy, recoveryOf);
       // Any start, manual or automatic, uses up a waiting retry; the retry count stays until a run succeeds.
       this.db.prepare("UPDATE cards SET status='running', autoRetryAt=NULL, updatedAt=? WHERE id=?").run(now(), cardId);
+      // Any run, however started, is the attempt a start waiting for a slot asked for; it must not start another later.
+      this.db.prepare("DELETE FROM queued_starts WHERE cardId=? AND untilSlot=1").run(cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);
       this.db.exec("COMMIT");
       const started = this.getRun(id)!;
@@ -1688,6 +1764,7 @@ export class Board {
       return this.getCard(cardId)!;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  recordSessionFile(id: string, path: string) { this.db.prepare("UPDATE runs SET sessionFile=? WHERE id=?").run(path, id); }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
   append(id: string, chunk: string) {
     // Keep a bounded tail. Store only human-readable text; never raw tool arguments or credentials.
@@ -1695,7 +1772,7 @@ export class Board {
     if (run?.status !== "running") return;
     this.db.prepare("UPDATE runs SET output=? WHERE id=?").run((run.output + chunk).slice(-60000), id);
   }
-  /** `retryable` is false for a run Bakery or the operator ended (stop, timeout, protocol failure), whatever provider error came before. */
+  /** `retryable` is false for a run Alice or the operator ended (stop, timeout, protocol failure), whatever provider error came before. */
   finish(id: string, status: "review" | "failed", error: string | null = null, failureKind: ProviderFailureKind | null = null, retryable = true) {
     const run = this.getRun(id);
     if (!run || run.status !== "running") return;

@@ -2,12 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
-import { AutoReview, promptDiff, reviewerVerdict } from "../server/auto-review.js";
+import { AutoReview, promptDiff, reviewerPrompt, reviewerVerdict } from "../server/auto-review.js";
 import { RunLimitError } from "../server/board.js";
 import { AutoPickup } from "../server/auto-pickup.js";
 import { Worker } from "../server/worker.js";
@@ -19,7 +19,7 @@ const settle = (verdict: string) => [
   JSON.stringify({ type: "agent_settled", aborted: false }), "",
 ].join("\n");
 function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
@@ -33,27 +33,30 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
     const card = board.createCard({ repo, title: "Add a new line", body: "Include a regression test" });
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
-    git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);
     writeFileSync(join(worktree, "README.md"), `original\nnew ${card.id}\n`);
     board.finish(run.id, "review");
+    // The server records this when a run reaches Review; the card's next step depends on it.
+    board.recordChangedFiles(run.id, 1);
     return { card: board.getCard(card.id)!, run: board.getRun(run.id)!, worktree };
   }
   return { dir, repo, data, board, repoBoard, auto, reviewedCard, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test("a Review card is the agent's turn until its auto-review finishes, then yours if it was not merged", async () => {
+test("a Review card is the agent's turn until its auto-review finishes, then yours", async () => {
   const item = fixture('{"verdict":"needs_human","reason":"No regression test"}');
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const { card } = item.reviewedCard();
     assert.equal(card.reviewWait, "agent_review", "queued for the agent before the tick claims it");
     assert.deepEqual(item.board.cardCounts()[item.repo], { reviewWaiting: 1 });
     await item.auto.tick();
     assert.equal(item.board.getCard(card.id)!.reviewWait, null);
+    assert.equal(item.board.getCard(card.id)!.reviewAction, "needs_you", "a hand-off reads as needing you");
     assert.deepEqual(item.board.cardCounts()[item.repo], { review: 1 });
-    item.board.setAutoReview(item.repoBoard.id, false, "");
+    item.board.setAutoReview(item.repoBoard.id, false);
     const manual = item.reviewedCard().card;
     assert.equal(manual.reviewWait, null, "without auto-review every Review card is yours");
   } finally { item.close(); }
@@ -72,32 +75,38 @@ test("strict agent verdict rejects missing settlement, invalid JSON, and ambiguo
   assert.throws(() => reviewerVerdict(settle('{"verdict":"approve","reason":"fine"}').replace('"stopReason":"stop"', '"stopReason":"toolUse"')), /did not settle.*stop reason was "toolUse"/);
 });
 
-test("new opt-in reviews run a separate reviewer and verify before local merge", async () => {
+test("on a local board an agent approval is advice: the card waits in Review for Approve, with the verdict and spend recorded", async () => {
   const item = fixture();
   try {
     const old = item.reviewedCard();
     assert.equal(item.board.listAutoReviewCandidates().length, 0);
-    item.board.setAutoReview(item.repoBoard.id, true, "test -f README.md && printf verified");
-    assert.equal(item.board.listAutoReviewCandidates().length, 0, "old review must not auto-merge");
+    item.board.setAutoReview(item.repoBoard.id, true);
+    assert.equal(item.board.listAutoReviewCandidates().length, 0, "a card already in Review is not reviewed");
     await new Promise(resolve => setTimeout(resolve, 5));
-    const current = item.reviewedCard();
+    const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
     assert.deepEqual(item.board.listAutoReviewCandidates().map(entry => entry.card.id), [current.card.id]);
     await item.auto.tick();
-    assert.equal(item.board.getCard(current.card.id)?.status, "done");
-    assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "merged");
-    assert.equal(item.board.getAutoReviewJob(current.run.id)?.agent, "openai-codex/gpt-5.5");
+    const job = item.board.getAutoReviewJob(current.run.id)!;
+    assert.equal(item.board.getCard(current.card.id)?.status, "review");
+    assert.equal(job.state, "approved");
+    assert.equal(job.details, "Diff is small and correct");
+    assert.equal(item.board.getCard(current.card.id)?.reviewAction, "agent_approved", "an approval reads as approved, not as a problem");
+    assert.equal(item.board.getCard(current.card.id)?.reviewWait, null, "Approve is still yours");
+    assert.equal(git(item.repo, "rev-parse", "main"), before, "nothing merges without a person");
+    assert.equal(job.agent, "openai-codex/gpt-5.5");
     assert.equal(item.board.getCard(current.card.id)?.reviewAgent, "openai-codex/gpt-5.5");
-    assert.equal(item.board.getAutoReviewJob(current.run.id)?.cost, 0.03, "agent review spend is recorded");
-    assert.equal(item.board.getAutoReviewJob(current.run.id)?.inputTokens, 4000);
+    assert.equal(job.cost, 0.03, "agent review spend is recorded");
+    assert.equal(job.inputTokens, 4000);
     assert.equal(item.board.getCard(current.card.id)?.cost, 0.03, "card total includes its agent review");
-    assert.equal(item.board.autoReviewMergesToday(item.repo), 1);
-    assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
     assert.equal(item.board.getCard(old.card.id)?.status, "review");
     await item.auto.tick();
-    assert.equal(item.board.autoReviewMergesToday(item.repo), 1);
+    assert.equal(item.board.listAutoReviewJobs(current.card.id).length, 1, "the same run is not reviewed twice");
+    // Your Approve merges the agent-approved card.
+    const integration = new Integration(item.board, item.data);
+    assert.equal(integration.approve(item.board.getCard(current.card.id)!, integration.review(item.board.getCard(current.card.id)!).fingerprint).status, "done");
+    assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
   } finally { item.close(); }
 });
-
 test("a failed card can be set back to Ready", () => {
   const item = fixture();
   try {
@@ -110,7 +119,7 @@ test("a failed card can be set back to Ready", () => {
   } finally { item.close(); }
 });
 
-test("the global tick reconciles a failed card merged outside Bakery without enabling auto-review", async () => {
+test("the global tick reconciles a failed card merged outside Alice without enabling auto-review", async () => {
   const item = fixture();
   try {
     const { card, run, worktree } = item.reviewedCard();
@@ -125,7 +134,6 @@ test("the global tick reconciles a failed card merged outside Bakery without ena
     await item.auto.tick();
     assert.equal(item.board.getCard(card.id)?.status, "done");
     assert.equal(item.board.wasIntegrated(card.id), true);
-    assert.equal(item.board.autoReviewMergesToday(item.repo), 0);
     const db = new DatabaseSync(join(item.dir, "board.sqlite"));
     try {
       assert.deepEqual({ ...db.prepare("SELECT runId, candidate, mergeCommit FROM external_integrations WHERE cardId=?").get(card.id) as object },
@@ -136,6 +144,24 @@ test("the global tick reconciles a failed card merged outside Bakery without ena
     await item.auto.tick();
     assert.equal(item.board.getCard(card.id)?.status, "ready");
     assert.equal(run.status, "review");
+  } finally { item.close(); }
+});
+
+test("reconciling externally merged cards runs Git without blocking the server, and overlapping calls share one pass", async () => {
+  const item = fixture();
+  try {
+    const { card, worktree } = item.reviewedCard();
+    git(worktree, "add", "README.md");
+    git(worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "external card fix");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "--no-ff", "--no-edit", git(worktree, "rev-parse", "HEAD"));
+    const integration = new Integration(item.board, item.data);
+    let served = false;
+    setImmediate(() => { served = true; });
+    const first = integration.reconcileExternallyMerged(), second = integration.reconcileExternallyMerged();
+    assert.equal(first, second, "a call while a pass runs joins it");
+    await first;
+    assert.equal(served, true, "other work ran while Git did");
+    assert.equal(item.board.wasIntegrated(card.id), true);
   } finally { item.close(); }
 });
 
@@ -179,7 +205,7 @@ test("the global tick ignores ancestry without integration, discarded merges, pe
 test("a run cannot be claimed while agent review is active, but can start after it finishes", async () => {
   const item = fixture();
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     item.board.beginAutoReview(current.card.id, current.run.id);
@@ -194,7 +220,7 @@ test("a run cannot be claimed while agent review is active, but can start after 
 test("card text edits during review leave the candidate for a human", async () => {
   const item = fixture();
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     const script = join(item.dir, "fake-pi");
@@ -208,7 +234,7 @@ test("card text edits during review leave the candidate for a human", async () =
 test("binary changes are never auto-approved without inspectable bytes", async () => {
   const item = fixture();
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     writeFileSync(join(current.worktree, "image.png"), Buffer.from([0, 1, 2, 3]));
@@ -221,7 +247,7 @@ test("binary changes are never auto-approved without inspectable bytes", async (
 test("opening another Board cannot invalidate an active review; explicit restart recovery can", async () => {
   const item = fixture();
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     item.board.beginAutoReview(current.card.id, current.run.id);
@@ -229,7 +255,6 @@ test("opening another Board cannot invalidate an active review; explicit restart
     assert.equal(second.getAutoReviewJob(current.run.id)?.state, "running");
     second.recoverAutoReviews(); // This method is only called by the exclusive-lock server at startup.
     assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "needs_human");
-    assert.throws(() => new Integration(item.board, item.data).approve(current.card, new Integration(item.board, item.data).review(current.card).fingerprint, "auto", () => {}), /no longer active/);
     second.close();
   } finally { item.close(); }
 });
@@ -237,7 +262,7 @@ test("opening another Board cannot invalidate an active review; explicit restart
 test("a review interrupted by a restart is queued again once, then left for a person", async () => {
   const item = fixture();
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     item.board.beginAutoReview(current.card.id, current.run.id);
@@ -267,7 +292,7 @@ test("draining waits for the review in progress and claims no new ones", async (
     // The fake reviewer takes a moment, so the drain starts while it is still running.
     const fake = join(item.dir, "fake-pi");
     writeFileSync(fake, `#!/bin/sh\nsleep 0.5\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const first = item.reviewedCard(), second = item.reviewedCard();
     const ticking = item.auto.tick();
@@ -281,127 +306,25 @@ test("draining waits for the review in progress and claims no new ones", async (
   } finally { item.close(); }
 });
 
-test("unattended merges have no daily cap, and disabling stops new reviews", async () => {
+test("disabling auto-review stops new reviews", async () => {
   const item = fixture();
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const first = item.reviewedCard();
     await item.auto.tick();
-    assert.equal(item.board.getCard(first.card.id)?.status, "done");
-    // A busy day of earlier merges must not hold a card that passed every check in Review.
-    const db = new DatabaseSync(join(item.dir, "board.sqlite"));
-    for (let i = 0; i < 50; i++)
-      db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,finishedAt) VALUES (?,?,'merged',datetime('now'),datetime('now'))").run(first.card.id, `seeded-${i}`);
-    db.close();
-    const next = item.reviewedCard();
-    await item.auto.tick();
-    assert.equal(item.board.getCard(next.card.id)?.status, "done");
-    item.board.setAutoReview(item.repoBoard.id, false, "true");
+    assert.equal(item.board.getAutoReviewJob(first.run.id)?.state, "approved");
+    item.board.setAutoReview(item.repoBoard.id, false);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewEnabled, false);
     item.reviewedCard();
     assert.equal(item.board.listAutoReviewCandidates().length, 0);
   } finally { item.close(); }
 });
-
-test("a board's merge limit leaves the next card for a person before any verification or review tokens are spent", async () => {
-  const item = fixture();
-  try {
-    const marker = join(item.dir, "verified");
-    item.board.setAutoReview(item.repoBoard.id, true, `echo run >> ${marker}`);
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMergeLimit, 0, "no limit by default");
-    assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, -1), /0 \(no limit\) or between 1 and 99/);
-    assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, 1.5), /0 \(no limit\)/);
-    assert.throws(() => item.board.setAutoReviewMergeLimit(item.repoBoard.id, 100), /0 \(no limit\)/);
-    assert.equal(item.board.setAutoReviewMergeLimit(item.repoBoard.id, 1).autoReviewMergeLimit, 1);
-    await new Promise(resolve => setTimeout(resolve, 5));
-    const first = item.reviewedCard();
-    await item.auto.tick();
-    assert.equal(item.board.getCard(first.card.id)?.status, "done");
-    assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMerges, 1);
-    const verifications = readFileSync(marker, "utf8").split("\n").filter(Boolean).length;
-    const next = item.reviewedCard();
-    await item.auto.tick();
-    const job = item.board.getAutoReviewJob(next.run.id)!;
-    assert.equal(item.board.getCard(next.card.id)?.status, "review");
-    assert.equal(job.state, "needs_human");
-    assert.match(job.details, /limit of 1 unattended merges per 24 hours is reached/);
-    assert.equal(job.cost ?? 0, 0, "no reviewer ran");
-    assert.equal(readFileSync(marker, "utf8").split("\n").filter(Boolean).length, verifications, "the verification command did not run");
-    // Raising the limit or removing it does not re-queue a card already left for a person, but a new card merges.
-    item.board.setAutoReviewMergeLimit(item.repoBoard.id, 0);
-    const third = item.reviewedCard();
-    await item.auto.tick();
-    assert.equal(item.board.getCard(third.card.id)?.status, "done");
-  } finally { item.close(); }
-});
-
-test("failing verification leaves the card in Review without calling a model or retrying", async () => {
-  const item = fixture();
-  try {
-    item.board.setAutoReview(item.repoBoard.id, true, "exit 2");
-    await new Promise(resolve => setTimeout(resolve, 5));
-    const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
-    await item.auto.tick();
-    assert.equal(item.board.getCard(current.card.id)?.status, "review");
-    assert.equal(git(item.repo, "rev-parse", "main"), before);
-    assert.equal(item.board.getAutoReviewJob(current.run.id)?.state, "needs_human");
-    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /failed/);
-    assert.equal(item.board.listAutoReviewCandidates().length, 0);
-  } finally { item.close(); }
-});
-
-test("a failing verification command's stdout reaches the card message", async () => {
-  const item = fixture();
-  try {
-    item.board.setAutoReview(item.repoBoard.id, true, "echo 'TS2322: type mismatch in widget.ts'; exit 1");
-    await new Promise(resolve => setTimeout(resolve, 5));
-    const current = item.reviewedCard();
-    await item.auto.tick();
-    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /failed \(1\): TS2322: type mismatch in widget\.ts/);
-  } finally { item.close(); }
-});
-
-test("uncommitted overlapping edits on main stop auto-review before verification or a model call", async () => {
-  const item = fixture();
-  try {
-    const marker = join(item.dir, "verified");
-    item.board.setAutoReview(item.repoBoard.id, true, `touch ${marker}`);
-    await new Promise(resolve => setTimeout(resolve, 5));
-    const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
-    writeFileSync(join(item.repo, "README.md"), "uncommitted main change\n");
-    await item.auto.tick();
-    assert.equal(item.board.getCard(current.card.id)?.status, "review");
-    assert.equal(git(item.repo, "rev-parse", "main"), before);
-    assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "uncommitted main change\n");
-    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /Uncommitted changes on main overlap this card \(README\.md\)/);
-    assert.equal(item.board.getAutoReviewJob(current.run.id)?.inputTokens ?? 0, 0, "no reviewer tokens spent");
-    assert.throws(() => readFileSync(marker), "verification never ran");
-  } finally { item.close(); }
-});
-
-test("verification must pass on the merged result, not just the card branch", async () => {
-  const item = fixture();
-  try {
-    item.board.setAutoReview(item.repoBoard.id, true, "test ! -e blocked.txt");
-    await new Promise(resolve => setTimeout(resolve, 5));
-    const current = item.reviewedCard();
-    writeFileSync(join(item.repo, "blocked.txt"), "new main content\n");
-    git(item.repo, "add", "blocked.txt");
-    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "new main file");
-    const before = git(item.repo, "rev-parse", "main");
-    await item.auto.tick();
-    assert.equal(item.board.getCard(current.card.id)?.status, "review");
-    assert.equal(git(item.repo, "rev-parse", "main"), before);
-    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /merged result/);
-  } finally { item.close(); }
-});
-
 test("agent findings or an ambiguous response fail closed", async () => {
   for (const verdict of ['{"verdict":"needs_human","reason":"Missing test"}', 'I approve']) {
     const item = fixture(verdict);
     try {
-      item.board.setAutoReview(item.repoBoard.id, true, "true");
+      item.board.setAutoReview(item.repoBoard.id, true);
       await new Promise(resolve => setTimeout(resolve, 5));
       const current = item.reviewedCard(), before = git(item.repo, "rev-parse", "main");
       await item.auto.tick();
@@ -412,19 +335,79 @@ test("agent findings or an ambiguous response fail closed", async () => {
   }
 });
 
-test("changing the work during verification blocks auto-merge and restarting does not re-run a reviewer", async () => {
+test("a reviewer that changes the work is left for a person, and restarting does not re-run it", async () => {
   const item = fixture();
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "printf changed >> README.md");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf changed >> README.md\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"Looks fine"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     await item.auto.tick();
-    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /changed during verification/);
+    assert.equal(item.board.getAutoReviewJob(current.run.id)!.details, "Work changed during agent review: README.md");
     assert.equal(item.board.getCard(current.card.id)?.status, "review");
     const reopened = new Board(join(item.dir, "board.sqlite"));
     assert.equal(reopened.getAutoReviewJob(current.run.id)?.state, "needs_human");
     assert.equal(reopened.listAutoReviewCandidates().length, 0);
     reopened.close();
+  } finally { item.close(); }
+});
+test("a reviewer that adds an untracked file Git does not ignore is left for a person", async () => {
+  const item = fixture();
+  try {
+    writeFileSync(join(item.repo, ".gitignore"), "dist/\n"); git(item.repo, "add", ".gitignore");
+    git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "ignore dist");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf notes > review-notes.md\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"Looks fine"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getAutoReviewJob(current.run.id)!.details, "Work changed during agent review: review-notes.md");
+  } finally { item.close(); }
+});
+test("untracked build output Git ignores leaves the verdict standing, but a rewritten tracked file in it does not", async () => {
+  // dist/ is ignored, but the repository commits one generated file in it anyway, as some monorepos do.
+  const cases = [
+    { build: "mkdir -p dist && printf built > dist/app.js && printf '{}' > tsconfig.tsbuildinfo", details: "Build and tests pass" },
+    { build: "printf rebuilt > dist/tokens.js", details: "Work changed during agent review: dist/tokens.js" },
+  ];
+  for (const { build, details } of cases) {
+    const item = fixture();
+    try {
+      mkdirSync(join(item.repo, "dist"));
+      writeFileSync(join(item.repo, ".gitignore"), "dist/\n*.tsbuildinfo\n"); writeFileSync(join(item.repo, "dist", "tokens.js"), "old\n");
+      git(item.repo, "add", ".gitignore"); git(item.repo, "add", "-f", "dist/tokens.js");
+      git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "ignore build output");
+      writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\n${build}\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"Build and tests pass"}')}EVENTS\n`);
+      item.board.setAutoReview(item.repoBoard.id, true);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const current = item.reviewedCard();
+      await item.auto.tick();
+      assert.ok(existsSync(join(current.worktree, build.includes("app.js") ? "dist/app.js" : "dist/tokens.js")), "the fake reviewer ran its build");
+      assert.equal(item.board.getAutoReviewJob(current.run.id)?.details, details);
+    } finally { item.close(); }
+  }
+});
+test("main moving during review is not the work changing: the verdict stands", async () => {
+  const item = fixture();
+  try {
+    // The fake reviewer stands in for another card merging (or an update fast-forwarding main) meanwhile.
+    const mainMoves = `printf other > "${item.repo}/other.txt" && git -C "${item.repo}" add other.txt && git -C "${item.repo}" -c user.name=Test -c user.email=test@example.invalid commit -qm "another card"`;
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\n${mainMoves}\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"Diff is small and correct"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.getAutoReviewJob(current.run.id)?.details, "Diff is small and correct");
+    assert.equal(readFileSync(join(item.repo, "other.txt"), "utf8"), "other");
+  } finally { item.close(); }
+});
+test("an archived board's cards are not reconciled, so a deleted scratch repository logs nothing", () => {
+  const item = fixture();
+  try {
+    const current = item.reviewedCard();
+    assert.deepEqual(item.board.listExternalMergeCandidates().map(entry => entry.card.id), [current.card.id]);
+    item.board.archiveBoard(item.repoBoard.id);
+    assert.deepEqual(item.board.listExternalMergeCandidates(), []);
   } finally { item.close(); }
 });
 
@@ -435,7 +418,7 @@ test("the agent reviewer uses the repository's review model before the prompt", 
     writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
     item.board.updateSettings({ agentModels: { work: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, conflict: { model: "", thinking: "" }, review: { model: "anthropic/claude-haiku-4-5", thinking: "low" }, draft: { model: "", thinking: "" } } });
     item.board.setAgentModels(item.repoBoard.id, { review: { model: "openai-codex/gpt-5.5" } });
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const { run } = item.reviewedCard();
     await item.auto.tick();
@@ -446,7 +429,7 @@ test("the agent reviewer uses the repository's review model before the prompt", 
     // The reviewer is fully capable: it keeps tools, extensions, MCP, skills, and context files like card runs do.
     for (const flag of ["--no-tools", "--no-extensions", "--no-mcp", "--no-skills", "--no-context-files"]) assert.ok(!args.includes(flag), flag);
     assert.match(args[separator + 1], /independent reviewer/);
-    assert.match(args[separator + 1], /verification command .*passed: "true"/);
+    assert.match(args.slice(separator + 1).join("\n"), /Verification is yours to do/);
   } finally { item.close(); }
 });
 
@@ -476,19 +459,20 @@ test("reviewer progress reports elapsed time, turns, tool counts and narration w
   assert.doesNotMatch(text, /SECRET/);
 });
 
-test("on a pull-request board an agent approval is advice when Bakery cannot push: the card stays in Review with the verdict recorded", async () => {
+test("on a pull-request board an agent approval is advice when Alice cannot push: the card stays in Review with the verdict recorded", async () => {
   const item = fixture();
   try {
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
     item.board.setIntegration(item.repoBoard.id, "github-pr");
-    item.board.setAutoReview(item.repoBoard.id, true, "test -f README.md");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     await item.auto.tick();
     const job = item.board.getAutoReviewJob(current.run.id);
     assert.equal(item.board.getCard(current.card.id)?.status, "review");
-    assert.equal(job?.state, "needs_human");
-    assert.equal(job?.details, "Agent approved: Diff is small and correct");
+    assert.equal(job?.state, "approved");
+    assert.equal(job?.details, "Diff is small and correct");
+    assert.equal(item.board.getCard(current.card.id)?.reviewAction, "agent_approved");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n", "local main is untouched");
   } finally { item.close(); }
 });
@@ -498,7 +482,7 @@ test("on a pull-request board an agent approval opens the pull request, and the 
   try {
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
     item.board.setIntegration(item.repoBoard.id, "github-pr");
-    item.board.setAutoReview(item.repoBoard.id, true, "test -f README.md");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const current = item.reviewedCard();
     const opened: { cardId: string; fingerprint: string }[] = [];
@@ -527,7 +511,7 @@ test("on a pull-request board a failed or refused push leaves the agent-approved
   try {
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
     item.board.setIntegration(item.repoBoard.id, "github-pr");
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const failing = item.reviewedCard();
     await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined,
@@ -545,14 +529,14 @@ test("on a pull-request board a failed or refused push leaves the agent-approved
 });
 
 test("an older auto-review table is rebuilt to accept the pull_request state without losing jobs", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-schema-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-review-schema-"));
   try {
     const path = join(dir, "board.sqlite");
     new Board(path).close();
     const db = new DatabaseSync(path);
     try {
       const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE name='auto_review_jobs'").get() as { sql: string }).sql;
-      db.exec(`DROP TABLE auto_review_jobs; ${sql.replace("'merged','pull_request'", "'merged'")}`);
+      db.exec(`DROP TABLE auto_review_jobs; ${sql.replace("'needs_human','approved','merged','pull_request'", "'needs_human','merged'")}`);
       db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,details,startedAt,agent) VALUES ('c','r','merged','kept','2024-01-01','Pi')").run();
       assert.throws(() => db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt) VALUES ('c','r2','pull_request','2024-01-01')").run(), /CHECK/);
     } finally { db.close(); }
@@ -567,12 +551,41 @@ test("an older auto-review table is rebuilt to accept the pull_request state wit
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("old agent approvals stored as needs_human read as approved after the migration; real hand-offs stay", () => {
+  const item = fixture();
+  try {
+    const approved = item.reviewedCard(), handedOff = item.reviewedCard(), unpushed = item.reviewedCard();
+    const path = join(item.dir, "board.sqlite");
+    item.board.close();
+    const db = new DatabaseSync(path);
+    try {
+      // The table as it was before the approved state existed.
+      const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE name='auto_review_jobs'").get() as { sql: string }).sql;
+      db.exec(`DROP TABLE auto_review_jobs; ${sql.replace("'needs_human','approved','merged','pull_request'", "'needs_human','merged','pull_request'")}`);
+      const insert = db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,details,startedAt,finishedAt) VALUES (?,?,'needs_human',?,'2024-01-01','2024-01-01')");
+      insert.run(approved.card.id, approved.run.id, "Agent approved: Diff is small and correct");
+      insert.run(handedOff.card.id, handedOff.run.id, "No regression test");
+      insert.run(unpushed.card.id, unpushed.run.id, "Agent approved, but the push did not reach a pull request: fine");
+      assert.throws(() => db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt) VALUES ('c','r2','approved','2024-01-01')").run(), /CHECK/);
+    } finally { db.close(); }
+    const board = new Board(path);
+    try {
+      assert.equal(board.getAutoReviewJob(approved.run.id)?.state, "approved");
+      assert.equal(board.getAutoReviewJob(approved.run.id)?.details, "Diff is small and correct");
+      assert.equal(board.getCard(approved.card.id)?.reviewAction, "agent_approved");
+      assert.equal(board.getAutoReviewJob(handedOff.run.id)?.state, "needs_human");
+      assert.equal(board.getCard(handedOff.card.id)?.reviewAction, "needs_you");
+      assert.equal(board.getAutoReviewJob(unpushed.run.id)?.state, "needs_human", "an approval that still needs a person stays a hand-off");
+    } finally { board.close(); }
+  } finally { rmSync(item.dir, { recursive: true, force: true }); }
+});
+
 test("queued agent reviews show their place, and a board runs as many at once as its concurrency allows", async () => {
   const item = fixture();
   try {
     const fake = join(item.dir, "fake-pi");
     writeFileSync(fake, `#!/bin/sh\nsleep 0.6\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const cards = [item.reviewedCard(), item.reviewedCard(), item.reviewedCard()].map(entry => entry.card.id);
     assert.deepEqual(cards.map(id => item.board.getCard(id)!.reviewQueue), [1, 2, 3].map(position => ({ position, of: 3 })), "first finished is first in line");
@@ -592,14 +605,31 @@ test("queued agent reviews show their place, and a board runs as many at once as
   } finally { item.close(); }
 });
 
+test("agent reviews take a machine-wide agent slot and wait for one", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"Check manually"}');
+  try {
+    item.board.updateSettings({ maxActiveAgents: 1 });
+    item.board.setAutoReview(item.repoBoard.id, true);
+    item.board.setAutoReviewConcurrency(item.repoBoard.id, 2);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const first = item.reviewedCard(), second = item.reviewedCard();
+    await item.auto.tick();
+    assert.equal(item.board.listAutoReviewJobs(first.card.id).length, 1);
+    assert.equal(item.board.listAutoReviewJobs(second.card.id).length, 0, "the second review waits for the slot");
+    await item.auto.tick();
+    assert.equal(item.board.listAutoReviewJobs(second.card.id).length, 1);
+  } finally { item.close(); }
+});
+
 test("a board's diff limits send big diffs to a person, and 0 turns a limit off", async () => {
   const item = fixture();
   try {
+    item.board.setLimitsEnabled(item.repoBoard.id, true);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxFiles, 40);
     assert.equal(item.board.getBoard(item.repoBoard.id)?.autoReviewMaxPatchChars, 100000);
     assert.throws(() => item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxFiles: -1 }));
     item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxPatchChars: 10 });
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await new Promise(resolve => setTimeout(resolve, 5));
     const tooBig = item.reviewedCard().card;
     await item.auto.tick();
@@ -608,6 +638,39 @@ test("a board's diff limits send big diffs to a person, and 0 turns a limit off"
     const allowed = item.reviewedCard().card;
     await item.auto.tick();
     assert.doesNotMatch(item.board.listAutoReviewJobs(allowed.id)[0].details ?? "", /limit/);
+  } finally { item.close(); }
+});
+
+test("the reviewer prompt has it run checks itself and hand person-only evidence to a person", () => {
+  const text = reviewerPrompt({ title: "Port the feed", body: "Run verify:pr and attach screenshots" }, "DIFF");
+  assert.match(text, /run it and judge the result/);
+  assert.match(text, /Never send the work back only because the implementer did not report running it/);
+  assert.match(text, /answer needs_human and name the check; do not send it back/);
+  assert.match(text, /Card body: Run verify:pr and attach screenshots\n\nDIFF$/);
+  assert.doesNotMatch(text, /verification command/);
+});
+
+test("the reviewer sees the implementer's report and the card's attachments, so attached screenshots count as evidence", async () => {
+  const item = fixture('{"verdict":"needs_human","reason":"Check manually"}');
+  try {
+    const argsFile = join(item.dir, "args.txt");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Check manually"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const card = item.board.createCard({ repo: item.repo, title: "Restyle the palette", body: "Attach dark and light screenshots" });
+    item.board.setStatus(card.id, "ready");
+    const run = item.board.claim(card.id), worktree = join(item.data, "worktrees", card.id);
+    git(item.repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
+    item.board.attach(run.id, process.pid, worktree);
+    writeFileSync(join(worktree, "README.md"), "restyled\n");
+    item.board.recordReport(run.id, "Restyled the palette. Screenshots attached for both themes.");
+    item.board.addAttachment({ id: "shot", cardId: card.id, name: "palette-dark.png", type: "image/png", size: 10 });
+    item.board.finish(run.id, "review");
+    await item.auto.tick();
+    const prompt = readFileSync(argsFile, "utf8");
+    assert.match(prompt, /implementer's report for this run[^\n]*\nRestyled the palette\. Screenshots attached for both themes\./);
+    assert.match(prompt, new RegExp(`- ${item.data}/attachments/${card.id}/[^ ]*palette-dark\\.png \\(palette-dark\\.png, image/png\\)`));
+    assert.match(prompt, /a screenshot that shows what the card asks for is evidence/);
   } finally { item.close(); }
 });
 
@@ -623,7 +686,7 @@ test("the reviewer prompt names the changed files and tells it to run git diff a
 test("auto-review is not stopped by the diff viewer's 200-file cap, but still refuses binary files and symlinks", async () => {
   const item = fixture('{"verdict":"needs_human","reason":"Stop here"}');
   try {
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     item.board.setAutoReviewDiffLimits(item.repoBoard.id, { maxFiles: 0, maxPatchChars: 0 });
     await new Promise(resolve => setTimeout(resolve, 5));
     const many = item.reviewedCard();
@@ -642,7 +705,7 @@ function pullRequestBoard(item: ReturnType<typeof fixture>) {
   item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
   item.board.setIntegration(item.repoBoard.id, "github-pr");
   item.board.setAutoPullRequest(item.repoBoard.id, true);
-  item.board.setAutoReview(item.repoBoard.id, true, "true");
+  item.board.setAutoReview(item.repoBoard.id, true);
 }
 
 test("a reviewer's send-back at the run limit waits for a free slot instead of landing in Review for a person", async () => {
@@ -660,14 +723,13 @@ test("a reviewer's send-back at the run limit waits for a free slot instead of l
     await auto.tick();
     assert.equal(item.board.getCard(current.card.id)!.reviewWait, "rerun_queued");
     assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "automatic pull requests do not take a queued rerun");
-    assert.deepEqual(item.board.listWaitingSendBacks().map(card => card.id), [current.card.id]);
-    const worker = { startSendBack: () => { if (full) return false; started.push(current.card.id); return true; } } as unknown as Worker;
+    assert.deepEqual(item.board.listSlotQueuedStarts().map(entry => entry.card.id), [current.card.id]);
+    const worker = { start: () => { if (full) throw new RunLimitError("at its limit"); started.push(current.card.id); } } as unknown as Worker;
     new AutoPickup(item.board, worker).tick();
     assert.deepEqual(started, [], "still full");
     full = false;
     new AutoPickup(item.board, worker).tick();
     assert.deepEqual(started, [current.card.id]);
-    assert.equal(item.board.listWaitingSendBacks().length, 0);
   } finally { item.close(); }
 });
 
@@ -700,11 +762,11 @@ test("a rerun that cannot start for another reason hands the findings to a perso
       if (where === "reviewer") await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), broken).tick();
       else {
         await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new RunLimitError("full"); }).tick();
-        new AutoPickup(item.board, { startSendBack: broken } as unknown as Worker).tick();
+        new AutoPickup(item.board, { start: broken } as unknown as Worker).tick();
       }
       assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [current.card.id], where);
       assert.match(item.board.autoReviewHandoff(current.run.id) ?? "", /Missing test[\s\S]*README\.md:1/, where);
-      assert.equal(item.board.listWaitingSendBacks().length, 0, where);
+      assert.equal(item.board.listSlotQueuedStarts().length, 0, where);
       assert.equal(item.board.getReviewerChanges(current.run.id).length, 1, "a manual retry still gets the requested fixes");
     } finally { item.close(); }
   }

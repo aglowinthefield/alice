@@ -6,34 +6,18 @@ import { formatCost } from "./usage.js";
 import { RepoBadge } from "./repo-badge.js";
 import { repoName } from "./repo-appearance.js";
 import {
-  needsYourReview,
+  needsYouLabels,
+  reviewOrder,
   reviewWaitText,
+  todaySections,
   type Board,
   type Card,
-  type Status,
 } from "./model.js";
-
-// What each status asks of you. Statuses not listed (Triage, Ready, Archived) stay on their boards.
-const needsYou: Partial<Record<Status, string>> = {
-  review: "Review",
-  failed: "Failed",
-  interrupted: "Interrupted",
-};
-export const needsYouStatuses = Object.keys(needsYou) as Status[];
-const oldestFirst = (a: Card, b: Card) =>
-  a.updatedAt.localeCompare(b.updatedAt);
-
-/**
- * Review cards in the order the queue walks them: the longest-waiting first. Cards an agent, CI or GitHub
- * still has are left out until they need you.
- */
-export const reviewOrder = (cards: Card[]) =>
-  cards.filter(needsYourReview).sort(oldestFirst);
 
 type Props = {
   boards: Board[];
   cards: Card[];
-  /** When you last opened Bakery. Cards finished after it count as new. */
+  /** When you last opened Alice. Cards finished after it count as new. */
   since: string;
   onOpen: (card: Card) => void;
   onReview: () => void;
@@ -48,30 +32,15 @@ export function Today({
   onReview,
   onCapture,
 }: Props) {
-  const attention = cards
-    .filter(
-      (card) =>
-        card.status in needsYou &&
-        (card.status !== "review" || needsYourReview(card)),
-    )
-    .sort(
-      (a, b) =>
-        needsYouStatuses.indexOf(a.status) -
-          needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
-    );
-  const running = cards.filter(
-    (card) =>
-      card.status === "running" ||
-      (card.status === "review" && card.reviewWait),
+  const { attention, approved, running, finished } = todaySections(
+    cards,
+    since,
   );
-  const finished = cards
-    .filter((card) => card.status === "done" && card.updatedAt > since)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const reviews = reviewOrder(cards).length;
   const spent = boards.reduce((sum, board) => sum + (board.cost24h ?? 0), 0);
   return (
     <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10">
-      <div className="mb-2 text-[11px] font-medium uppercase tracking-[.18em] text-muted-foreground">
+      <div className="mb-2 text-sm text-muted-foreground">
         {new Date().toLocaleDateString([], {
           weekday: "long",
           month: "long",
@@ -104,9 +73,19 @@ export function Today({
           cards={attention}
           boards={boards}
           onOpen={onOpen}
-          label={(card) => needsYou[card.status] ?? card.status}
+          label={(card) => needsYouLabels[card.status] ?? card.status}
         />
       </Section>
+      {approved.length > 0 && (
+        <Section title="Agent approved">
+          <CardList
+            cards={approved}
+            boards={boards}
+            onOpen={onOpen}
+            label={() => "Approve"}
+          />
+        </Section>
+      )}
       {running.length > 0 && (
         <Section title="In progress">
           <CardList
@@ -137,10 +116,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   const id = `today-${title.toLowerCase().replace(/\W+/g, "-")}`;
   return (
     <section aria-labelledby={id} className="mt-10">
-      <h2
-        id={id}
-        className="mb-3 text-[11px] font-semibold uppercase tracking-[.18em] text-muted-foreground"
-      >
+      <h2 id={id} className="mb-3 text-sm font-semibold text-muted-foreground">
         {title}
       </h2>
       {children}
@@ -187,7 +163,7 @@ function CardList({
   );
 }
 
-const captureKey = "bakery-capture-board";
+const captureKey = "alice-capture-board";
 
 function Capture({
   boards,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parsePlan } from "../src/plan.js";
 
-const block = (json: string) => `Report\n\n\`\`\`bakery-plan\n${json}\n\`\`\`\n`;
+const block = (json: string) => `Report\n\n\`\`\`alice-plan\n${json}\n\`\`\`\n`;
 
 test("a plan is ordered so dependencies come first", () => {
   const plan = parsePlan(block('[{"id":"b","title":"Wire UI","body":"Use the API","dependsOn":["a"]},{"id":"a","title":"Add API","body":"Endpoint"}]'));

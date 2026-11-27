@@ -4,13 +4,14 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Board, maxAutoPullRequestAttempts, type Card } from "../server/board.js";
+import { Board, type Card } from "../server/board.js";
+import { loopGuards } from "../server/repo-limits.js";
 import { Worker } from "../server/worker.js";
 import { AutoPullRequest } from "../server/auto-pull-request.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 function fixture(mode: "github-pr" | "local" = "github-pr") {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-pr-")), repo = join(dir, "repo"), data = join(dir, "data");
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-pr-")), repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
@@ -90,8 +91,8 @@ test("a card that keeps coming back from a refused push is only tried a few time
       item.board.finish(run.id, "review");
       return item.board.getCard(current.id)!;
     });
-    for (let round = 0; round < maxAutoPullRequestAttempts + 2; round++) await refused.tick();
-    assert.equal(pushes, maxAutoPullRequestAttempts);
+    for (let round = 0; round < loopGuards.autoPullRequestPushes + 2; round++) await refused.tick();
+    assert.equal(pushes, loopGuards.autoPullRequestPushes);
     assert.equal(item.board.getCard(card.id)!.status, "review", "then the card waits for Approve");
   } finally { item.close(); }
 });
@@ -100,7 +101,7 @@ test("with auto-review on, a pull request opens as a draft only after the agent 
   const item = fixture();
   try {
     item.board.setAutoPullRequest(item.repoBoard.id, true);
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await later();
     const card = item.reviewedCard(), run = item.board.listRuns(card.id)[0];
     assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "the reviewer has not looked yet");
@@ -120,7 +121,7 @@ test("with auto-review on, a card the reviewer sent back or approved is not open
   const item = fixture();
   try {
     item.board.setAutoPullRequest(item.repoBoard.id, true);
-    item.board.setAutoReview(item.repoBoard.id, true, "true");
+    item.board.setAutoReview(item.repoBoard.id, true);
     await later();
     const sent = item.reviewedCard(), sentRun = item.board.listRuns(sent.id)[0];
     item.board.beginAutoReview(sent.id, sentRun.id);
@@ -165,7 +166,7 @@ test("shutdown waits for a pending push, and a hook refusal after stopStarts can
     item.board.setAutoPullRequest(item.repoBoard.id, true);
     await later();
     const card = item.reviewedCard();
-    const worker = new Worker(item.board, join(tmpdir(), "bakery-unused-data"), "pi", "");
+    const worker = new Worker(item.board, join(tmpdir(), "alice-unused-data"), "pi", "");
     let release!: () => void, reached!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; }), inPush = new Promise<void>(resolve => { reached = resolve; });
     let startedFixRun: boolean | undefined;

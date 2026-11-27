@@ -12,8 +12,8 @@ test("unattended review is configured per repository, not in global Settings", a
   try {
     const page = await browser.newPage();
     const boards = [
-      { id: "first", repo: "/tmp/first/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: true, autoReviewMergeLimit: 5, verificationCommand: "npm test", autoCollapseEmptySwimlanes: false },
-      { id: "second", repo: "/tmp/second/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: false, autoReviewMergeLimit: 0, verificationCommand: "npm run check", autoCollapseEmptySwimlanes: false },
+      { id: "first", repo: "/tmp/first/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: true, autoCollapseEmptySwimlanes: false },
+      { id: "second", repo: "/tmp/second/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: false, autoCollapseEmptySwimlanes: false },
     ];
     const patches: Record<string, unknown>[] = [];
     await page.route("**/api/**", async route => {
@@ -35,7 +35,6 @@ test("unattended review is configured per repository, not in global Settings", a
     const settingsPage = page.locator("main:visible");
     await settingsPage.getByText("Confirm before starting a run").waitFor();
     assert.equal(await settingsPage.getByText("Unattended review").count(), 0);
-    assert.equal(await settingsPage.getByRole("textbox", { name: "Auto-review verification command" }).count(), 0);
     await page.goBack();
 
     // The edit pencil lives on the open board's heading.
@@ -43,13 +42,10 @@ test("unattended review is configured per repository, not in global Settings", a
     await page.getByRole("button", { name: "Edit /tmp/first/app" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByText("Unattended review").waitFor();
-    assert.equal(await dialog.getByRole("textbox", { name: "Auto-review verification command" }).inputValue(), "npm test");
+    assert.equal(await dialog.getByRole("textbox", { name: /verification command/i }).count(), 0, "no verification command to set");
+    assert.equal(await dialog.getByRole("spinbutton", { name: /merge limit/i }).count(), 0, "nothing merges unattended, so there is no merge limit");
+    await dialog.getByText("Nothing merges into main without you.").waitFor();
     await dialog.getByRole("button", { name: "Disable auto-review" }).waitFor();
-    // The limit is a number field; 0 reads as no limit, and the text follows the board's real value.
-    const limit = dialog.getByRole("spinbutton", { name: "Auto-review merge limit" });
-    assert.equal(await limit.inputValue(), "5");
-    await dialog.getByText("At most 5 merges per 24 hours.").waitFor();
-    assert.equal(await dialog.getByText(/At most 3 merges/).count(), 0);
     assert.equal(await dialog.getByRole("combobox", { name: "Repository root" }).evaluate(input => input === document.activeElement), false,
       "the repository path picker is not focused when editing a repository");
     await page.keyboard.press("Escape");
@@ -57,18 +53,11 @@ test("unattended review is configured per repository, not in global Settings", a
     await page.getByRole("button", { name: "app", exact: true }).nth(1).click();
     await page.getByRole("button", { name: "Kanban" }).last().click();
     await page.getByRole("button", { name: "Edit /tmp/second/app" }).click();
-    assert.equal(await dialog.getByRole("textbox", { name: "Auto-review verification command" }).inputValue(), "npm run check");
-    await dialog.getByRole("button", { name: "Enable auto-review" }).waitFor();
-    assert.equal(await limit.inputValue(), "0");
-    await dialog.getByText("No limit on merges per 24 hours.").waitFor();
-    // The enable confirm quotes the value in the field, saved before the board is enabled.
     const confirms: string[] = [];
     page.on("dialog", async confirm => { confirms.push(confirm.message()); await confirm.accept(); });
-    await limit.fill("2");
-    await dialog.getByText("At most 2 merges per 24 hours.").waitFor();
     await dialog.getByRole("button", { name: "Enable auto-review" }).click();
-    await page.waitForTimeout(200);
-    assert.match(confirms[0] ?? "", /up to 2 local merges per 24 hours/);
-    assert.deepEqual(patches.map(patch => patch.autoReviewMergeLimit ?? (patch.autoReviewEnabled ? "enable" : "other")), [2, "enable"]);
+    await dialog.getByRole("button", { name: "Disable auto-review" }).waitFor();
+    assert.match(confirms[0] ?? "", /Enable agent review for \/tmp\/second\/app\?/);
+    assert.deepEqual(patches, [{ autoReviewEnabled: true }]);
   } finally { await browser.close(); await server.close(); }
 });

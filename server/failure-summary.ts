@@ -11,6 +11,14 @@ const providerSummaries: Record<ProviderFailureKind, string> = {
   unknown: "Provider request failed",
 };
 
+// Runs that ended before the rename say Bakery.
+const RUN_TIMEOUT = /(?:Alice|Bakery) sent SIGTERM: (\d+)-minute run timeout/;
+
+/** True when Alice killed the run at its run timeout (see the worker's `finish` call), not for any other failure. */
+export function isRunTimeout(error: string | null): boolean {
+  return !!error && RUN_TIMEOUT.test(error);
+}
+
 /**
  * A few words on why a Failed card failed, for its board tile. Reads the latest run's error text (see the worker's
  * `finish` calls) and the PR state; the full text stays on the card's details. Null when nothing explains it.
@@ -19,15 +27,16 @@ export function summarizeFailure(input: { error: string | null; failureKind: str
   const { error, failureKind } = input;
   if (isProviderFailureKind(failureKind)) return providerSummaries[failureKind];
   if (!error) return input.prState === "CLOSED" ? "PR closed unmerged" : null;
-  const timeout = error.match(/Bakery sent SIGTERM: (\d+)-minute run timeout/);
+  const timeout = error.match(RUN_TIMEOUT);
   const stuck = error.match(/; stuck in ([\w-]+) for (\d+) min/);
   if (timeout && stuck && Number(stuck[2]) >= 1) return `Timed out: ${stuck[1]} ran ${stuck[2]} min`;
   if (timeout) return `Timed out after ${timeout[1]} min`;
-  if (/Bakery sent SIGTERM: manual stop/.test(error)) return "Stopped by hand";
-  if (/Bakery sent SIGTERM: server received SIGTERM|^Server restarted while this run was active/.test(error)) return "Server restarted mid-run";
+  if (/(?:Alice|Bakery) sent SIGTERM: manual stop/.test(error)) return "Stopped by hand";
+  if (/(?:Alice|Bakery) sent SIGTERM: server received SIGTERM|^Server restarted while this run was active/.test(error)) return "Server restarted mid-run";
   if (/termination source unknown/.test(error)) return "Killed by unknown signal";
   if (error.startsWith("Worktrunk pre-start hooks")) return "Worktree setup failed";
   if (error.startsWith("Pi could not start")) return "Pi could not start";
+  if (error.startsWith("Rebase onto origin/main conflicted")) return "Rebase conflict";
   if (/Provider request failed/.test(error)) return "Provider request failed";
   if (/Invalid Pi event stream/.test(error)) return "Garbled Pi output";
   const exit = error.match(/^Pi exited \((\w+)\)/);

@@ -36,7 +36,7 @@ export class AutoPullRequest {
     }
     await Promise.all(started);
   }
-  /** The card as it is now, or an error saying why Bakery must not push what it drafted. */
+  /** The card as it is now, or an error saying why Alice must not push what it drafted. */
   private refreshed(card: Card, runId: string, optedInAt: string | null | undefined): Card {
     const fresh = this.board.getCard(card.id), run = this.board.listRuns(card.id)[0];
     const current = this.board.boardForRepo(card.repo);
@@ -61,8 +61,8 @@ export class AutoPullRequest {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.board.recordPullRequestError(card.id, `Bakery could not open the pull request automatically: ${message}. Review it and Approve to open it yourself.`);
-      this.board.noteCard(card.id, `Bakery could not open the pull request automatically: ${message}`);
+      this.board.recordPullRequestError(card.id, `Alice could not open the pull request automatically: ${message}. Review it and Approve to open it yourself.`);
+      this.board.noteCard(card.id, `Alice could not open the pull request automatically: ${message}`);
       console.error(`Could not open a pull request automatically for card ${card.id}: ${message}`);
     }
   }

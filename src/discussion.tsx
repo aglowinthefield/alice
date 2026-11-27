@@ -107,7 +107,7 @@ export function DiscussionPanel({
             data-role={item.role}
             className={`chat-entry rounded-md border p-3 ${item.role === "user" ? "ml-8 border-primary/30 bg-primary/10" : item.role === "error" ? "mr-8 border-destructive/30 bg-destructive/10 text-destructive" : "mr-8 border-border bg-accent/10"}`}
           >
-            <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <div className="mb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
               {item.role === "user"
                 ? "You"
                 : item.role === "error"

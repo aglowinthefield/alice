@@ -7,7 +7,7 @@ import { publishChatImages, chatImagePath } from "../server/chat-images.js";
 import { parseMarkdown } from "../src/markdown.js";
 
 test("local raster links become managed inline images; arbitrary bytes and symlinks outside roots stay private", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-images-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-images-"));
   try {
     const file = join(dir, "preview.png");
     const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");

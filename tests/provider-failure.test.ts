@@ -32,3 +32,29 @@ test("other failures keep their own kinds and are not invalid histories", () => 
   for (const [text, kind] of cases) assert.equal(classifyProviderFailure(text), kind, text);
   assert.equal(classifyProviderFailure(null), "unknown");
 });
+
+// What reaches Alice is an error Pi already retried and gave up on, often with no HTTP status at all.
+test("network and gateway errors Pi gives up on are transient even without a status", () => {
+  for (const text of [
+    "Provider request failed (HTTP 502): 502 {\"error\":\"acp-proxy failure: upstream-timeout ETIMEDOUT api.anthropic.com\"}",
+    "Provider request failed: Connection error.",
+    "Provider request failed: terminated",
+    "Provider request failed: other side closed",
+    "Provider request failed: read ECONNRESET",
+    "Provider request failed: write EPIPE",
+    "Provider request failed: Anthropic stream ended before message_stop",
+    "Provider request failed: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}",
+    "Provider request failed: The service is temporarily unavailable",
+    "Provider request failed: Provider returned error",
+  ]) assert.equal(classifyProviderFailure(text), "transient", text);
+  assert.equal(classifyProviderFailure("Provider request failed: Too Many Requests"), "rate-limit");
+});
+
+test("an error code inside an identifier, or a plain rejected request, is not transient", () => {
+  const cases: [string, string][] = [
+    ["Provider request failed: request req_ECONNRESETX rejected", "unknown"],
+    ["Provider request failed (HTTP 400): 400 {\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long\"}}", "invalid-request"],
+  ];
+  for (const [text, kind] of cases) assert.equal(classifyProviderFailure(text), kind, text);
+  assert.equal(classifyProviderFailure(null), "unknown");
+});

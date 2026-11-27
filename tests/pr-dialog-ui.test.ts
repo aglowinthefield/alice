@@ -55,6 +55,46 @@ test("github-pr Approve shows the drafted PR, flags a title the semantic check r
   } finally { await browser.close(); await server.close(); }
 });
 
+test("Approve and update PR pushes to the open PR without asking first", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const fingerprint = "b".repeat(64);
+    const sent: { path: string; body: unknown }[] = [], dialogs: string[] = [];
+    // Playwright dismisses a confirm nobody handles, which would cancel the approval.
+    page.on("dialog", dialog => { dialogs.push(dialog.message()); void dialog.dismiss(); });
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname, method = route.request().method();
+      if (method === "POST") sent.push({ path, body: route.request().postDataJSON() });
+      const data: Record<string, unknown> = {
+        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration: "github-pr", remoteUrl: "https://github.com/acme/widgets", autoCollapseEmptySwimlanes: false }],
+        "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
+        "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "Card body", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, prNumber: 39, prState: "OPEN", prUrl: "https://github.com/acme/widgets/pull/39" }],
+        "/api/boards/board/conflicts": [],
+        "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 2, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],
+        "/api/boards/board/cards/card/approval": { pending: false },
+        "/api/boards/board/cards/card/comments": [],
+        "/api/boards/board/cards/card/auto-review": [],
+        "/api/boards/board/cards/card/review": { fingerprint, files: [{ path: "a.ts", patch: "@@ -0,0 +1 @@\n+a\n" }] },
+        "/api/boards/board/cards/card/approve": { id: "card" },
+      };
+      if (!(path in data)) return route.fulfill({ json: [] });
+      await route.fulfill({ json: data[path] });
+    });
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    await page.getByRole("button", { name: /Review card/ }).click();
+    await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
+    await page.getByText("Changed files (1)").waitFor();
+    const approved = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/approve"));
+    await page.getByRole("button", { name: "Approve and update PR #39" }).click();
+    await approved;
+    assert.deepEqual(dialogs, []);
+    assert.deepEqual(sent.find(item => item.path.endsWith("/approve"))?.body, { fingerprint });
+  } finally { await browser.close(); await server.close(); }
+});
+
 test("the PR dialog shows the push's live hook output, then the refused push's error with its line breaks", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await server.listen();
@@ -68,7 +108,7 @@ test("the PR dialog shows the push's live hook output, then the refused push's e
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/push-progress")) return route.fulfill({ json: push });
       if (path.endsWith("/approve")) {
-        push = { step: "Pushing bakery/card (the repository's pre-push hooks run first)", log: ["==> knip: Unused files", "Unused exports (1)"], startedAt: new Date().toISOString(), finishedAt: null, error: null };
+        push = { step: "Pushing alice/card (the repository's pre-push hooks run first)", log: ["==> knip: Unused files", "Unused exports (1)"], startedAt: new Date().toISOString(), finishedAt: null, error: null };
         await approveHeld;
         return route.fulfill({ status: 400, json: { error: "push failed: the repository's pre-push hook refused it.\n\nUnused exports (1)\ncountryCode  placeEvidence.ts:79:17" } });
       }
@@ -91,7 +131,7 @@ test("the PR dialog shows the push's live hook output, then the refused push's e
     await page.getByRole("button", { name: "Approve and open PR" }).click();
     const dialog = page.getByRole("dialog", { name: "Open pull request" });
     await dialog.getByRole("button", { name: "Approve and open PR" }).click();
-    await dialog.getByText("Pushing bakery/card (the repository's pre-push hooks run first)").waitFor();
+    await dialog.getByText("Pushing alice/card (the repository's pre-push hooks run first)").waitFor();
     await dialog.getByText(/==> knip: Unused files\nUnused exports \(1\)/).waitFor();
     push = { ...(push as object), finishedAt: new Date().toISOString(), error: "push failed" };
     releaseApprove();

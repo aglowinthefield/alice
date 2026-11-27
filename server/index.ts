@@ -1,5 +1,8 @@
+// First, so every module below sees ALICE_* settings filled from BAKERY_* ones.
+import { databaseFile, dataDir as defaultDataDir } from "./legacy-names.js";
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { featureOffMessage, type Feature } from "../src/features.js";
+import { readyFlags } from "../src/card-lint.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -8,13 +11,14 @@ import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, RunLimitError, isSentinelJob, parsePriority, type Card } from "./board.js";
+import { Board, isSentinelJob, parseCardSource, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
+import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
-import { Integration, IntegrationConflictError, PushHookError } from "./integration.js";
+import { CommitHookError, Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
-import { AutoReview } from "./auto-review.js";
+import { AutoReview, sendBackReason } from "./auto-review.js";
 import { AutoPickup } from "./auto-pickup.js";
 import { AutoPullRequest } from "./auto-pull-request.js";
 import { discuss, discussionPrompt } from "./discuss.js";
@@ -36,14 +40,15 @@ import { parseDiff } from "../src/diff-lines.js";
 import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
+import { PushNotifications } from "./push.js";
 import { Telemetry, doctorCheck, errorType, runOutcome } from "./telemetry.js";
 
 // The Logs view reads this process's console output from here.
 const logs = new LogBuffer();
 logs.captureConsole();
 
-const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
-logs.persist(join(dataDir, "logs", "bakery.log"));
+const dataDir = defaultDataDir();
+logs.persist(join(dataDir, "logs", "alice.log"));
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 chmodSync(dataDir, 0o700);
 // Exclusive ownership of the local board; a lock left by a dead server is taken over.
@@ -51,25 +56,25 @@ const lockPath = join(dataDir, "server.lock");
 const lock = acquireLock(lockPath);
 if (promoteStagedUi(process.cwd())) console.log("Serving the UI built by the last update.");
 let board: Board;
-try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
+try { board = new Board(databaseFile(dataDir)); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
-const piBin = process.env.BAKERY_PI_BIN ?? "pi";
+const piBin = process.env.ALICE_PI_BIN ?? "pi";
 /** Cards whose discussion reply is being written; one at a time per card. */
 const discussing = new Set<string>();
-// Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
-const port = Number(process.env.BAKERY_PORT ?? 4317);
-const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
-// The chat agent drives the board through bakery-cli, so it needs an address this server answers on.
+// Worktrunk hooks run in new card worktrees when `wt` is installed. Set ALICE_WT_BIN="" to turn them off.
+const port = Number(process.env.ALICE_PORT ?? 4317);
+const bindHost = process.env.ALICE_HOST || "127.0.0.1";
+// The chat agent drives the board through alice, so it needs an address this server answers on.
 const cliHost = bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bindHost;
 const chats = new Chats(board, {
-  piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
-  env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
+  piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "alice.mjs")}`,
+  env: { ...process.env, ALICE_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, ALICE_ALLOW_REMOTE: "1" },
   topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
 });
 // Work agents save screenshots and other evidence as card attachments through the CLI, which finds this server through its environment.
-const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt", {
-  cli: join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs"),
-  env: { BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
+const worker = new Worker(board, dataDir, piBin, process.env.ALICE_WT_BIN ?? "wt", {
+  cli: join(import.meta.dirname, "..", "scripts", "alice.mjs"),
+  env: { ALICE_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, ALICE_ALLOW_REMOTE: "1" },
 });
 const integration = new Integration(board, dataDir);
 // github-pr boards: the PR draft and the repository's hooks run when a run reaches Review, so Approve only pushes.
@@ -93,7 +98,7 @@ board.onRun((event, run) => {
   if (card) integration.recordChangedFiles(card);
   if (card) setImmediate(() => readiness.prepare(board.getCard(card.id) ?? card));
 });
-// Review cards whose readiness a restart interrupted, or that reached Review before Bakery prepared it.
+// Review cards whose readiness a restart interrupted, or that reached Review before Alice prepared it.
 setImmediate(() => { for (const card of board.listCards().filter(item => item.status === "review")) readiness.prepare(card); });
 // Runs that reached Review before the count was kept; one at a time so a big backlog does not hold the server up.
 void (async () => {
@@ -116,7 +121,7 @@ async function pushDrafted(card: Card, fingerprint: string, draft: { title: stri
   return opened;
 }
 // On a github-pr board an agent approval opens the PR (drafted like the Approve dialog's), and the card waits on GitHub.
-const autoReview = new AutoReview(board, integration, piBin, card => { if (!worker.startSendBack(card)) throw new RunLimitError("Repository is at its run limit, or Bakery is restarting"); },
+const autoReview = new AutoReview(board, integration, piBin, card => worker.start(card, "manual", sendBackReason),
   async (card, fingerprint) => {
     const draft = await draftForPullRequest(card, fingerprint, "Agent approved, but the pull request draft needs a person");
     // Drafting can take minutes; turning auto-review off meanwhile still stops the push, and a link to an external PR does too.
@@ -141,39 +146,39 @@ const version = (() => {
   try { [commit, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
   return { version: packageVersion, commit, date };
 })();
-// Usage telemetry is off unless BAKERY_TELEMETRY_ENDPOINT is set and the operator turns it on in Settings. See docs/telemetry.md.
-const telemetry = new Telemetry({ endpoint: process.env.BAKERY_TELEMETRY_ENDPOINT, enabled: () => board.getSettings().telemetryEnabled, dataDir, version: version.version });
+// Usage telemetry is off unless ALICE_TELEMETRY_ENDPOINT is set and the operator turns it on in Settings. See docs/telemetry.md.
+const telemetry = new Telemetry({ endpoint: process.env.ALICE_TELEMETRY_ENDPOINT, enabled: () => board.getSettings().telemetryEnabled, dataDir, version: version.version });
 board.onRun((event, run) => {
-  if (event === "started") { telemetry.count("bakery.runs.started"); return; }
+  if (event === "started") { telemetry.count("alice.runs.started"); return; }
   const outcome = runOutcome(run);
   if (outcome) telemetry.count(outcome);
 });
-integration.onDelivered = kind => telemetry.count(kind === "merge" ? "bakery.merges" : "bakery.pull_requests.opened");
+integration.onDelivered = kind => telemetry.count(kind === "merge" ? "alice.merges" : "alice.pull_requests.opened");
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;
-// github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
-const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
+// Browser notifications through Web Push, for browsers that turned them on in Settings. See server/push.ts.
+const push = new PushNotifications(board, board.sqlite, dataDir);
+// github-pr boards: `gh` resolves from PATH unless ALICE_GH_BIN names it. ALICE_GITHUB_SYNC_MS sets the per-board interval.
+const github = new GitHub(process.env.ALICE_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
 const sentinelStore = new SentinelStore(board.sqlite);
 const prLocks = new PrLocks(sentinelStore, github);
-const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
+const githubSync = new GitHubSync(board, dataDir, github, process.env.ALICE_WT_BIN ?? "wt", Number(process.env.ALICE_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
+githubSync.onMerged = cardId => integration.updateDependents(cardId);
 // Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
 const features = board.features;
-/** Routes that belong to one optional feature; with it off they are refused before any handler runs. */
-const featureRoutes: [Feature, RegExp][] = [
-  ["sentinels", /^\/api\/(boards\/[\w-]+\/sentinels|sentinels\/[\w-]+(\/(runs|run))?)$/],
-  ["pullRequests", /^\/api\/boards\/[\w-]+\/(pull-requests(\/\d{1,9}\/merge)?|sync|local-merges|main\/reset|cards\/[\w-]+\/(pull-request|publish|pr-draft))$/],
-];
-// Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
-// BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
-const sentinelsOn = board.features.sentinels && process.env.BAKERY_SENTINEL !== "0";
+/** The machine-wide agent limit in force and how many agents run now, for Settings and the CLI. */
+const agentSlots = () => { const { limit, active } = board.machineCapacity(); return { activeAgentsLimit: limit, activeAgents: active }; };
+// Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. ALICE_SENTINEL=0 turns it off;
+// ALICE_OWNER names the PR author it acts for (default: the signed-in `gh` user).
+const sentinelsOn = board.features.sentinels && process.env.ALICE_SENTINEL !== "0";
 const runLocks = new RunLocks(board, prLocks, sentinelStore, sentinelsOn);
-// Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or BAKERY_DISCORD_WEBHOOK_URL when Settings has none.
-new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.BAKERY_DISCORD_WEBHOOK_URL);
-const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
-  card => worker.start(card, "manual", "by Bakery's sentinel"), 15_000, sentinelsOn);
+// Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or ALICE_DISCORD_WEBHOOK_URL when Settings has none.
+new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.ALICE_DISCORD_WEBHOOK_URL);
+const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.ALICE_OWNER, Number(process.env.ALICE_SENTINEL_MS) || 5 * 60_000, 60_000,
+  card => worker.start(card, "manual", "by Alice's sentinel"), 15_000, sentinelsOn);
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -183,7 +188,8 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
   try {
     const pushed = await push();
     // Pushed after all (the operator fixed it by hand, say): an earlier refusal still waiting for a slot is stale.
-    if (board.getCiFeedback(card.id)?.source === "push") board.clearCiFeedback(card.id);
+    const waiting = board.getCiFeedback(card.id)?.source;
+    if (waiting === "push" || waiting === "commit") board.clearCiFeedback(card.id);
     return pushed;
   }
   catch (error) {
@@ -191,25 +197,21 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
     let started: boolean;
     try { started = sendBackHookFailure(card, error); }
     catch (startError) {
-      throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
+      throw new Error(`${error.message}\n\nAlice could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
     }
     if (!started) {
-      board.noteCard(card.id, "The pre-push hook refused the push. Its output goes to the agent once a run can start (the repository is at its run limit, or Bakery is restarting)");
-      throw new Error(`${error.message}\n\nBakery cannot start a run yet (the repository is at its run limit, or Bakery is restarting), so it sends this to the agent as soon as one can start.`);
+      board.noteCard(card.id, "The pre-push hook refused the push. Its output goes to the agent once a run can start (the repository is at its run limit, or Alice is restarting)");
+      throw new Error(`${error.message}\n\nAlice cannot start a run yet (the repository is at its run limit, or Alice is restarting), so it sends this to the agent as soon as one can start.`);
     }
     return board.getCard(card.id)!;
   }
 }
 /** Keeps a refused hook's output for the card's next run and starts it; false when no run can start yet. */
-function sendBackHookFailure(card: Card, error: PushHookError): boolean {
-  board.recordPushFailure(card.id, error.sha, error.output);
-  const previous = board.listRuns(card.id)[0];
-  if (!worker.startHookFix(board.getCard(card.id)!)) return false;
-  if (previous) board.append(previous.id, `\n[Bakery] The pre-push hook refused the push. Sent back to the agent with its output.\n`);
-  return true;
+function sendBackHookFailure(card: Card, error: PushHookError | CommitHookError): boolean {
+  return error instanceof PushHookError ? worker.sendBackHookFailure(card, "push", error.sha, error.output) : worker.sendBackHookFailure(card, "commit", "", error.output);
 }
-// Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
-const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+// Remote hosting: ALICE_HOST sets the bind address; ALICE_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
+const extraHosts = (process.env.ALICE_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
 let modelCache: { models: string[]; at: number } | undefined, modelRequest: Promise<{ models: string[]; error?: string }> | undefined;
@@ -226,7 +228,7 @@ function listModels(): Promise<{ models: string[]; error?: string }> {
 }
 /** Every error response is counted here, once: a caught exception by its class name, an explicit one by its status. */
 function send(res: ServerResponse, status: number, payload: unknown, errorClass?: string) {
-  if (status >= 400) telemetry.count("bakery.server.errors", { "error.type": errorClass ?? `Http${status}` });
+  if (status >= 400) telemetry.count("alice.server.errors", { "error.type": errorClass ?? `Http${status}` });
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.end(JSON.stringify(payload));
 }
@@ -271,15 +273,34 @@ function extraOrigin(origin: string): boolean {
 const server = createServer(async (req, res) => {
   try {
     const host = req.headers.host?.split(":")[0];
-    if (host !== "127.0.0.1" && host !== "localhost" && host !== "bakery.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "alice.localhost" && host !== "bakery.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (req.method !== "GET") {
       const origin = req.headers.origin;
       // The dev proxy preserves the public Host, which can differ from the internal listening port.
-      if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
+      if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://alice.localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
-    const disabled = featureRoutes.find(([feature, pattern]) => !features[feature] && pattern.test(path));
-    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled[0], error: featureOffMessage(disabled[0]) }); return; }
+    // Match gated paths before checking methods, then reuse these captures in the handlers.
+    const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);
+    const sentinelRoute = path.match(/^\/api\/sentinels\/([\w-]+)(?:\/(runs|run))?$/);
+    const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
+    const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
+    const syncRoute = path.match(/^\/api\/boards\/([\w-]+)\/sync$/);
+    const localMergesRoute = path.match(/^\/api\/boards\/([\w-]+)\/local-merges$/);
+    const mainResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/main\/reset$/);
+    const cardRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|(?<pullRequestAction>pull-request|publish|pr-draft)|accept-findings|create-plan|close|discussion|history|ready-check))?)?$/);
+    const disabled: Feature | undefined =
+      !features.sentinels && (sentinelsRoute || sentinelRoute) ? "sentinels" :
+      !features.pullRequests && (pullMergeRoute || pullsRoute || syncRoute || localMergesRoute || mainResetRoute || cardRoute?.groups?.pullRequestAction) ? "pullRequests" :
+      undefined;
+    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled, error: featureOffMessage(disabled) }); return; }
+    // Prometheus metrics for the operator's own monitoring; off unless ALICE_METRICS=1. See docs/metrics.md.
+    if (path === "/metrics" && req.method === "GET") {
+      if (process.env.ALICE_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set ALICE_METRICS=1 to serve them." }); return; }
+      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount }, version.version));
+      return;
+    }
     if (path === "/api/status" && req.method === "GET") {
       // The cards behind the runs still going, so the update notice can say what it is waiting for.
       const cardIds = new Set<string>();
@@ -288,9 +309,12 @@ const server = createServer(async (req, res) => {
         for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], ...agentSlots(), draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
       return;
     }
+    if (path === "/api/push/key" && req.method === "GET") { send(res, 200, { publicKey: push.publicKey() }); return; }
+    if (path === "/api/push/subscriptions" && req.method === "POST") { push.subscribe(await body(req)); send(res, 201, { ok: true }); return; }
+    if (path === "/api/push/subscriptions" && req.method === "DELETE") { push.unsubscribe((await body(req)).endpoint); send(res, 200, { ok: true }); return; }
     if (path === "/api/update" && req.method === "POST") {
       if (!updates) throw new Error("Only a server started with npm start installs updates");
       void updates.apply();
@@ -302,16 +326,16 @@ const server = createServer(async (req, res) => {
       send(res, 200, { startedAt: logs.startedAt, entries: logs.since(after) }); return;
     }
     // telemetryAvailable is false without an endpoint, and then the UI hides the toggle.
-    if (path === "/api/settings" && req.method === "GET") { send(res, 200, { ...board.getSettings(), telemetryAvailable: telemetry.available }); return; }
-    // `bakery-cli doctor` runs in another process, so it reports its failed check names here. Unknown names are ignored.
+    if (path === "/api/settings" && req.method === "GET") { send(res, 200, { ...board.getSettings(), telemetryAvailable: telemetry.available, ...agentSlots() }); return; }
+    // `alice doctor` runs in another process, so it reports its failed check names here. Unknown names are ignored.
     if (path === "/api/telemetry/doctor" && req.method === "POST") {
       const { checks } = await body(req);
-      if (Array.isArray(checks)) for (const name of checks.slice(0, 50)) { const check = doctorCheck(name); if (check) telemetry.count("bakery.doctor.failures", { "doctor.check": check }); }
+      if (Array.isArray(checks)) for (const name of checks.slice(0, 50)) { const check = doctorCheck(name); if (check) telemetry.count("alice.doctor.failures", { "doctor.check": check }); }
       send(res, 202, { ok: true }); return;
     }
     if (path === "/api/settings" && req.method === "PATCH") {
       const input = await body(req);
-      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input) && !("telemetryEnabled" in input)) throw new Error("Specify a setting to update");
+      if (!("confirmRunStart" in input) && !("notifyOnReview" in input) && !("cardDetailsLayout" in input) && !("theme" in input) && !("density" in input) && !("showCardModels" in input) && !("agentModels" in input) && !("discordWebhookUrl" in input) && !("telemetryEnabled" in input) && !("maxActiveAgents" in input)) throw new Error("Specify a setting to update");
       if ("confirmRunStart" in input && typeof input.confirmRunStart !== "boolean") throw new Error("confirmRunStart must be a boolean");
       if ("notifyOnReview" in input && typeof input.notifyOnReview !== "boolean") throw new Error("notifyOnReview must be a boolean");
       if ("cardDetailsLayout" in input && input.cardDetailsLayout !== "dialog" && input.cardDetailsLayout !== "side") throw new Error("cardDetailsLayout must be dialog or side");
@@ -320,9 +344,10 @@ const server = createServer(async (req, res) => {
       if ("discordWebhookUrl" in input && (typeof input.discordWebhookUrl !== "string" || (input.discordWebhookUrl !== "" && !isDiscordWebhookUrl(input.discordWebhookUrl)))) throw new Error("discordWebhookUrl must be empty or a https://discord.com/api/webhooks/ URL");
       if ("showCardModels" in input && typeof input.showCardModels !== "boolean") throw new Error("showCardModels must be a boolean");
       if ("telemetryEnabled" in input && typeof input.telemetryEnabled !== "boolean") throw new Error("telemetryEnabled must be a boolean");
+      if ("maxActiveAgents" in input && !Number.isSafeInteger(input.maxActiveAgents)) throw new Error("maxActiveAgents must be an integer, 0 for automatic");
       // Turning it off forgets what was gathered, so turning it on again starts from zero.
       if (input.telemetryEnabled === false) telemetry.discard();
-      if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs BAKERY_TELEMETRY_ENDPOINT to be set");
+      if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs ALICE_TELEMETRY_ENDPOINT to be set");
       send(res, 200, { ...board.updateSettings({
         telemetryEnabled: "telemetryEnabled" in input ? input.telemetryEnabled as boolean : undefined,
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
@@ -333,7 +358,8 @@ const server = createServer(async (req, res) => {
         showCardModels: "showCardModels" in input ? input.showCardModels as boolean : undefined,
         agentModels: "agentModels" in input ? validateAgentModels(input.agentModels) : undefined,
         discordWebhookUrl: "discordWebhookUrl" in input ? input.discordWebhookUrl as string : undefined,
-      }), telemetryAvailable: telemetry.available }); return;
+        maxActiveAgents: "maxActiveAgents" in input ? input.maxActiveAgents as number : undefined,
+      }), telemetryAvailable: telemetry.available, ...agentSlots() }); return;
     }
     if (path === "/api/models" && req.method === "GET") { send(res, 200, await listModels()); return; }
     if (path === "/api/path-suggestions" && req.method === "GET") {
@@ -394,7 +420,6 @@ const server = createServer(async (req, res) => {
       if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
-    const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
     if (pullMergeRoute && req.method === "POST") {
       const repoBoard = board.getBoard(pullMergeRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -402,7 +427,6 @@ const server = createServer(async (req, res) => {
       await github.comment(boardGithubRepo(repoBoard), Number(pullMergeRoute[2]), "/trunk merge");
       send(res, 200, { ok: true }); return;
     }
-    const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
     if (pullsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(pullsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -424,7 +448,6 @@ const server = createServer(async (req, res) => {
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.resetAutoPickupLimit(repoBoard.id)); return;
     }
-    const syncRoute = path.match(/^\/api\/boards\/([\w-]+)\/sync$/);
     if (syncRoute && req.method === "POST") {
       const repoBoard = board.getBoard(syncRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -483,34 +506,33 @@ const server = createServer(async (req, res) => {
         if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
         send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
-      if ("autoReviewMergeLimit" in input) {
-        if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewMergeLimit)) throw new Error("Update autoReviewMergeLimit as an integer (0 for no limit), separately from other board settings");
-        send(res, 200, board.setAutoReviewMergeLimit(repoBoard.id, Number(input.autoReviewMergeLimit))); return;
-      }
       if ("autoReviewMaxFiles" in input || "autoReviewMaxPatchChars" in input) {
         const keys = Object.keys(input);
         if (keys.some(key => key !== "autoReviewMaxFiles" && key !== "autoReviewMaxPatchChars") || [input.autoReviewMaxFiles, input.autoReviewMaxPatchChars].some(value => value !== undefined && !Number.isSafeInteger(value))) throw new Error("Update autoReviewMaxFiles and autoReviewMaxPatchChars as integers (0 for no limit), separately from other board settings");
         send(res, 200, board.setAutoReviewDiffLimits(repoBoard.id, { maxFiles: input.autoReviewMaxFiles as number | undefined, maxPatchChars: input.autoReviewMaxPatchChars as number | undefined })); return;
       }
+      if ("limitsEnabled" in input) {
+        if (Object.keys(input).length !== 1 || typeof input.limitsEnabled !== "boolean") throw new Error("Update limitsEnabled as a boolean, separately from other board settings");
+        send(res, 200, board.setLimitsEnabled(repoBoard.id, input.limitsEnabled)); return;
+      }
       if ("autoReviewConcurrency" in input) {
         if (Object.keys(input).length !== 1 || !Number.isSafeInteger(input.autoReviewConcurrency)) throw new Error("Update autoReviewConcurrency as an integer from 1 to 4, separately from other board settings");
         send(res, 200, board.setAutoReviewConcurrency(repoBoard.id, Number(input.autoReviewConcurrency))); return;
       }
-      if ("autoReviewEnabled" in input || "verificationCommand" in input) {
-        if (typeof input.autoReviewEnabled !== "boolean" || typeof input.verificationCommand !== "string") throw new Error("Specify autoReviewEnabled and verificationCommand together");
-        send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled, input.verificationCommand)); return;
+      if ("autoReviewEnabled" in input) {
+        // Older clients still send the removed verificationCommand alongside; it is ignored.
+        if (Object.keys(input).some(key => key !== "autoReviewEnabled" && key !== "verificationCommand") || typeof input.autoReviewEnabled !== "boolean") throw new Error("Update autoReviewEnabled as a boolean, separately from other board settings");
+        send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled)); return;
       }
       if (typeof input.autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
       send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;
     }
-    // Done cards Bakery merged into local main whose work is not on origin/main, offered as "Publish as PR".
-    const localMergesRoute = path.match(/^\/api\/boards\/([\w-]+)\/local-merges$/);
+    // Done cards Alice merged into local main whose work is not on origin/main, offered as "Publish as PR".
     if (localMergesRoute && req.method === "GET") {
       const repoBoard = board.getBoard(localMergesRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, await integration.localMerges(repoBoard.repo)); return;
     }
-    const mainResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/main\/reset$/);
     if (mainResetRoute && req.method === "POST") {
       const repoBoard = board.getBoard(mainResetRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -663,19 +685,17 @@ const server = createServer(async (req, res) => {
       }
     }
     // Sentinels are monitors, not cards: they have their own list, runs, pause/resume and run-now.
-    const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);
     if (sentinelsRoute && req.method === "GET") {
       const repoBoard = board.getBoard(sentinelsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, sentinel.describe(repoBoard.id)); return;
     }
-    const sentinelRoute = path.match(/^\/api\/sentinels\/([\w-]+)(?:\/(runs|run))?$/);
     if (sentinelRoute) {
       const record = sentinelStore.getSentinel(sentinelRoute[1]), action = sentinelRoute[2];
       if (!record) { send(res, 404, { error: "Sentinel not found" }); return; }
       if (req.method === "GET" && action === "runs") { send(res, 200, sentinelStore.listRuns(record.id, 50)); return; }
       if (req.method === "POST" && action === "run") {
-        if (!sentinel.active) { send(res, 409, { error: "Sentinels are turned off (BAKERY_SENTINEL=0)" }); return; }
+        if (!sentinel.active) { send(res, 409, { error: "Sentinels are turned off (ALICE_SENTINEL=0)" }); return; }
         sentinelStore.runSoon(record.id); void sentinel.dispatchDue(); send(res, 202, sentinelStore.getSentinel(record.id)); return;
       }
       if (req.method === "PATCH" && !action) {
@@ -689,18 +709,17 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === "GET" && !action) { send(res, 200, record); return; }
     }
-    const route = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|pull-request|publish|pr-draft|accept-findings|create-plan|close|discussion|history))?)?$/);
-    if (route) {
-      const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
+    if (cardRoute) {
+      const repoBoard = board.getBoard(cardRoute[1]), id = cardRoute[2], action = cardRoute[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!id) {
         if (req.method === "GET") { send(res, 200, worker.withLive(originMain.annotate(repoBoard, board.listCards(repoBoard.repo)))); return; }
         if (req.method === "POST") {
-          const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey);
+          const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey), source = parseCardSource(input.source);
           // A repeated key returns the board's existing card unchanged, whatever its status.
           const existing = key === null ? undefined : board.getCardByIdempotencyKey(repoBoard.repo, key);
           if (existing) { send(res, 200, existing); return; }
-          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api" })); return;
+          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api", source })); return;
         }
       } else {
         const item = board.getCard(id);
@@ -708,7 +727,7 @@ const server = createServer(async (req, res) => {
         // A sentinel job is delivered by its sentinel, never reviewed, approved, merged or published through a card flow.
         if (isSentinelJob(item) && req.method !== "GET" && action && ["approve", "approval", "pr-draft", "publish", "accept-findings", "pull-request", "request-changes", "auto-review", "create-plan", "conflict"].includes(action))
           throw new Error("This card is a sentinel job. Its sentinel delivers the result; it is not reviewed or merged here");
-        if (req.method === "GET" && action === "runs") { send(res, 200, board.listRuns(id)); return; }
+        if (req.method === "GET" && action === "runs") { send(res, 200, board.listRunsWithKinds(id)); return; }
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
         if (req.method === "GET" && action === "history") { send(res, 200, cardHistory(item, board.listCardEvents(id), board.listRuns(id), board.listAutoReviewJobs(id))); return; }
         if (req.method === "GET" && action === "push-progress") { send(res, 200, integration.pushProgress(id)); return; }
@@ -720,6 +739,8 @@ const server = createServer(async (req, res) => {
           if (reviewedRun) board.recordChangedFiles(reviewedRun.id, reviewed.files.length);
           send(res, 200, reviewed); return;
         }
+        // What the UI shows before a Triage card moves to Ready, for the CLI to print. Advice only: /status never checks it.
+        if (req.method === "GET" && action === "ready-check") { send(res, 200, { flags: readyFlags(item) }); return; }
         if (req.method === "GET" && action === "dependencies") { send(res, 200, board.listDependencies(id)); return; }
         if (req.method === "POST" && action === "dependencies") {
           const { dependsOn } = await body(req);
@@ -765,10 +786,10 @@ const server = createServer(async (req, res) => {
           if (item.reviewWait === "github") board.noteCard(id, "Changes are requested, but the pushed pull request is waiting on GitHub, so no new attempt started. Run it again once the checks finish to send Pi your feedback.");
           else if (draining.on) board.queueStart(id);
           else {
-            try { worker.start(board.getCard(id)!); }
+            try { worker.start(board.getCard(id)!, "manual", "", undefined, true); }
             catch (error) {
               const message = error instanceof Error ? error.message : String(error);
-              board.noteCard(id, `Changes are requested, but Bakery could not start the new attempt: ${message}. Run it again to send Pi your feedback.`);
+              board.noteCard(id, `Changes are requested, but Alice could not start the new attempt: ${message}. Run it again to send Pi your feedback.`);
             }
           }
           send(res, 200, comments); return;
@@ -779,11 +800,11 @@ const server = createServer(async (req, res) => {
           if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
           // During a restart drain, remember the start and replay it once the new server is up.
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
-          send(res, 202, worker.start(item)); return;
+          send(res, 202, worker.start(item, "manual", "", undefined, true)); return;
         }
         if (req.method === "POST" && action === "recover") {
           // Same gates as /start, since a recovery is a paid run.
-          if (draining.on) throw new Error("Bakery is restarting to load code changes; recover this card after the restart");
+          if (draining.on) throw new Error("Alice is restarting to load code changes; recover this card after the restart");
           send(res, 202, worker.recover(id)); return;
         }
         if (req.method === "DELETE" && action === "start") { send(res, 200, { cancelled: board.cancelQueuedStart(id) }); return; }
@@ -820,7 +841,7 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "PUT" && action === "pull-request") {
           const { url } = await body(req);
-          if (typeof url !== "string") throw new Error("url must be a pull request link, or empty to use the bakery/<card> branch");
+          if (typeof url !== "string") throw new Error("url must be a pull request link, or empty to use the alice/<card> branch");
           const card = board.setPullRequestOverride(id, url);
           if (repoBoard.integration === "github-pr") void githubSync.syncBoard(repoBoard.id);
           send(res, 200, card); return;
@@ -848,7 +869,7 @@ const server = createServer(async (req, res) => {
     if (path.startsWith("/api/")) { send(res, 404, { error: "Not found" }); return; }
     if (req.method !== "GET") { send(res, 405, { error: "Method not allowed" }); return; }
     // Dev runs the UI on Vite (5173); a built dist here goes stale and looks like the app. Serve it only on request.
-    if (process.env.BAKERY_SERVE_UI !== "1") { send(res, 404, { error: "This is the Bakery API. Open the UI on http://127.0.0.1:5173, or set BAKERY_SERVE_UI=1 to serve the built dist here." }); return; }
+    if (process.env.ALICE_SERVE_UI !== "1") { send(res, 404, { error: "This is the Alice API. Open the UI on http://127.0.0.1:5173, or set ALICE_SERVE_UI=1 to serve the built dist here." }); return; }
     const dist = resolve("dist");
     const file = resolve(dist, `.${path === "/" ? "/index.html" : path}`);
     const target = file.startsWith(dist + sep) && existsSync(file) ? file : join(dist, "index.html");
@@ -869,7 +890,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start();
+server.listen(port, bindHost, () => { console.log(`Alice listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start(); push.start();
   if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
   if (updates) {
     void updates.poll();
@@ -880,7 +901,7 @@ server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${
   for (const cardId of board.takeQueuedStarts()) {
     const card = board.getCard(cardId);
     if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
-    try { worker.start(card, "manual", "from a start queued during the last restart"); }
+    try { worker.start(card, "manual", "from a start queued during the last restart", undefined, true); }
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       board.noteCard(cardId, `A start queued during the last restart could not run: ${message}`);
@@ -900,7 +921,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   if (shuttingDown) return;
   shuttingDown = true;
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
-  server.close(); server.closeAllConnections(); clearInterval(updateTimer); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
+  server.close(); server.closeAllConnections(); clearInterval(updateTimer); push.stop(); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
   worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so

@@ -19,7 +19,7 @@ function busy(value) {
 
 async function initialize() {
   if (!window.__TAURI__?.core?.invoke) {
-    showError("Open this screen in the Bakery desktop app.");
+    showError("Open this screen in the Alice desktop app.");
     status.textContent = "";
     return;
   }
@@ -47,7 +47,7 @@ form.addEventListener("submit", async (event) => {
       allowHttp: allowHttp.checked,
     });
     status.textContent =
-      "Bakery is open in its own window. You can return here to change servers.";
+      "Alice is open in its own window. You can return here to change servers.";
   } catch (cause) {
     status.textContent = "";
     showError(cause);

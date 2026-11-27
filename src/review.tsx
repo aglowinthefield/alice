@@ -27,7 +27,7 @@ import {
 } from "./review-patch.js";
 
 type DiffStyle = "unified" | "split";
-const DIFF_STYLE_KEY = "bakery-diff-style";
+const DIFF_STYLE_KEY = "alice-diff-style";
 function initialDiffStyle(): DiffStyle {
   try {
     return localStorage.getItem(DIFF_STYLE_KEY) === "split"
@@ -127,7 +127,7 @@ export function ReviewPanel({
       className="mt-8 border-t border-border pt-5"
     >
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-xs font-semibold uppercase tracking-[.14em] text-muted-foreground">
+        <h3 className="text-sm font-semibold text-muted-foreground">
           Review diff
         </h3>
         <div className="flex items-center gap-2">
@@ -169,7 +169,7 @@ export function ReviewPanel({
       {stale && (
         <div
           role="status"
-          className="mt-2 flex items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+          className="mt-2 flex items-center gap-3 rounded-md border border-status-interrupted/40 bg-status-interrupted/10 px-3 py-2 text-xs"
         >
           <span>The code changed since this diff was loaded.</span>
           <Button size="sm" variant="outline" onClick={onRefresh}>
@@ -262,7 +262,7 @@ export function ReviewPanel({
           aria-label="Review feedback"
           className="mt-6 border-t border-border pt-4"
         >
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h4 className="text-sm font-semibold text-muted-foreground">
             Review feedback
           </h4>
           <ul className="mt-3 space-y-2">
@@ -480,7 +480,7 @@ function useThemeType(): "light" | "dark" {
   return type;
 }
 // Pierre renders inside shadow DOM; CSS variables cross that boundary, so the diff
-// follows Bakery's palette instead of the library's default colors.
+// follows Alice's palette instead of the library's default colors.
 const diffFont = {
   "--diffs-font-family": "ui-monospace, SFMono-Regular, Menlo, monospace",
   "--diffs-header-font-family": "inherit",
@@ -536,9 +536,9 @@ function DiffPatch({
   const select = useRef(onSelect);
   select.current = onSelect;
   const commentable = onSelect !== undefined;
-  // Only the Bakery theme repaints the diff with Bakery's surface; other themes
+  // Only the Alice theme repaints the diff with Alice's surface; other themes
   // keep their own background and add/remove colors.
-  const bakerySurface = diffTheme === "bakery";
+  const aliceSurface = diffTheme === "alice";
   const options = useMemo<FileDiffOptions<Note, undefined>>(
     () => ({
       theme: {
@@ -552,7 +552,7 @@ function DiffPatch({
       lineDiffType: "word-alt",
       overflow: "scroll",
       disableFileHeader: true,
-      unsafeCSS: bakerySurface ? diffCSS : undefined,
+      unsafeCSS: aliceSurface ? diffCSS : undefined,
       enableGutterUtility: commentable,
       lineHoverHighlight: commentable ? "both" : "disabled",
       onGutterUtilityClick: (range) => {
@@ -560,7 +560,7 @@ function DiffPatch({
         if (row) select.current?.(row);
       },
     }),
-    [themeType, diffTheme, bakerySurface, diffStyle, commentable, rows],
+    [themeType, diffTheme, aliceSurface, diffStyle, commentable, rows],
   );
   const target = selectedLine ? targetForRow(rows, selectedLine) : null;
   const selectedLines = useMemo(
@@ -592,12 +592,12 @@ function DiffPatch({
   }
   return (
     <div
-      className={`max-h-[32rem] overflow-auto ${bakerySurface ? "bg-[var(--code-background)]" : ""}`}
+      className={`max-h-[32rem] overflow-auto ${aliceSurface ? "bg-[var(--code-background)]" : ""}`}
     >
       <FileDiff<Note>
         fileDiff={fileDiff}
         options={options}
-        style={bakerySurface ? diffSurface : diffFont}
+        style={aliceSurface ? diffSurface : diffFont}
         lineAnnotations={annotations}
         selectedLines={selectedLines}
         renderAnnotation={(annotation) =>
@@ -637,7 +637,7 @@ export function MergeConflictPanel({
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold">Merge blocked by conflicts</h3>
           <p className="mt-1 text-muted-foreground">
-            Bakery has not merged these changes into main. The card worktree
+            Alice has not merged these changes into main. The card worktree
             remains available.
           </p>
         </div>

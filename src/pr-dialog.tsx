@@ -15,7 +15,7 @@ const field =
   "w-full rounded-md border border-border bg-background px-3 py-2 text-sm";
 
 /**
- * Approve on a github-pr board when no PR is open yet: Bakery drafts the title and body from the repository's
+ * Approve on a github-pr board when no PR is open yet: Alice drafts the title and body from the repository's
  * template and semantic-PR rules, and the operator edits them before anything is pushed.
  */
 export function PullRequestDialog({
@@ -93,7 +93,7 @@ export function PullRequestDialog({
       <DialogContent className="w-[min(92vw,820px)]">
         <DialogTitle>Open pull request</DialogTitle>
         <DialogDescription className="mt-1 text-sm text-muted-foreground">
-          Bakery commits unignored files on bakery/{card.id}, pushes that branch
+          Alice commits unignored files on alice/{card.id}, pushes that branch
           to origin, and runs gh pr create with this title and body. Nothing
           merges locally; the card is Done once the PR merges on GitHub.
         </DialogDescription>
@@ -178,7 +178,7 @@ export function PullRequestDialog({
               />
             </label>
             <div className="text-xs text-muted-foreground">
-              Bakery appends “Opened by Bakery for card {card.id}” and the run
+              Alice appends “Opened by Alice for card {card.id}” and the run
               summary.
             </div>
             {draft.hooks && (
@@ -211,15 +211,17 @@ export function PullRequestDialog({
   );
 }
 
-/** What happens to the repository's hooks on Approve, given the check Bakery ran when the run reached Review. */
+/** What happens to the repository's hooks on Approve, given the check Alice ran when the run reached Review. */
 function hooksNote(hooks: NonNullable<PullRequestDraft["hooks"]>): string {
   if (hooks.state === "passed")
-    return `The pre-push hook already passed on ${hooks.candidate?.slice(0, 12)} when the run reached Review, so Bakery pushes without running it again.`;
+    return `The pre-push hook already passed on ${hooks.candidate?.slice(0, 12)} when the run reached Review, so Alice pushes without running it again.`;
   if (hooks.state === "queued" || hooks.state === "running")
     return "The repository's hooks are still running from Review; Approve waits for them.";
+  if (hooks.state === "failed" && hooks.hook === "commit")
+    return "A commit hook refused this work at Review. It runs again when you approve.";
   if (hooks.state === "failed")
     return "The pre-push hook refused this work at Review. It runs again when you approve.";
-  return "Bakery could not check the hooks at Review, so they run when you approve.";
+  return "Alice could not check the hooks at Review, so they run when you approve.";
 }
 
 /** Push failures carry a summary line, then the hook's own output, whose line breaks matter. */

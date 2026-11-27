@@ -2,7 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
-// Updates for a hosted Bakery checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
+// Updates for a hosted Alice checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
 // brought in, plus anything merged into the checked-out main since the server started (approving a card merges it
 // locally), so the UI can show a changelog. It installs only on request.
 // An update that touches only the browser UI swaps the new build in at once. Anything the server process runs (its
@@ -65,7 +65,15 @@ export class Updates {
       // left out: approving a card adds a "Merge card:" commit on top of the card's own, which would list it twice.
       const ranges = [this.originMain() && "HEAD..refs/remotes/origin/main", this.installedHead && `${this.installedHead}..HEAD`];
       const log = ranges.filter((range): range is string => !!range).map(range => this.git("log", "--no-merges", "--format=%h%x09%s", range)).filter(Boolean).join("\n");
-      this.commits = log ? log.split("\n").map(line => { const [sha, ...subject] = line.split("\t"); return { sha, subject: subject.join("\t") }; }) : [];
+      // A reworked card lands one commit per attempt under the same subject; list it once, under the newest.
+      const seen = new Set<string>();
+      this.commits = (log ? log.split("\n") : []).flatMap(line => {
+        const [sha, ...rest] = line.split("\t");
+        const subject = rest.join("\t");
+        if (seen.has(subject)) return [];
+        seen.add(subject);
+        return [{ sha, subject }];
+      });
       const targets = [this.originMain() && "refs/remotes/origin/main", "HEAD"].filter((ref): ref is string => !!ref);
       this.restart = this.commits.length > 0 && targets.some(target => this.needsRestart(target));
     } catch (error) {

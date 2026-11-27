@@ -22,12 +22,12 @@ export const CardLinks = createContext<{
 
 const statusDot: Record<Status, string> = {
   triage: "bg-muted-foreground/60",
-  ready: "bg-sky-500",
-  running: "bg-amber-500",
-  review: "bg-violet-500",
-  failed: "bg-red-500",
-  interrupted: "bg-orange-500",
-  done: "bg-emerald-500",
+  ready: "bg-status-ready",
+  running: "bg-status-running",
+  review: "bg-status-review",
+  failed: "bg-status-failed",
+  interrupted: "bg-status-interrupted",
+  done: "bg-status-done",
   archived: "bg-muted-foreground/40",
 };
 const statusName = (status: Status) =>

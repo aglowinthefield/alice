@@ -1,4 +1,4 @@
-// In-memory state machine for the colleagues prototype. Pure: no network, storage, timers, or Bakery imports.
+// In-memory state machine for the colleagues prototype. Pure: no network, storage, timers, or Alice imports.
 // A simulated round only moves when the operator clicks "Advance fixture round", so nothing runs by itself.
 import {
   colleagues as fixtureColleagues,

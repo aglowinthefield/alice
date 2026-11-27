@@ -1,8 +1,6 @@
 import { readFeatures, type Features } from "./features.js";
 
 declare const __ALICE_FEATURES__: Features | undefined;
-// The constant's name before the rename, in case vite.config.ts still defines it.
-declare const __BAKERY_FEATURES__: Features | undefined;
 
 /**
  * The optional features this UI was built with (see features.ts). vite.config.ts replaces the constant at build time.
@@ -11,6 +9,4 @@ declare const __BAKERY_FEATURES__: Features | undefined;
 export const features: Features =
   typeof __ALICE_FEATURES__ !== "undefined"
     ? __ALICE_FEATURES__
-    : typeof __BAKERY_FEATURES__ !== "undefined"
-      ? __BAKERY_FEATURES__
-      : readFeatures(globalThis.process?.env ?? {});
+    : readFeatures(globalThis.process?.env ?? {});

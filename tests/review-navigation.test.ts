@@ -168,7 +168,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     const picker = page.getByRole("combobox", { name: "Diff theme" });
-    assert.equal(await picker.inputValue(), "bakery");
+    assert.equal(await picker.inputValue(), "alice");
     const alice = await background();
     await picker.selectOption({ label: "Solarized" });
     // solarized-dark's editor background, since Default is a dark Alice palette.

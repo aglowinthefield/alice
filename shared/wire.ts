@@ -174,6 +174,10 @@ export type Run = {
   sessionFile: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
+  /** When the process in `pid` started (`processStartTime`), so a reused PID is never taken for the run's. */
+  pidStartedAt: string | null;
+  /** Bytes of the run's `events.jsonl` already applied to the transcript, saved with the effects they produced. */
+  eventsOffset: number;
   /** Why Alice thinks this run may be going in circles (see server/stuck.ts); null while it looks fine. */
   stuck: string | null;
   /** Files the run's work changes against main, as of the last time Alice looked; null until it has. */

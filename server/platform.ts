@@ -180,3 +180,40 @@ export function killTree(
   }
   return child.kill(signal);
 }
+
+/**
+ * When process `pid` started, as an opaque string that changes if the PID is reused, or null when the process is gone
+ * or the platform has no cheap way to ask. Linux reads the start tick from `/proc`; macOS asks `ps` (second resolution).
+ */
+export function processStartTime(pid: number, platform: string = process.platform): string | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      // Field 22 (starttime). The command name in field 2 may hold spaces and parentheses, so count from its end.
+      const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+      return start ? `linux:${start}` : null;
+    }
+    if (platform === "darwin") {
+      const start = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, LC_ALL: "C" }, timeout: 5000 }).trim();
+      return start ? `darwin:${start}` : null;
+    }
+  } catch { /* Gone, or not ours to inspect. */ }
+  return null;
+}
+
+/**
+ * Signals the process group led by `pid`, but only while `pid` is still the process that started at `startedAt`, so
+ * a reused PID is never signalled. False when the leader is gone, was replaced, or the signal failed.
+ */
+export function signalGroup(pid: number, startedAt: string, signal: NodeJS.Signals = "SIGTERM"): boolean {
+  if (process.platform === "win32" || processStartTime(pid) !== startedAt) return false;
+  try { process.kill(-pid, signal); return true; } catch { return false; }
+}
+
+/** Whether any process is left in the process group `pgid`. A PID still in use as a group id is never reused. */
+export function groupAlive(pgid: number): boolean {
+  if (process.platform === "win32") return false;
+  try { process.kill(-pgid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}

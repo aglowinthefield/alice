@@ -1,8 +1,8 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { command, killTree, worktrunkVersion } from "./platform.js";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { command, groupAlive, killTree, processStartTime, signalGroup, worktrunkVersion } from "./platform.js";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { join } from "node:path";
-import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
+import { initialPiStreamState, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
 import { piModelArgs, type AgentPhase } from "../shared/agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
 import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from "./board.js";
@@ -13,6 +13,7 @@ import { commitIdentityArgs } from "./git-identity.js";
 import { loopGuards } from "./repo-limits.js";
 import { STUCK_MESSAGE, StuckDetector } from "./stuck.js";
 import { cardBranch } from "./legacy-names.js";
+import type { RunExit } from "./run-shim.js";
 
 /**
  * What the worktree's uncommitted work looks like now: the changed and untracked paths with a hash of each file's
@@ -148,8 +149,73 @@ const wrapUpLeadMinutes = 10;
 const wrapUpExtension = join(import.meta.dirname, "..", "scripts", "pi-wrap-up.mjs");
 export const WRAP_UP_MESSAGE = `Alice: this run is stopped in ${wrapUpLeadMinutes} minutes when it hits its ${runTimeoutMinutes}-minute limit, and anything unreported then is lost. Stop starting new work and commit nothing. Write your final report now: what is done, what remains, and what the next attempt should do first. Attach any screenshots, logs or other evidence as card attachments as your instructions describe, and name them in the report.`;
 
+/** Runs Pi detached from the server and records its exit (Linux and macOS). */
+const runShim = join(import.meta.dirname, "run-shim.ts");
+/** How often a detached run's event file is read when no change notification arrives. */
+const EVENT_POLL_MS = 200;
+/** The most of a run's event file read in one event-loop turn; the same size as a pipe's chunks. */
+const EVENT_CHUNK_BYTES = 64 * 1024;
+/** A detached run's files: `events.jsonl` (Pi's stdout), `stderr.log`, `shim.log`, and `exit.json` once Pi exits. */
+export function runDir(dataDir: string, runId: string) { return join(dataDir, "runs", runId); }
+function readExit(dir: string): RunExit | null {
+  try { return JSON.parse(readFileSync(join(dir, "exit.json"), "utf8")) as RunExit; } catch { return null; }
+}
+/** The last 4000 characters of a log file, or "" when it is missing. */
+function tail(file: string): string {
+  try {
+    const fd = openSync(file, "r");
+    try {
+      const size = fstatSync(fd).size, length = Math.min(size, 4000), buffer = Buffer.alloc(length);
+      readSync(fd, buffer, 0, length, size - length);
+      return buffer.toString("utf8");
+    } finally { closeSync(fd); }
+  } catch { return ""; }
+}
+
+/** A process Alice owns for a run: a Worktrunk hook, a piped Pi, or a detached run's shim. */
+type RunHandle = {
+  /** Sends SIGTERM; false when there was nothing left to signal. */
+  signal: () => boolean;
+  /** Settles once the process exited and the run's outcome is recorded. */
+  closed: Promise<void>;
+};
+function childHandle(child: ChildProcess): RunHandle {
+  const closed = child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise<void>(resolve => child.once("close", () => resolve()));
+  return { signal: () => killTree(child), closed };
+}
+
+/**
+ * At server start: a run still marked running belonged to a server that is gone, but its detached Pi may still be
+ * working in the card worktree. Stop it, checking the recorded start time so a reused PID is never signalled, and
+ * wait until its process group is empty: SIGTERM, then SIGKILL after `graceMs`. Only then mark such runs
+ * interrupted and clear the directories of runs that are over, so no next attempt shares the worktree with it. The
+ * server awaits this before it serves anything. Reattaching to a surviving run instead is later work.
+ */
+export async function recoverDetachedRuns(board: Board, dataDir: string, graceMs = 10_000): Promise<void> {
+  const gone = async (pgid: number, ms: number) => {
+    const end = Date.now() + ms;
+    while (groupAlive(pgid)) {
+      if (Date.now() > end) return false;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return true;
+  };
+  for (const run of board.listRunningRuns()) {
+    if (!run.pid || !run.pidStartedAt || !signalGroup(run.pid, run.pidStartedAt)) continue;
+    console.log(`[run ${run.id.slice(0, 8)}] stopping Pi left running by the previous server process (pid ${run.pid})`);
+    if (await gone(run.pid, graceMs)) continue;
+    // Still members in the group, so its id cannot have been reused: they are the run's.
+    try { process.kill(-run.pid, "SIGKILL"); } catch { /* Exited meanwhile. */ }
+    if (!await gone(run.pid, graceMs)) console.error(`[run ${run.id.slice(0, 8)}] Pi's process group ${run.pid} survived SIGKILL; inspect it before running this card again`);
+  }
+  board.recoverInterruptedRuns();
+  let ids: string[] = [];
+  try { ids = readdirSync(join(dataDir, "runs")); } catch { /* No detached run yet. */ }
+  for (const id of ids) if (board.getRun(id)?.status !== "running") rmSync(runDir(dataDir, id), { recursive: true, force: true });
+}
+
 export class Worker {
-  private active = new Map<string, ChildProcess>();
+  private active = new Map<string, RunHandle>();
   /** In memory only, keyed by run id; cleared when the run ends. */
   private live = new Map<string, LiveActivity>();
   private terminationReasons = new Map<string, string>();
@@ -159,8 +225,8 @@ export class Worker {
   timing = { runTimeoutMs: runTimeoutMinutes * 60_000, wrapUpLeadMs: wrapUpLeadMinutes * 60_000 };
   /** `wtBin` enables Worktrunk hooks for new card worktrees; omit it to skip hooks entirely. */
   constructor(private board: Board, private dataDir: string, private piBin = "pi", private wtBin?: string, private attach?: { cli: string; env: NodeJS.ProcessEnv }) {}
-  private terminate(id: string, child: ChildProcess, reason: string) {
-    if (killTree(child) && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
+  private terminate(id: string, handle: RunHandle, reason: string) {
+    if (handle.signal() && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
   /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
   /**
@@ -364,13 +430,14 @@ export class Worker {
   private runWorktrunkHooks(run: Run, repo: string, root: string, worktree: string, branch: string, launch: () => Run) {
     this.board.append(run.id, "Running Worktrunk pre-start hooks…\n");
     const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
-    this.active.set(run.id, child);
+    const handle = childHandle(child);
+    this.active.set(run.id, handle);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
     let output = "", done = false;
     const collect = (chunk: Buffer) => { output = (output + chunk.toString("utf8")).slice(-4000); };
     child.stdout?.on("data", collect);
     child.stderr?.on("data", collect);
-    const timer = setTimeout(() => this.terminate(run.id, child, "10-minute Worktrunk hook timeout"), 10 * 60 * 1000);
+    const timer = setTimeout(() => this.terminate(run.id, handle, "10-minute Worktrunk hook timeout"), 10 * 60 * 1000);
     const settle = (failure: string | null) => {
       if (done) return;
       done = true; clearTimeout(timer);
@@ -381,7 +448,7 @@ export class Worker {
         catch { this.board.append(run.id, "Worktrunk post-start hooks could not start; continuing without them.\n"); }
         this.board.append(run.id, "Worktrunk hooks done. Starting Pi.\n");
         launch();
-        if (!this.active.has(run.id) || this.active.get(run.id) === child) this.release(run.id);
+        if (!this.active.has(run.id) || this.active.get(run.id) === handle) this.release(run.id);
         return;
       }
       this.release(run.id);
@@ -395,24 +462,25 @@ export class Worker {
   }
   /** `taskPrompt` is the whole task, which a narration-free retry starts from when `prompt` is only a continuation. */
   private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff, taskPrompt = prompt): Run {
-    let child: ChildProcess;
     // The wrap-up extension watches this file; Alice writes it once, shortly before the run timeout.
     const wrapUpFile = join(this.dataDir, "wrap-up", run.id);
     // The extension writes Pi's session file path here at startup.
     const sessionRecord = `${wrapUpFile}.session`;
+    let piArgs: string[];
     try {
       mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
-      const models = piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt));
-      // IMPRESSION_SESSION=read: the agent gets Impression's memories, but its transcript is never uploaded or extracted.
-      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, IMPRESSION_SESSION: "read", ALICE_WRAP_UP_FILE: wrapUpFile, ALICE_SESSION_RECORD: sessionRecord } });
+      piArgs = ["--mode", "json", "--session-id", run.sessionId, ...piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt)), "-e", wrapUpExtension, "--", prompt];
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
-    this.active.set(run.id, child);
-    if (child.pid) this.board.attach(run.id, child.pid, worktree);
+    // IMPRESSION_SESSION=read: the agent gets Impression's memories, but its transcript is never uploaded or extracted.
+    const env = { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, IMPRESSION_SESSION: "read", ALICE_WRAP_UP_FILE: wrapUpFile, ALICE_SESSION_RECORD: sessionRecord };
     const startedAt = Date.now();
     // Pi writes each event as one JSON line, and a line holding a screenshot can run to several MB.
     // Chunks stay as Buffers until a newline arrives, so a long line is concatenated once rather than rescanned per chunk.
-    let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
-    let stream = initialPiStreamState(), stderr = "", lastWorktreeSnapshot = "";
+    let pending: Buffer[] = [], pendingBytes = 0, overflowed = false, processed = run.eventsOffset;
+    let stream = initialPiStreamState(), lastWorktreeSnapshot = "", touchedAt = Date.now();
+    let handle: RunHandle | undefined;
+    // Process groups and start times are what make a run safe to leave running; elsewhere Pi pipes into the server.
+    const detached = process.platform === "linux" || process.platform === "darwin";
     // Stuck detection: the worktree at the last turn end, whether the run is flagged now, and whether the wrap-up went out.
     const stuck = new StuckDetector();
     let lastFingerprint = worktreeFingerprint(worktree), flaggedStuck = false, wrapUpSent = false;
@@ -430,7 +498,23 @@ export class Worker {
       if (!wrapUpSent) try { steer(STUCK_MESSAGE); steered = true; } catch (error) { console.error(`Could not steer run ${run.id} out of a loop:`, error); }
       this.board.append(run.id, `\nThis run may be stuck: it ${reason}.${steered ? " Alice asked Pi to step back and try a different approach." : ""}\n`);
     };
-    const applyEffect = (effect: PiEffect) => {
+    // Git runs here, before the batch's transaction opens, so the database is never locked while it works.
+    const worktreeSummary = (): string | null => {
+      try {
+        const paths = [
+          execFileSync("git", ["-C", worktree, "diff", "--name-only", "-z", "HEAD", "--"], { encoding: "utf8" }),
+          execFileSync("git", ["-C", worktree, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }),
+        ].flatMap(list => list.split("\0").filter(Boolean)).sort();
+        const snapshot = JSON.stringify(paths), changed = snapshot !== lastWorktreeSnapshot;
+        lastWorktreeSnapshot = snapshot;
+        if (!paths.length || !changed) return null;
+        const shown = paths.slice(0, 3).map(path => path.replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 80));
+        return `worktree: ${paths.length} changed file${paths.length === 1 ? "" : "s"} (${shown.join(", ")}${paths.length > shown.length ? `, +${paths.length - shown.length} more` : ""})\n`;
+      } catch { return null; } // A transcript hint must not fail the run if Git is unavailable.
+    };
+    /** An effect with the Git work it needs done beforehand: a turn end carries the worktree's fingerprint. */
+    type Prepared = Exclude<PiEffect, { type: "turnEnded" | "snapshotWorktree" }> | { type: "turnEnded"; edited: boolean; fingerprint: string | null };
+    const applyEffect = (effect: Prepared) => {
       switch (effect.type) {
         case "append": this.board.append(run.id, effect.text); break;
         case "recordAgent": this.board.recordAgent(run.id, effect.label); break;
@@ -440,9 +524,8 @@ export class Worker {
         case "live": this.live.set(run.id, effect.activity); break;
         case "toolStarted": flagStuck(stuck.toolCall(effect.name, effect.args)); break;
         case "turnEnded": {
-          const fingerprint = worktreeFingerprint(worktree);
-          const changed = effect.edited || (fingerprint !== null && fingerprint !== lastFingerprint);
-          if (fingerprint !== null) lastFingerprint = fingerprint;
+          const changed = effect.edited || (effect.fingerprint !== null && effect.fingerprint !== lastFingerprint);
+          if (effect.fingerprint !== null) lastFingerprint = effect.fingerprint;
           if (changed && flaggedStuck) {
             flaggedStuck = false;
             this.board.markStuck(run.id, null);
@@ -451,51 +534,64 @@ export class Worker {
           flagStuck(stuck.turnEnd(changed));
           break;
         }
-        case "snapshotWorktree":
-          try {
-            const paths = [
-              execFileSync("git", ["-C", worktree, "diff", "--name-only", "-z", "HEAD", "--"], { encoding: "utf8" }),
-              execFileSync("git", ["-C", worktree, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }),
-            ].flatMap(list => list.split("\0").filter(Boolean)).sort();
-            const snapshot = JSON.stringify(paths);
-            if (paths.length && snapshot !== lastWorktreeSnapshot) {
-              const shown = paths.slice(0, 3).map(path => path.replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 80));
-              this.board.append(run.id, `worktree: ${paths.length} changed file${paths.length === 1 ? "" : "s"} (${shown.join(", ")}${paths.length > shown.length ? `, +${paths.length - shown.length} more` : ""})\n`);
-            }
-            lastWorktreeSnapshot = snapshot;
-          } catch { /* A transcript hint must not fail the run if Git is unavailable. */ }
-          break;
       }
     };
-    let touchedAt = Date.now();
-    child.stdout?.on("data", (chunk: Buffer) => {
+    /**
+     * Pi's stdout, from the event file or the pipe. Each call applies its whole lines and saves the offset after them
+     * in one transaction. If that fails, nothing of the batch is kept, the stream state goes back to before it, and
+     * the run is stopped without reading further; false tells the caller to stop feeding it.
+     */
+    let broken = false;
+    const consume = (chunk: Buffer): boolean => {
       // Any output counts as activity; a write every 10s is enough for the board to tell working from quiet.
       if (Date.now() - touchedAt >= 10_000) { touchedAt = Date.now(); this.board.touch(run.id); }
-      if (overflowed) return;
+      if (overflowed || broken) return false;
       pending.push(chunk); pendingBytes += chunk.length;
       if (chunk.indexOf(10) < 0) {
         if (pendingBytes > MAX_PI_EVENT_BYTES) {
           overflowed = true; pending = []; pendingBytes = 0;
-          stream = { ...stream, protocolError: "Pi event exceeded 500 MB" }; this.terminate(run.id, child, "Pi event exceeded 500 MB");
+          stream = { ...stream, protocolError: "Pi event exceeded 500 MB" };
+          if (handle) this.terminate(run.id, handle, "Pi event exceeded 500 MB");
+          return false;
         }
-        return;
+        return true;
       }
       const data = pending.length === 1 ? chunk : Buffer.concat(pending, pendingBytes);
+      const before = stream, effects: Prepared[] = [];
       let start = 0, i: number;
       while ((i = data.indexOf(10, start)) >= 0) {
         const line = data.toString("utf8", start, i).replace(/\r$/, ""); start = i + 1;
         const result = reducePiLine(stream, line, { now: Date.now(), worktree });
         stream = result.state;
-        try { for (const effect of result.effects) applyEffect(effect); }
-        catch { stream = { ...stream, protocolError: INVALID_STREAM }; }
+        for (const effect of result.effects) {
+          if (effect.type === "turnEnded") effects.push({ ...effect, fingerprint: worktreeFingerprint(worktree) });
+          else if (effect.type !== "snapshotWorktree") effects.push(effect);
+          else {
+            const text = worktreeSummary();
+            if (text) effects.push({ type: "append", text });
+          }
+        }
       }
+      // `data` starts at the first byte not yet applied, so the batch ends `start` bytes on.
+      try {
+        this.board.applyRunEvents(run.id, detached ? processed + start : null, () => { for (const effect of effects) if (effect.type !== "live") applyEffect(effect); });
+      } catch (error) {
+        broken = true; pending = []; pendingBytes = 0;
+        const message = error instanceof Error ? error.message : String(error);
+        stream = { ...before, protocolError: `Alice could not save Pi's events: ${message.slice(0, 300)}` };
+        console.error(`Could not save run ${run.id}'s events:`, error);
+        if (handle) this.terminate(run.id, handle, "Alice could not save the run's events");
+        return false;
+      }
+      processed += start;
+      for (const effect of effects) if (effect.type === "live") applyEffect(effect);
       pending = start < data.length ? [data.subarray(start)] : [];
       pendingBytes = data.length - start;
-    });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
+      return true;
+    };
     const { runTimeoutMs, wrapUpLeadMs } = this.timing;
     const timeoutLabel = `${Math.round(runTimeoutMs / 60_000)}-minute run timeout`;
-    const timer = setTimeout(() => this.terminate(run.id, child, timeoutLabel), runTimeoutMs);
+    const timer = setTimeout(() => { if (handle) this.terminate(run.id, handle, timeoutLabel); }, runTimeoutMs);
     // Steer the run to write its report before the timeout kills it; a SIGTERM loses the report and the next attempt starts blind.
     const wrapUpTimer = setTimeout(() => {
       try {
@@ -504,19 +600,21 @@ export class Worker {
         this.board.append(run.id, `\nAlice asked Pi to stop starting new work and write its report: the ${timeoutLabel} is ${Math.round(wrapUpLeadMs / 60_000)} min away.\n`);
       } catch (error) { console.error(`Could not ask run ${run.id} to wrap up:`, error); }
     }, Math.max(0, runTimeoutMs - wrapUpLeadMs));
-    const cleanUpWrapUp = () => {
+    const settle = () => {
+      clearTimeout(timer); clearTimeout(wrapUpTimer);
       try { const file = readFileSync(sessionRecord, "utf8").trim(); if (file) this.board.recordSessionFile(run.id, file); }
       catch { /* Pi never started its session, or an older extension ran; the next attempt after a timeout starts fresh. */ }
       for (const path of [wrapUpFile, `${wrapUpFile}.tmp`, `${wrapUpFile}.delivered`, sessionRecord]) rmSync(path, { force: true });
+      this.live.delete(run.id);
     };
-    child.on("error", (error) => { clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer); clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.active.delete(run.id); this.live.delete(run.id);
-      if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
+    const couldNotStart = (message: string) => { settle(); this.board.finish(run.id, "failed", `Pi could not start: ${message}`); };
+    /** `note` explains an exit the shim could not record. */
+    const exited = (code: number | null, signal: string | null, stderr: string, note = "") => {
+      settle();
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
       const { settled, aborted, terminalModelError, protocolError } = stream;
-      const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError;
+      const ok = code === 0 && settled && !aborted && !terminalModelError && !protocolError && !note;
       // Exit code 143 often means SIGTERM through a shell, but does not identify the sender.
       // Name the call a killed run was stuck in, so a timeout says what ate the time.
       const running = stuckTool(stream);
@@ -528,15 +626,125 @@ export class Worker {
       if (retryPlain) this.board.append(run.id, "\nAnthropic blocked this request as reverse engineering. Alice will retry once in a fresh session without the narration instruction.\n");
       // Pi exits 0 and settles even when the provider rejected its last request, so a provider failure leads the text
       // and the exit status only follows as detail; it must never read as a clean exit.
-      const exit = `Pi exited (${signal ?? code ?? "unknown"})${termination}; ${settled ? "settled" : "no settlement event"}`;
+      const exit = `Pi exited (${signal ?? code ?? "unknown"})${termination}; ${settled ? "settled" : "no settlement event"}${note ? `; ${note}` : ""}`;
       const failure = terminalModelError ? `${terminalModelError} [${failureKind}: ${describeProviderFailure(failureKind!)}]; ${exit}` : exit;
       this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `${failure}${protocolError ? `; ${protocolError}` : ""}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-1500)}` : ""}`, ok ? null : failureKind, !reason && !signal && !protocolError && code === 0);
-      if (!ok) console.error(`Pi exit for run ${run.id}: pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
+      if (!ok) console.error(`Pi exit for run ${run.id}: pid=${this.board.getRun(run.id)?.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
       if (retryPlain) this.retryWithoutNarration(card, run, worktree, taskPrompt.replace(NARRATION, PLAIN_RETRY), phase, handedOff);
       else if (!ok && failureKind === "invalid-history") this.recoverAfterRejection(card, run, handedOff);
-    });
+    };
+    handle = !detached
+      ? this.pipePi(run, worktree, piArgs, env, consume, couldNotStart, exited)
+      : this.detachPi(run, worktree, piArgs, env, consume, couldNotStart, exited);
     return this.board.getRun(run.id)!;
+  }
+  /**
+   * Without process groups and start times (Windows, other Unixes), Pi stays a child of the server with its stdout
+   * piped in, and a server restart still waits for it (or kills it).
+   */
+  private pipePi(run: Run, worktree: string, args: string[], env: NodeJS.ProcessEnv, consume: (chunk: Buffer) => boolean,
+    couldNotStart: (message: string) => void, exited: (code: number | null, signal: string | null, stderr: string) => void): RunHandle | undefined {
+    let child: ChildProcess;
+    try { child = spawn(...command(this.piBin, args), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env }); }
+    catch (error) { this.board.finish(run.id, "failed", String(error)); return undefined; }
+    const handle = childHandle(child);
+    this.active.set(run.id, handle);
+    if (child.pid) this.board.attach(run.id, child.pid, worktree);
+    let stderr = "";
+    child.stdout?.on("data", consume);
+    child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
+    child.on("error", error => couldNotStart(error.message));
+    child.on("close", (code, signal) => { this.release(run.id); exited(code, signal, stderr); });
+    return handle;
+  }
+  /**
+   * Starts Pi under `run-shim.ts`, detached in its own process group, with its output in `dataDir/runs/<run id>/`.
+   * The shim starts Pi only once this server has saved the shim's PID and start time and said `start`, so a Pi
+   * that outlives the server can always be found and stopped. While the server lives it tails `events.jsonl` and
+   * finishes the run when the shim reports Pi's exit. The run directory goes once the run is recorded.
+   */
+  private detachPi(run: Run, worktree: string, args: string[], env: NodeJS.ProcessEnv, consume: (chunk: Buffer) => boolean,
+    couldNotStart: (message: string) => void, exited: (code: number | null, signal: string | null, stderr: string, note?: string) => void): RunHandle | undefined {
+    const dir = runDir(this.dataDir, run.id);
+    let child: ChildProcess, events: number;
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "events.jsonl"), "");
+      events = openSync(join(dir, "events.jsonl"), "r");
+      const shimLog = openSync(join(dir, "shim.log"), "w");
+      try { child = spawn(process.execPath, [runShim, dir, this.piBin, ...args], { cwd: worktree, detached: true, stdio: ["pipe", "ignore", shimLog], env }); }
+      finally { closeSync(shimLog); }
+    } catch (error) { this.board.finish(run.id, "failed", String(error)); return undefined; }
+    // The shim may exit before reading the acknowledgement; a write to its closed stdin is not an error here.
+    child.stdin?.on("error", () => {});
+    const pid = child.pid, startTime = pid ? processStartTime(pid) : null;
+    let ended = false, resolveClosed!: () => void;
+    const closed = new Promise<void>(resolve => { resolveClosed = resolve; });
+    const handle: RunHandle = {
+      // The whole group: Pi and the tools it started. The shim records how Pi exited.
+      signal: () => !ended && !!pid && !!startTime && signalGroup(pid, startTime),
+      closed,
+    };
+    this.active.set(run.id, handle);
+    // Without a start time the shim could never be told from a later process with its PID, so Pi must not start.
+    const refused = pid && startTime ? null : "Alice could not read the run process's start time, so it did not start Pi";
+    if (refused) child.stdin?.end();
+    else {
+      this.board.attach(run.id, pid!, worktree, startTime);
+      child.stdin?.end("start\n");
+    }
+    // Reads the event file at most EVENT_CHUNK_BYTES per event-loop turn, so a backlog never blocks requests or a Stop.
+    let position = run.eventsOffset, pumping = false, reading = true, drained: (() => void) | null = null;
+    const pump = () => {
+      try {
+        const size = fstatSync(events).size;
+        if (reading && size > position) {
+          const chunk = Buffer.allocUnsafe(Math.min(size - position, EVENT_CHUNK_BYTES));
+          const read = readSync(events, chunk, 0, chunk.length, position);
+          if (read > 0) {
+            position += read;
+            if (!consume(read === chunk.length ? chunk : chunk.subarray(0, read))) reading = false;
+            if (reading && fstatSync(events).size > position) { setImmediate(pump); return; }
+          }
+        }
+      } catch (error) { console.error(`Could not read run ${run.id}'s events:`, error); }
+      pumping = false;
+      const next = drained;
+      drained = null;
+      next?.();
+    };
+    const kick = () => { if (!pumping) { pumping = true; setImmediate(pump); } };
+    // A watch reads new events as soon as Pi writes them; the poll catches anything a watch misses.
+    const poll = setInterval(kick, EVENT_POLL_MS);
+    let watcher: FSWatcher | undefined;
+    try { watcher = watch(join(dir, "events.jsonl"), kick); watcher.on("error", () => watcher?.close()); }
+    catch { /* The poll alone still reads every event. */ }
+    /** Reads what is left of the event file, then records the run. */
+    const end = (finish: () => void) => {
+      if (ended) return;
+      ended = true;
+      clearInterval(poll);
+      watcher?.close();
+      drained = () => {
+        closeSync(events);
+        this.release(run.id);
+        try { finish(); }
+        finally { rmSync(dir, { recursive: true, force: true }); resolveClosed(); }
+      };
+      kick();
+    };
+    child.on("error", error => end(() => couldNotStart(`run shim: ${error.message}`)));
+    child.on("exit", (code, signal) => end(() => {
+      const recorded = readExit(dir), stderr = tail(join(dir, "stderr.log"));
+      if (refused) couldNotStart(refused);
+      else if (recorded?.error !== undefined) couldNotStart(recorded.error);
+      else if (recorded?.started === false) exited(null, recorded.signal, stderr, "stopped before Pi started");
+      else if (recorded) exited(recorded.code, recorded.signal, stderr);
+      // Killed before it could record Pi's exit (a stop that lands while Node is still starting, say).
+      else exited(code, signal, `${stderr}\n${tail(join(dir, "shim.log"))}`, "Alice's run shim exited without recording Pi's exit");
+    }));
+    return handle;
   }
   /**
    * A rejected session history fails identically on every resume. Hand back the feedback the run took, then start one
@@ -586,9 +794,9 @@ export class Worker {
     this.launchPi(card, run, worktree, prompt, phase, handedOff);
   }
   stop(id: string) {
-    const child = this.active.get(id);
-    if (!child) throw new Error("This run is not owned by the current server process");
-    this.terminate(id, child, "manual stop");
+    const handle = this.active.get(id);
+    if (!handle) throw new Error("This run is not owned by the current server process");
+    this.terminate(id, handle, "manual stop");
   }
   get activeCount() { return this.active.size; }
   /** Each card's live activity, or null for a card whose run is not in progress or has not used a tool yet. */
@@ -611,10 +819,6 @@ export class Worker {
   /** Refuse new runs without waiting for the active ones, so a shutdown can finish pushes that might start a hook-fix run. */
   stopStarts(): void { this.draining = true; }
   async shutdown(reason = "server shutdown") {
-    await Promise.all([...this.active].map(([id, child]) => new Promise<void>(resolve => {
-      if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
-      child.once("close", () => resolve());
-      this.terminate(id, child, reason);
-    })));
+    await Promise.all([...this.active].map(([id, handle]) => { this.terminate(id, handle, reason); return handle.closed; }));
   }
 }

@@ -13,7 +13,7 @@ import {
   thinkingLevels,
   type AgentModel,
   type ThinkingLevel,
-} from "../server/agent-models.js";
+} from "../shared/agent-models.js";
 import { Button } from "./components/ui/button";
 import { CardLinks, Markdown } from "./markdown-view.js";
 import { formatRoute } from "./route.js";
@@ -43,7 +43,7 @@ import {
 
 type ChatState = { messages: ChatMessage[]; live: ChatLive };
 
-const railKey = "bakery-chat-sidebar";
+const railKey = "alice-chat-sidebar";
 // How often the chat list refreshes its per-chat unread counts, and how long a dropped event stream waits to reconnect.
 const listPollMs = 3000;
 const reconnectMs = 3000;
@@ -115,7 +115,7 @@ function Parts({ parts }: { parts: ChatPart[] }) {
   );
 }
 
-/** General-purpose agent chats for one board. The agent can read and change the board through bakery-cli. */
+/** General-purpose agent chats for one board. The agent can read and change the board through alice. */
 export function ChatView({
   boardId,
   onError,
@@ -135,7 +135,7 @@ export function ChatView({
 }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [chatId, setChatId] = useState<string | null>(() =>
-    sessionStorage.getItem(`bakery-chat-${boardId}`),
+    sessionStorage.getItem(`alice-chat-${boardId}`),
   );
   const [state, setState] = useState<ChatState>({ messages: [], live: null });
   const [draft, setDraft] = useState("");
@@ -155,6 +155,9 @@ export function ChatView({
   );
   const [contentWidth, setContentWidth] = useState<number | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  // Bumped when a web font finishes loading. Inter swaps in after the first layout, which changes the labels' widths
+  // without a render, so the list measures them again.
+  const [, setFontsLoaded] = useState(0);
   const [sideBySide, setSideBySide] = useState(
     () => window.matchMedia("(min-width: 768px)").matches,
   );
@@ -309,8 +312,15 @@ export function ChatView({
       observer?.disconnect();
     };
   }, []);
+  useEffect(() => {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    const update = () => setFontsLoaded((count) => count + 1);
+    fonts.addEventListener("loadingdone", update);
+    return () => fonts.removeEventListener("loadingdone", update);
+  }, []);
   // The widest a row needs to show its whole label, measured from what is displayed, so it follows the labels,
-  // the date grouping, the unread badges and the chat list.
+  // the date grouping, the unread badges, the fonts and the chat list.
   useLayoutEffect(() => {
     const nav = rail.current;
     if (!nav || collapsed) return;
@@ -348,8 +358,8 @@ export function ChatView({
     localStorage.setItem(groupingKey, grouping);
   }, [grouping]);
   useEffect(() => {
-    if (chatId) sessionStorage.setItem(`bakery-chat-${boardId}`, chatId);
-    else sessionStorage.removeItem(`bakery-chat-${boardId}`);
+    if (chatId) sessionStorage.setItem(`alice-chat-${boardId}`, chatId);
+    else sessionStorage.removeItem(`alice-chat-${boardId}`);
   }, [chatId, boardId]);
 
   // The transcript comes from one fetch, then the event stream carries the live reply and each saved message.

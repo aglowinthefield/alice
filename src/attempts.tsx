@@ -62,7 +62,7 @@ export function errorPrompt(
   card?: Pick<Card, "title" | "repo"> | null,
 ): string {
   const lines = [
-    "A Bakery agent run failed. Investigate the failure and fix the cause.",
+    "A Alice agent run failed. Investigate the failure and fix the cause.",
     "",
   ];
   if (card?.title) lines.push(`Card: ${card.title}`);

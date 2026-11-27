@@ -1,5 +1,6 @@
 // Why a run happened, so a card's cost can be split into its first attempt and the rework after it.
-export type RunKind = "first" | "send_back" | "ci_fix" | "retry" | "rerun";
+import type { RunKind } from "../shared/wire.js";
+export type { RunKind };
 
 export const runKindLabels: Record<RunKind, string> = {
   first: "First attempt",
@@ -28,7 +29,7 @@ type RunFacts = {
 type EventFacts = { toStatus: string | null; reason: string };
 
 /**
- * Classifies one run from the "Attempt N started …" line Bakery records when it starts a run (see the `why` callers
+ * Classifies one run from the "Attempt N started …" line Alice records when it starts a run (see the `why` callers
  * of `worker.start`), the operator's requested review comments on the run before it, and the run fields.
  * Older runs without a recorded start line fall back to the run fields alone.
  */

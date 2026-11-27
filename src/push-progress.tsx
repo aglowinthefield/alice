@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-/** What Bakery is doing while it pushes a card to GitHub. Mirrors `PushProgress` in server/integration.ts. */
+/** What Alice is doing while it pushes a card to GitHub. Mirrors `PushProgress` in server/integration.ts. */
 export type PushProgress = {
   step: string;
   log: string[];

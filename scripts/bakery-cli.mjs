@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// First, so ALICE_* settings are filled from BAKERY_* ones before anything reads them.
+import "../server/legacy-names.ts";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";

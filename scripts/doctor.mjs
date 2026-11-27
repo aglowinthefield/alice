@@ -3,10 +3,10 @@
 // server is on this machine, because a remote server's paths are on its own disk.
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { serviceCheck } from "./service.mjs";
 import { formatVersion } from "./version.mjs";
+import { dataDir } from "../server/legacy-names.ts";
 
 // Bare names like `pi` are npm `.cmd` shims on Windows, which only a shell can run.
 function run(bin, args, timeout = 20_000) {
@@ -77,7 +77,7 @@ function ghCheck(env, boards) {
 }
 
 function dataDirChecks(env) {
-  const dir = env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
+  const dir = dataDir(env);
   let existing = dir;
   while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
   try { accessSync(existing, constants.W_OK); }

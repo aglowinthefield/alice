@@ -7,6 +7,7 @@ import type { Board, Card, RepoBoard } from "./board.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import { githubMarkdown } from "./github-markdown.js";
 import { loopGuards } from "./repo-limits.js";
+import { cardBranches } from "./legacy-names.js";
 
 // GitHub pull request integration. On a `github-pr` board a card is Done once its PR has merged on GitHub
 // and the merge commit is on origin/main. Local main is only ever fast-forwarded to origin/main.
@@ -398,15 +399,21 @@ function prRepo(card: Card, repo: string): string {
   return (card.prOverrideUrl && parsePullRequestUrl(card.prOverrideUrl)?.repo) || repo;
 }
 
-/** The PR linked to a card: its override URL if set, else the newest PR from `bakery/<id>`. */
+/** The PR linked to a card: its override URL if set, else the newest PR from its branch (`alice/<id>`, or `bakery/<id>`). */
 export async function linkedPullRequest(github: GitHub, repo: string, card: Card, recent?: PullRequest[]): Promise<PullRequest | undefined> {
   if (card.prOverrideUrl) {
     const link = parsePullRequestUrl(card.prOverrideUrl);
     if (!link) throw new Error(`Invalid pull request link ${card.prOverrideUrl}`);
     return recent?.find(pr => pr.number === link.number) ?? github.view(link.repo, link.number);
   }
-  const branch = `bakery/${card.id}`;
-  return recent?.find(pr => pr.headRefName === branch) ?? (recent && !card.prNumber ? undefined : github.findByBranch(repo, branch));
+  const branches = cardBranches(card.id);
+  const known = recent?.find(pr => branches.includes(pr.headRefName));
+  if (known || (recent && !card.prNumber)) return known;
+  for (const branch of branches) {
+    const found = await github.findByBranch(repo, branch);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /**

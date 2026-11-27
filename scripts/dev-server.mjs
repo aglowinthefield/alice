@@ -3,6 +3,8 @@
 // server on any source change and so killed every running Pi child whenever
 // Bakery integrated a card into its own checkout. Here a change first asks the
 // server to drain (no new runs, wait for active ones), then restarts it.
+// First, so ALICE_* settings are filled from BAKERY_* ones before anything reads them.
+import "../server/legacy-names.ts";
 import { spawn } from "node:child_process";
 import { watch, readFileSync } from "node:fs";
 import { createServer, request } from "node:http";

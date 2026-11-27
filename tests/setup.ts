@@ -1,3 +1,5 @@
+// First, so ALICE_* settings are filled from BAKERY_* ones before anything reads them.
+import "../server/legacy-names.js";
 import { chromium, webkit } from "playwright";
 
 // Tests that spawn `server/index.ts` poll http://127.0.0.1:<port>. When the suite runs inside a Bakery agent, the

@@ -1,3 +1,5 @@
+// First, so every module below sees ALICE_* settings filled from BAKERY_* ones.
+import { dataDir as defaultDataDir } from "./legacy-names.js";
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { featureOffMessage, type Feature } from "../src/features.js";
 import { readyFlags } from "../src/card-lint.js";
@@ -45,7 +47,7 @@ import { Telemetry, doctorCheck, errorType, runOutcome } from "./telemetry.js";
 const logs = new LogBuffer();
 logs.captureConsole();
 
-const dataDir = process.env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
+const dataDir = defaultDataDir();
 logs.persist(join(dataDir, "logs", "bakery.log"));
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 chmodSync(dataDir, 0o700);

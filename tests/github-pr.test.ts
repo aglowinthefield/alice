@@ -206,6 +206,8 @@ test("a card's PR is found by its bakery/<id> branch, and an attached PR link ov
     const cleared = f.board.setPullRequestOverride(card.id, "");
     assert.equal(cleared.prOverrideUrl, null);
     assert.equal((await linkedPullRequest(f.github, "acme/widgets", cleared))?.number, 8);
+    f.setPrs([{ number: 10, url: "https://github.com/acme/widgets/pull/10", state: "OPEN", mergedAt: null, mergeCommit: null, headRefName: `alice/${card.id}` }]);
+    assert.equal((await linkedPullRequest(f.github, "acme/widgets", cleared))?.number, 10, "a card's alice/<id> branch is found too");
   } finally { f.cleanup(); }
 });
 

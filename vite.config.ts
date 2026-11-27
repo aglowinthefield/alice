@@ -1,3 +1,5 @@
+// First, so ALICE_* settings are filled from BAKERY_* ones before anything reads them.
+import "./server/legacy-names.ts";
 import { realpathSync } from "node:fs";
 import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";

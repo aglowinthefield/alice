@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { emptyAgentModels } from "../server/agent-models.js";
 
 /**
@@ -308,6 +308,7 @@ test("Pi model settings validate per phase and the model list comes from pi --li
   execFileSync("git", ["init", "-q", repo]);
   writeFileSync(fakePi, `#!/bin/sh
 echo "$@" >> '${calls}'
+mktemp -d >> '${home}/scratch.txt'
 [ -f '${home}/fail' ] && { echo "billing error" >&2; exit 1; }
 printf '%s\\n' 'provider      model              context  max-out  thinking  images' 'anthropic     claude-sonnet-4-5  200K     64K      yes       yes' 'openai-codex  gpt-5.5            400K     128K     yes       yes'
 `);
@@ -336,6 +337,12 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
     assert.deepEqual((await request("/models")).data, { models: ["anthropic/claude-sonnet-4-5", "openai-codex/gpt-5.5"] });
     assert.deepEqual((await request("/models")).data.models.length, 2);
     assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), ["--list-models", "--list-models"], "successful lists are cached");
+    const scratch = readFileSync(join(home, "scratch.txt"), "utf8").trim().split("\n");
+    assert.equal(scratch.length, 2);
+    for (const path of scratch) assert.match(path, /[\\/]bakery-run-[0-9a-f-]{36}[\\/]tmp\.[^/\\]+$/, "each model list runs in its own TMPDIR");
+    const end = Date.now() + 10_000;
+    while (scratch.some(path => existsSync(dirname(path))) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.deepEqual(scratch.map(path => existsSync(dirname(path))), [false, false], "and the directory is gone once Pi exits");
 
     for (const agentModels of [{ work: { model: "--help", thinking: "" } }, { work: { model: "a b" } }, { review: { thinking: "huge" } }, { deploy: {} }, "anthropic/x"])
       assert.equal((await request("/settings", "PATCH", { agentModels })).status, 400, JSON.stringify(agentModels));

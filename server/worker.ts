@@ -1,5 +1,6 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { command } from "./platform.js";
+import { spawnPi } from "./run-temp.js";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
@@ -349,7 +350,7 @@ export class Worker {
     try {
       mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt));
-      child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile, BAKERY_SESSION_RECORD: sessionRecord } });
+      child = spawnPi(run.id, this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile, BAKERY_SESSION_RECORD: sessionRecord } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);

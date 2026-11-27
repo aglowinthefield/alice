@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Every Pi process Bakery starts (card runs, agent reviews, chats, discussions, PR drafts and the model list) gets its own `TMPDIR`, `/tmp/bakery-run-<id>` (`TMP` and `TEMP` on Windows), and Bakery removes it when Pi exits, however it ends. Shutdown stops every Pi first, and startup removes the ones a crashed server left behind once their Pi is gone. Agents' scratch had filled `/tmp` with about 1,150 clones until the tmpfs ran out of inodes.
 - The attempt after a run timeout continues the timed-out Pi session with a short message ("You ran out of time on the previous attempt…") asking it to finish the remaining work and write its report, instead of sending the whole task again, so the agent picks up where it stopped. If the session file is gone it starts a fresh session with the whole task.
 - A machine-wide limit on agents at once covers card runs and agent reviews on every board. It defaults to a quarter of the CPU cores, and you set it in **Settings > General** or with `bakery-cli agents N|auto`. Automatic work waits for a slot; a run you start yourself always starts. Boards within their own concurrency could together run 11 agents and their test suites, which stalled the machine and the server.
 - When a card merges, cards in Review that depend on it are brought up to date with main, keeping their uncommitted work, and agent review runs again on the result. One that would conflict is left unchanged and shows the merge conflict instead of surprising you at Approve.

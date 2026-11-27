@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { command } from "./platform.js";
+import { randomUUID } from "node:crypto";
+import { spawnPi } from "./run-temp.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Card, Run } from "./board.js";
@@ -154,7 +154,7 @@ function runPi(piBin: string, prompt: string, cwd: string, models: string[], onP
   // AGENTS.md would only add startup time. Extensions stay on: the Anthropic OAuth and multi-pass plugins are extensions.
   const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-skills", "--no-context-files", "--thinking", "low", ...models, "--", prompt];
   return new Promise((resolve, reject) => {
-    const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnPi(randomUUID(), piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", exceeded = false;
     const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 3 * 60_000);
     let pending = "";

@@ -2,10 +2,9 @@ import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { featureOffMessage, type Feature } from "../src/features.js";
 import { readyFlags } from "../src/card-lint.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
-import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { chmodSync, closeSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
@@ -24,6 +23,8 @@ import { Chats, writeTopic } from "./chat.js";
 import { chatImagePath, publishChatImages, rasterType } from "./chat-images.js";
 import { draftPullRequest } from "./pr-draft.js";
 import { Readiness } from "./readiness.js";
+import { stopPi, sweepRunTemp } from "./run-temp.js";
+import { modelLister } from "./pi-models.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
 import { PullRequestFeed } from "./pull-request-feed.js";
@@ -35,7 +36,7 @@ import { SentinelStore } from "./sentinel-store.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
-import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
+import { piModelArgs, validateAgentModels } from "./agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
 import { PushNotifications } from "./push.js";
@@ -54,7 +55,7 @@ const lockPath = join(dataDir, "server.lock");
 const lock = acquireLock(lockPath);
 if (promoteStagedUi(process.cwd())) console.log("Serving the UI built by the last update.");
 let board: Board;
-try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
+try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); sweepRunTemp(); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const piBin = process.env.BAKERY_PI_BIN ?? "pi";
 /** Cards whose discussion reply is being written; one at a time per card. */
@@ -209,20 +210,7 @@ function sendBackHookFailure(card: Card, error: PushHookError | CommitHookError)
 }
 // Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
 const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
-// Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
-// and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
-let modelCache: { models: string[]; at: number } | undefined, modelRequest: Promise<{ models: string[]; error?: string }> | undefined;
-function listModels(): Promise<{ models: string[]; error?: string }> {
-  if (modelCache && Date.now() - modelCache.at < 10 * 60_000) return Promise.resolve({ models: modelCache.models });
-  return modelRequest ??= new Promise<{ models: string[]; error?: string }>(resolve => {
-    execFile(...command(piBin, ["--list-models"]), { timeout: 20_000, maxBuffer: 4_000_000, encoding: "utf8" }, (error, stdout) => {
-      modelRequest = undefined;
-      if (error) { resolve({ models: [], error: `Could not list Pi models: ${error.killed ? "timed out" : error.message.split("\n")[0].slice(0, 300)}` }); return; }
-      modelCache = { models: parseModelList(stdout), at: Date.now() };
-      resolve({ models: modelCache.models });
-    });
-  });
-}
+const listModels = modelLister(piBin);
 /** Every error response is counted here, once: a caught exception by its class name, an explicit one by its status. */
 function send(res: ServerResponse, status: number, payload: unknown, errorClass?: string) {
   if (status >= 400) telemetry.count("bakery.server.errors", { "error.type": errorClass ?? `Http${status}` });
@@ -920,7 +908,10 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
   server.close(); server.closeAllConnections(); clearInterval(updateTimer); push.stop(); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
-  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
+  // Every Pi Bakery started gets SIGTERM now and SIGKILL 10 s later, so one that ignores SIGTERM can't hold up the drains.
+  // Card runs get theirs first, so their error names the shutdown. The second stopPi catches any Pi a drain started meanwhile.
+  worker.stopStarts(); const runsStopped = worker.shutdown(`server received ${signal}`);
+  void Promise.all([runsStopped, stopPi(), autoReview.shutdown(), autoPullRequest.drain()]).then(() => stopPi()).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {

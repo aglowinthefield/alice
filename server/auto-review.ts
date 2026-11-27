@@ -1,5 +1,6 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { command } from "./platform.js";
+import { execFileSync, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { spawnPi } from "./run-temp.js";
 import { Board, RunLimitError, type Attachment, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
@@ -261,7 +262,7 @@ export class AutoReview {
   private async review(prompt: string, repo: string, cwd: string, runId: string, models: string[]): Promise<string> {
     // Same capabilities as a card run (tools, extensions, MCP, skills, context files), without a saved session.
     const args = ["--print", "--mode", "json", "--no-session", ...models, "--", prompt];
-    const child = spawn(...command(this.piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
+    const child = spawnPi(randomUUID(), this.piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
     this.reviewers.set(runId, child);
     try { return await new Promise<string>((resolve, reject) => {
       let stdout = "", stderr = "", exceeded = false, pending = "";

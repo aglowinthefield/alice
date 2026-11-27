@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { command } from "./platform.js";
+import { runTempDir, spawnPi } from "./run-temp.js";
 import { settledReply } from "./agent.js";
 import { piModelArgs } from "./agent-models.js";
 import { publishChatImages } from "./chat-images.js";
@@ -101,7 +102,7 @@ export function parseTopic(stream: string): string {
 export function writeTopic(piBin: string, cwd: string, models: string[], message: string): Promise<string> {
   const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-skills", "--no-context-files", "--thinking", "off", ...models, "--", topicPrompt(message)];
   return new Promise((resolve, reject) => {
-    const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnPi(randomUUID(), piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
     const timer = setTimeout(() => child.kill("SIGTERM"), 60_000);
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 200_000) child.kill("SIGTERM"); });
@@ -187,7 +188,8 @@ export class Chats {
     this.name(repoBoard, chatId, message);
     const prompt = chatSystemPrompt(repoBoard, this.board.listCards(repoBoard.repo), this.options.cli);
     const args = ["--print", "--mode", "json", "--session-dir", this.options.sessionDir, "--session-id", chatId, "--append-system-prompt", prompt, ...piModelArgs(chat), "--", message];
-    const child = spawn(...command(this.options.piBin, args), { cwd: repoBoard.repo, env: this.options.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const turnId = randomUUID();
+    const child = spawnPi(turnId, this.options.piBin, args, { cwd: repoBoard.repo, env: this.options.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     const turn: Turn = { child, live: { startedAt: saved.createdAt, parts: [] }, stopped: false };
     this.turns.set(chatId, turn);
     this.emit(chatId, { type: "live", live: turn.live });
@@ -214,7 +216,7 @@ export class Chats {
       clearTimeout(flush);
       this.turns.delete(chatId);
       const parts = turn.live.parts.map(part => part.type === "tool" && part.status === "running" ? { ...part, status: "error" as const } : part);
-      for (const part of parts) if (part.type === "text") part.text = publishChatImages(part.text, this.options.sessionDir, chatId, repoBoard.id, repoBoard.repo);
+      for (const part of parts) if (part.type === "text") part.text = publishChatImages(part.text, this.options.sessionDir, chatId, repoBoard.id, repoBoard.repo, runTempDir(turnId));
       const text = replyText(parts);
       if (this.board.getChat(chatId)) {
         if (parts.length) this.emit(chatId, { type: "message", message: this.board.addChatMessage(chatId, "agent", text, parts) });

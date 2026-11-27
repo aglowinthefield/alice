@@ -73,9 +73,7 @@ export type ReviewWait = "agent_review" | "ci_fix" | "github";
  * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
  * something else (an approval in progress, a merge failure, a closed PR or failing checks) has to be dealt with first.
- */
-/**
- * The next step on a Review card that is your turn. `agent_approved`: the agent reviewer approved the latest attempt
+ * `agent_approved`: the agent reviewer approved the latest attempt
  * and only your Approve is left. `needs_you`: the agent reviewer handed the attempt to you (a finding, a failed check).
  */
 export type ReviewAction = "pr_ready" | "accept_findings" | "agent_approved" | "needs_you";

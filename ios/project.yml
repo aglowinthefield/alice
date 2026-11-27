@@ -40,6 +40,16 @@ targets:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Bakery connects to your Bakery server on your network.
         UILaunchScreen: {}
+  BakeryTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [BakeryTests]
+    dependencies:
+      - target: Bakery
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.bakery.ios.tests
   BakeryUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -57,4 +67,4 @@ schemes:
       targets:
         Bakery: all
     test:
-      targets: [BakeryUITests]
+      targets: [BakeryTests, BakeryUITests]

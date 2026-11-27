@@ -94,11 +94,11 @@ export function readPullRequestRules(root: string): PullRequestRules {
 export const cardTitle = (card: Pick<Card, "id" | "title">) => card.title.replace(/\s+/g, " ").trim().slice(0, 250) || `Alice card ${card.id}`;
 
 /** The body footer every Alice pull request carries, after the operator's body. */
-export function pullRequestBody(body: string, card: Pick<Card, "id">, run: Pick<Run, "output">): string {
+export function pullRequestBody(body: string, card: Pick<Card, "id" | "idempotencyKey">, run: Pick<Run, "output">): string {
   const summary = (run.output || "").trim().slice(-3000);
   const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
   // Attachment links are relative to the local server and would be broken on GitHub; see githubMarkdown.
-  return githubMarkdown(`${body.trim()}\n\n---\n\nOpened by Alice for card \`${card.id}\`.${details}`);
+  return githubMarkdown(`${body.trim()}\n\n---\n\nOpened by Alice for card \`${card.id}\`${card.idempotencyKey ? ` (key \`${card.idempotencyKey}\`)` : ""}.${details}`);
 }
 
 /** The drafter has no tools, so it gets the start of the patch and a per-file summary of all of it. */
@@ -155,7 +155,7 @@ function runPi(piBin: string, prompt: string, cwd: string, models: string[], onP
   const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-skills", "--no-context-files", "--thinking", "low", ...models, "--", prompt];
   return new Promise((resolve, reject) => {
     // Aborting kills Pi and rejects with an AbortError through the "error" event.
-    const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"], signal });
+    const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, IMPRESSION_SESSION: "off" }, signal });
     let stdout = "", stderr = "", exceeded = false;
     const timer = setTimeout(() => { exceeded = true; killTree(child); }, 3 * 60_000);
     let pending = "";

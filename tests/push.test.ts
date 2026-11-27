@@ -133,6 +133,66 @@ test("subscriptions must be https push endpoints with keys; the VAPID key pair i
   } finally { f.close(); }
 });
 
+test("the stale Review digest goes out at most once a day, and only when a card is stale", async () => {
+  const day = 24 * 60 * 60_000;
+  let clock = Date.now();
+  const f = fixture();
+  try {
+    const push = new PushNotifications(f.board, f.board.sqlite, f.dir, async (subscription, notice) => { f.sent.push({ endpoint: subscription.endpoint, notice }); }, () => clock);
+    const digests = () => f.sent.filter(item => item.notice.tag === "stale-review-digest");
+    const old = f.finish("Old work", "review");
+    clock = Date.parse(f.board.getCard(old.id)!.reviewSince!) + 4 * day;
+    await push.tick();
+    assert.equal(digests().length, 0, "nobody subscribed, so nothing is sent or counted as sent");
+    push.subscribe(subscription("https://push.example/a"));
+    clock -= 3 * day;
+    await push.tick();
+    assert.equal(digests().length, 0, "a 1-day-old Review card is not stale");
+    clock += 3 * day;
+    await push.tick();
+    assert.equal(digests().length, 1);
+    const notice = digests()[0].notice;
+    assert.equal(notice.title, "1 card has sat in Review too long");
+    assert.match(notice.body, /repo · Old work \(4d\)/);
+    assert.equal(notice.url, "/today");
+    clock += 23 * 60 * 60_000;
+    await push.tick();
+    assert.equal(digests().length, 1, "not twice within a day");
+    const restarted = new PushNotifications(f.board, f.board.sqlite, f.dir, async (subscription, item) => { f.sent.push({ endpoint: subscription.endpoint, notice: item }); }, () => clock);
+    await restarted.tick();
+    assert.equal(digests().length, 1, "a restart does not resend today's digest");
+    clock += 60 * 60_000;
+    await push.tick();
+    assert.equal(digests().length, 2, "the next day it goes out again while the card is still stale");
+    f.board.closeReview(old.id);
+    clock += 2 * day;
+    await push.tick();
+    assert.equal(digests().length, 2, "nothing stale, nothing sent");
+  } finally { f.close(); }
+});
+
+test("the digest follows each board's threshold and lists the oldest cards first", async () => {
+  const day = 24 * 60 * 60_000;
+  let clock = Date.now();
+  const f = fixture();
+  try {
+    const push = new PushNotifications(f.board, f.board.sqlite, f.dir, async (subscription, notice) => { f.sent.push({ endpoint: subscription.endpoint, notice }); }, () => clock);
+    push.subscribe(subscription("https://push.example/a"));
+    f.finish("First", "review");
+    f.finish("Second", "review");
+    f.board.setStaleReviewDays(f.repoBoard.id, 5);
+    clock += 4 * day;
+    assert.equal(push.staleCards().length, 0, "4 days is not stale on a 5-day board");
+    f.board.setStaleReviewDays(f.repoBoard.id, 0);
+    clock += 30 * day;
+    assert.equal(push.staleCards().length, 0, "0 turns it off");
+    f.board.setStaleReviewDays(f.repoBoard.id, 3);
+    assert.deepEqual(push.staleCards().map(card => card.title), ["First", "Second"]);
+    await push.tick();
+    assert.equal(f.sent.filter(item => item.notice.tag === "stale-review-digest")[0].notice.title, "2 cards have sat in Review too long");
+  } finally { f.close(); }
+});
+
 test("a running card that may be stuck notifies once, naming why", async () => {
   const f = fixture();
   try {

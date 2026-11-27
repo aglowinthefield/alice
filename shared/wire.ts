@@ -117,6 +117,8 @@ export type Card = {
   planOnly: boolean;
   /** Last time the latest run's agent reported anything; null before the first run. */
   lastActivityAt: string | null;
+  /** When a Review card last entered Review (see `isStaleReview`); null on cards in other lanes. */
+  reviewSince: string | null;
   /** Automatic retries spent after temporary provider failures since the card's last successful run. */
   autoRetries: number;
   /** When auto-pickup may retry this Ready card after a temporary provider failure; null when no retry is waiting. */

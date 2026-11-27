@@ -58,6 +58,8 @@ export type Board = {
   autoReviewEnabledAt: string | null;
   /** Spend limits (daily starts, cost budget, review diff caps) apply only when on; off by default. */
   limitsEnabled?: boolean;
+  /** Days a card may sit in Review before it is marked stale (src/stale-review.ts); 0 is off. */
+  staleReviewDays?: number;
   autoReviewConcurrency?: number;
   autoReviewMaxFiles?: number;
   autoReviewMaxPatchChars?: number;

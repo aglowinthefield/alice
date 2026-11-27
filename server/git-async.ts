@@ -6,17 +6,17 @@ import { execFile } from "node:child_process";
 
 /** A failed command: `status` is its exit code (undefined when it was killed or could not start). */
 export type CommandError = Error & { status?: number; code?: string | number; signal?: NodeJS.Signals | null; killed?: boolean; stdout: string; stderr: string };
-export type RunOptions = { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number };
+export type RunOptions = { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; maxBuffer?: number; input?: string };
 
-export function run(file: string, args: string[], options: RunOptions = {}): Promise<{ stdout: string; stderr: string }> {
+export function run(file: string, args: string[], { input, ...options }: RunOptions = {}): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = execFile(file, args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, windowsHide: true, ...options }, (error, stdout, stderr) => {
       if (!error) { resolve({ stdout, stderr }); return; }
       reject(Object.assign(error, { status: typeof error.code === "number" ? error.code : undefined, stdout: stdout ?? "", stderr: stderr ?? "" }) as CommandError);
     });
-    // The synchronous calls this replaces gave the child an empty stdin. Close ours so a command that reads it sees
-    // EOF instead of waiting forever (a credential helper, say).
-    child.stdin?.end();
+    // The synchronous calls this replaces gave the child an empty stdin (or `input`). Close ours so a command that
+    // reads it sees EOF instead of waiting forever (a credential helper, say).
+    child.stdin?.end(input);
   });
 }
 

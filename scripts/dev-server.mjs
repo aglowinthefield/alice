@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Dev supervisor for the Bakery server. Replaces `tsx watch`, which SIGTERMs the
+// Dev supervisor for the Alice server. Replaces `tsx watch`, which SIGTERMs the
 // server on any source change and so killed every running Pi child whenever
-// Bakery integrated a card into its own checkout. Here a change first asks the
+// Alice integrated a card into its own checkout. Here a change first asks the
 // server to drain (no new runs, wait for active ones), then restarts it.
+// First, so ALICE_* settings are filled from BAKERY_* ones before anything reads them.
+import "../server/legacy-names.ts";
 import { spawn } from "node:child_process";
 import { watch, readFileSync } from "node:fs";
 import { createServer, request } from "node:http";
@@ -22,13 +24,13 @@ let startedAt = 0;
 let ready = false; // the server child is accepting requests
 let changeAt = 0; // when the pending restart was requested
 let activeRuns = 0;
-let bootMs = Number(process.env.BAKERY_BOOT_ESTIMATE_MS) || 6000; // last measured spawn-to-listening time
+let bootMs = Number(process.env.ALICE_BOOT_ESTIMATE_MS) || 6000; // last measured spawn-to-listening time
 let retryAt = 0;
 
 // The supervisor owns the public port and proxies to the server on an internal one, so a page load during a
 // restart gets a static status page with timing instead of a refused connection.
-const publicPort = Number(process.env.BAKERY_PORT ?? 4317);
-const innerPort = Number(process.env.BAKERY_INNER_PORT ?? publicPort + 10000);
+const publicPort = Number(process.env.ALICE_PORT ?? 4317);
+const innerPort = Number(process.env.ALICE_INNER_PORT ?? publicPort + 10000);
 const page = () => readFileSync(new URL("./restart-page.html", import.meta.url), "utf8");
 
 async function state(up) {
@@ -42,10 +44,10 @@ function frontFor(listenPort, targetPort, up, label) {
     if (res.headersSent) { res.destroy(); return; }
     const html = req.method === "GET" && String(req.headers.accept).includes("text/html");
     res.writeHead(503, { "content-type": html ? "text/html; charset=utf-8" : "application/json", "retry-after": "2", "cache-control": "no-store" });
-    res.end(html ? page() : JSON.stringify({ error: "Bakery is restarting" }));
+    res.end(html ? page() : JSON.stringify({ error: "Alice is restarting" }));
   };
   const front = createServer(async (req, res) => {
-    if (req.url === "/__bakery/state") {
+    if (req.url === "/__alice/state") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify(await state(up)));
       return;
@@ -81,19 +83,19 @@ const probe = port => new Promise(done => {
 });
 
 // The UI port is Vite's public address; Vite itself runs on an internal port (see `npm run dev`).
-const uiPort = Number(process.env.BAKERY_UI_PORT ?? 5173);
-const viteInner = Number(process.env.BAKERY_VITE_PORT ?? uiPort + 10000);
+const uiPort = Number(process.env.ALICE_UI_PORT ?? 5173);
+const viteInner = Number(process.env.ALICE_VITE_PORT ?? uiPort + 10000);
 const apiUp = async () => ready;
 const uiUp = async () => ready && (await probe(viteInner));
 frontFor(publicPort, innerPort, apiUp, "API");
-if (process.env.BAKERY_UI_PORT !== "0") frontFor(uiPort, viteInner, uiUp, "UI");
+if (process.env.ALICE_UI_PORT !== "0") frontFor(uiPort, viteInner, uiUp, "UI");
 
 function log(message) { console.log(`[dev-server] ${message}`); }
 
 function start() {
   clearTimeout(retry); retry = null;
   draining = false; ready = false; retryAt = 0; startedAt = Date.now();
-  child = spawn(process.execPath, ["--import", "tsx", entry], { stdio: ["inherit", "inherit", "inherit", "ipc"], env: { ...process.env, BAKERY_PORT: String(innerPort) } });
+  child = spawn(process.execPath, ["--import", "tsx", entry], { stdio: ["inherit", "inherit", "inherit", "ipc"], env: { ...process.env, ALICE_PORT: String(innerPort) } });
   child.on("message", message => {
     if (message?.type === "listening") { ready = true; bootMs = Date.now() - startedAt; }
     if (message?.type === "draining") activeRuns = message.activeRuns;

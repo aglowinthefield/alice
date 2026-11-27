@@ -1,16 +1,18 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Board, type Card, type Run } from "./board.js";
-import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
+import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub, postPullRequestComment } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
+import { githubMarkdown } from "./github-markdown.js";
 import { githubRepo } from "./github-url.js";
 import { commitIdentityArgs } from "./git-identity.js";
 import { isAncestor, run, Serial, Shared, type CommandError } from "./git-async.js";
 import { featureOffMessage } from "../src/features.js";
+import { cardBranch, cardBranches } from "./legacy-names.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
 /** Git without blocking the event loop. `index` sets GIT_INDEX_FILE; `raw` keeps stdout untrimmed. */
@@ -26,6 +28,38 @@ async function gitCommand(repo: string, args: string[], index?: string, raw = fa
   }
 }
 function git(repo: string, ...args: string[]): Promise<string> { return gitCommand(repo, args); }
+/**
+ * A three-way merge done on objects only (`git merge-tree`), so nothing in any worktree or ref changes. Returns the
+ * merged tree, or the paths that conflict. `sides` are the two commits or trees to merge, optionally preceded by
+ * `--merge-base=<tree-ish>`.
+ */
+function mergeTreeAsync(repo: string, sides: string[]): Promise<{ tree: string; conflicts: string[] }> {
+  return new Promise((resolve, reject) => {
+    execFile("git", ["-C", repo, "merge-tree", "--write-tree", "--name-only", "-z", ...sides], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      // Exit 1 is a merge with conflicts; anything else is Git failing.
+      if (error && error.code !== 1) return reject(new Error(`merge-tree failed: ${(stderr || stdout || error.message).trim().slice(0, 4000)}`));
+      const [tree, ...rest] = stdout.split("\0");
+      const end = rest.indexOf("");
+      resolve({ tree: tree.trim(), conflicts: error ? [...new Set(rest.slice(0, end < 0 ? rest.length : end))] : [] });
+    });
+  });
+}
+/**
+ * Paths an update from tree `from` to tree `to` would create in `worktree` where a local file already sits that Git
+ * does not track, such as an ignored `.env` that main starts tracking. `from` holds every file Git sees (`add -A`),
+ * so anything already on disk at an added path, or a file where an added path needs a directory, is ignored.
+ * `read-tree -u` would overwrite those without asking.
+ */
+async function ignoredCollisions(worktree: string, from: string, to: string): Promise<string[]> {
+  const added = (await gitCommand(worktree, ["diff", "--no-renames", "--name-only", "-z", "--diff-filter=A", from, to], undefined, true)).split("\0").filter(Boolean);
+  const kind = (path: string) => { try { return lstatSync(join(worktree, path)).isDirectory() ? "dir" : "file"; } catch { return ""; } };
+  return added.filter(path => {
+    const parts = path.split("/");
+    return !!kind(path) || parts.slice(0, -1).some((_, i) => kind(parts.slice(0, i + 1).join("/")) === "file");
+  });
+}
+/** What happened to one card that depends on a card that just merged; see `Integration.updateDependents`. */
+export type DependentUpdate = { cardId: string; outcome: "updated" | "current" | "conflict" | "deferred" | "skipped"; detail: string };
 /** What `location` reads from Git to confirm a card worktree is the card's, on its branch, with no conflicts. */
 type WorktreeFacts = { repoTop: string; worktreeTop: string; repoCommon: string; worktreeCommon: string; branch: string; unmerged: string };
 const worktreeArgs = {
@@ -33,13 +67,16 @@ const worktreeArgs = {
   branch: ["symbolic-ref", "--short", "HEAD"], unmerged: ["ls-files", "-u"],
 } as const;
 function worktreeProblem(facts: WorktreeFacts, repo: string, worktree: string, cardId: string): string | null {
-  if (realpathSync(facts.repoTop) !== realpathSync(repo) || realpathSync(facts.worktreeTop) !== realpathSync(worktree) ||
-    realpathSync(facts.repoCommon) !== realpathSync(facts.worktreeCommon) || facts.branch !== `bakery/${cardId}`) return "Card worktree is not on its expected branch in this repository";
+  if (realpathSync.native(facts.repoTop) !== realpathSync.native(repo) || realpathSync.native(facts.worktreeTop) !== realpathSync.native(worktree) ||
+    realpathSync.native(facts.repoCommon) !== realpathSync.native(facts.worktreeCommon) || !cardBranches(cardId).includes(facts.branch)) return "Card worktree is not on its expected branch in this repository";
   if (facts.unmerged) return "Resolve conflicts in the card worktree before review";
   return null;
 }
-/** What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies. */
-/** `work` names the reviewed run and its tree. Unlike `fingerprint`, it ignores where local main is. */
+/**
+ * What auto-review needs of a diff: the changed paths and, when asked, the patch's size. No patches are held and no size cap applies.
+ * `work` names the reviewed run and its tree. `git add -A` leaves out untracked files Git ignores, so build output does not
+ * change it; every tracked file counts, ignored or not. Unlike `fingerprint`, it ignores where local main is.
+ */
 export type ReviewSummary = { fingerprint: string; work: string; paths: string[]; patchChars: number | null; unsupported: boolean };
 export type ReviewDiff = { fingerprint: string; files: { path: string; patch: string }[] };
 export class IntegrationConflictError extends Error {
@@ -53,24 +90,24 @@ async function hasCommit(repo: string, rev: string) {
   try { await git(repo, "rev-parse", "--verify", "--quiet", `${rev}^{commit}`); return true; }
   catch { return false; }
 }
-/** A Done card Bakery merged into local main, offered as "Publish as PR". `blocker` says why it cannot be published. */
+/** A Done card Alice merged into local main, offered as "Publish as PR". `blocker` says why it cannot be published. */
 export type LocalMerge = { card: Card; candidate: string; commits: number; blocker: string };
 /** Local main has commits origin/main lacks. `resettable` means they are only published card merges. */
 export type MainRecovery = { tip: string; originMain: string; recoveryBranch: string; localCommits: number; resettable: boolean; reason: string };
 /** Why a locally merged card's candidate cannot become a PR as it is, or "". */
 async function publishBlocker(repo: string, card: Card, candidate: string): Promise<string> {
-  if (card.prOverrideUrl) return `Linked to ${card.prOverrideUrl}; Bakery only pushes bakery/${card.id}`;
+  if (card.prOverrideUrl) return `Linked to ${card.prOverrideUrl}; Alice only pushes ${await cardBranch(repo, card.id)}`;
   if (!await hasCommit(repo, candidate)) return `The approved commit ${candidate.slice(0, 12)} is no longer in the repository`;
   // The candidate was built on local main. Other local merges under it would ride along in this PR.
   const merges = (await git(repo, "rev-list", "--merges", `refs/remotes/origin/main..${candidate}`)).split("\n").filter(Boolean);
-  if (merges.length) return `bakery/${card.id} includes ${merges.length} merge commit${merges.length === 1 ? "" : "s"} from local main that origin/main lacks (${await git(repo, "log", "-1", "--format=%s", merges[0])}), which would land in this pull request. Rebase the card branch onto origin/main yourself, then publish`;
+  if (merges.length) return `${await cardBranch(repo, card.id)} includes ${merges.length} merge commit${merges.length === 1 ? "" : "s"} from local main that origin/main lacks (${await git(repo, "log", "-1", "--format=%s", merges[0])}), which would land in this pull request. Rebase the card branch onto origin/main yourself, then publish`;
   return "";
 }
 
 /**
  * Where `candidate` stands against `branch` on origin, after a fetch. "push" when the branch is new there or a plain
  * push fast-forwards it; "on-origin" when origin's branch already contains the candidate (someone pushed to the pull
- * request, for example merging main into it, and Bakery has nothing new). When both sides hold commits the other
+ * request, for example merging main into it, and Alice has nothing new). When both sides hold commits the other
  * lacks, throws instead of letting Git reject the push, naming what origin has so nobody's work is overwritten.
  */
 async function remoteBranchState(repo: string, branch: string, candidate: string, resolve: string | null): Promise<"push" | "on-origin" | "diverged"> {
@@ -81,7 +118,7 @@ async function remoteBranchState(repo: string, branch: string, candidate: string
   const theirs = Number(await git(repo, "rev-list", "--count", `${candidate}..${remote}`));
   const ours = Number(await git(repo, "rev-list", "--count", `${remote}..${candidate}`));
   const latest = await git(repo, "log", "-1", "--format=%h %s (%an)", remote);
-  throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks (latest: ${latest}), and the card has ${ours} that origin lacks. Someone pushed to the pull request; Bakery will not overwrite it. ${resolve}`);
+  throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks (latest: ${latest}), and the card has ${ours} that origin lacks. Someone pushed to the pull request; Alice will not overwrite it. ${resolve}`);
 }
 
 /** Why the card worktree cannot take an automatic merge of `origin/<branch>`, or "" when it is safe to try. */
@@ -106,7 +143,7 @@ async function mergeRemoteBranch(worktree: string, branch: string, scratch = fal
   const remote = `refs/remotes/origin/${branch}`;
   const theirs = Number(await git(worktree, "rev-list", "--count", `HEAD..${remote}`)), ours = Number(await git(worktree, "rev-list", "--count", `${remote}..HEAD`));
   const blocker = scratch ? "" : await mergeBlocker(worktree, branch);
-  if (blocker) throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks, but Bakery could not merge them: ${blocker}. Nothing was changed or pushed. Fix that in ${worktree}, then approve again`);
+  if (blocker) throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks, but Alice could not merge them: ${blocker}. Nothing was changed or pushed. Fix that in ${worktree}, then approve again`);
   try {
     await git(worktree, ...await commitIdentityArgs(worktree), "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
   } catch (error) {
@@ -114,41 +151,41 @@ async function mergeRemoteBranch(worktree: string, branch: string, scratch = fal
     try { files = (await git(worktree, "diff", "--name-only", "--diff-filter=U")).split("\n").filter(Boolean).join(", "); } catch { /* Not mid-merge. */ }
     try { await git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
     const detail = error instanceof Error ? error.message.slice(0, 500) : String(error);
-    throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks. Merging them ${files ? `conflicts in ${files}` : `failed (${detail})`}. Bakery aborted the merge and changed nothing; nothing was pushed. ${scratch ? `Reconcile origin/${branch} with the approved commit yourself, then publish again` : `Merge origin/${branch} into ${worktree} yourself and resolve the conflict, then approve again`}`);
+    throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks. Merging them ${files ? `conflicts in ${files}` : `failed (${detail})`}. Alice aborted the merge and changed nothing; nothing was pushed. ${scratch ? `Reconcile origin/${branch} with the approved commit yourself, then publish again` : `Merge origin/${branch} into ${worktree} yourself and resolve the conflict, then approve again`}`);
   }
   return { merged: theirs, head: await git(worktree, "rev-parse", "HEAD") };
 }
 
 // The title is user text. It reaches Git only as an argv entry, never through a shell.
-export function mergeMessage(card: Pick<Card, "id" | "title">): string[] {
+export function mergeMessage(card: Pick<Card, "id" | "title">, branch = `alice/${card.id}`): string[] {
   const prefix = "Merge card: ", limit = 72 - prefix.length;
   const title = card.title.replace(/\s+/g, " ").trim() || "(untitled)";
   const chars = [...title];
   const subject = prefix + (chars.length > limit ? chars.slice(0, limit - 1).join("").trimEnd() + "…" : title);
-  return ["-m", subject, "-m", `Card: ${card.id}\nBranch: bakery/${card.id}`];
+  return ["-m", subject, "-m", `Card: ${card.id}\nBranch: ${branch}`];
 }
 
 /**
- * What Bakery is doing while it pushes a card to GitHub: the current step and the output Git and the repository's
+ * What Alice is doing while it pushes a card to GitHub: the current step and the output Git and the repository's
  * pre-push hooks printed so far. Kept per card after it finishes, so the board can show how the last push ended.
  */
 export type PushProgress = { step: string; log: string[]; startedAt: string; finishedAt: string | null; error: string | null };
 const progressLogLines = 400;
 
 /**
- * `git push` without blocking the server, streaming stdout and stderr together, in order, into `onLine`. A
- * pre-push hook's own stdout is part of the push output, so a failure message carries everything it printed, not
- * only stderr. `\r` progress redraws replace the line they redraw.
+ * `git push` without blocking the server, streaming stdout and stderr together into `onLine`. A pre-push hook's own
+ * stdout is part of the push output, so a failure message carries everything it printed, not only stderr. Git passes
+ * the hook's stdout to its stdout, a separate pipe, so each stream's lines stay in order but the two interleave as read. `\r` progress redraws replace the line they redraw.
  */
 /** A failed `git push`. `hookFailed` when a pre-push hook refused it, as opposed to the remote or the network. */
 export class PushError extends Error {
   constructor(message: string, readonly output: string, readonly hookFailed: boolean) { super(message); }
 }
-/** A pre-push hook refused the push of `sha`, which Bakery had committed from the card's reviewed work. */
+/** A pre-push hook refused the push of `sha`, which Alice had committed from the card's reviewed work. */
 export class PushHookError extends PushError {
   constructor(error: PushError, readonly sha: string) { super(error.message, error.output, true); }
 }
-/** The repository's pre-commit or commit-msg hook refused the commit Bakery made of the card's work, so nothing was committed. */
+/** The repository's pre-commit or commit-msg hook refused the commit Alice made of the card's work, so nothing was committed. */
 export class CommitHookError extends Error {
   constructor(message: string, readonly output: string) { super(message); }
 }
@@ -234,14 +271,14 @@ export class Integration {
   private progress = new Map<string, PushProgress>();
   /** Non-blocking problems seen while approving, such as an offline fetch. Kept for inspection; also logged. */
   readonly warnings: string[] = [];
-  /** Called with "merge" or "pr" when Bakery merges a card into local main or opens or updates its pull request. Used for usage telemetry. */
+  /** Called with "merge" or "pr" when Alice merges a card into local main or opens or updates its pull request. Used for usage telemetry. */
   onDelivered: (kind: "merge" | "pr") => void = () => {};
   constructor(private board: Board, readonly dataDir: string, private fetchTimeoutMs = 30_000) {}
 
   /** Resolves once approvals, accepts, withdrawals and resets already queued have finished, for shutdown. */
   idle(): Promise<void> { return this.writes.idle(); }
 
-  /** The current or last push of `cardId` to GitHub, or null when Bakery has not pushed it since starting. */
+  /** The current or last push of `cardId` to GitHub, or null when Alice has not pushed it since starting. */
   pushProgress(cardId: string): PushProgress | null { return this.progress.get(cardId) ?? null; }
 
   /** Runs `work` as a tracked push of `cardId`: steps and push output go to `pushProgress`, and so does the outcome. */
@@ -271,7 +308,7 @@ export class Integration {
     if (!run || !run.worktree || !(card.status === "review" && run.status === "review" ||
       allowFailed && card.status === "failed" && run.status === "failed")) throw new Error("Only a reviewed run can be inspected or approved");
     const repo = card.repo, worktree = join(this.dataDir, "worktrees", card.id);
-    if (!existsSync(worktree) || realpathSync(worktree) !== realpathSync(run.worktree)) throw new Error("Card worktree is missing or has moved");
+    if (!existsSync(worktree) || realpathSync.native(worktree) !== realpathSync.native(run.worktree)) throw new Error("Card worktree is missing or has moved");
     return { repo, worktree, run };
   }
   /** The card's reviewed run and worktree, after confirming in Git that the worktree is the card's, on its branch, with no conflicts. */
@@ -293,7 +330,7 @@ export class Integration {
   private async snapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
     const result = await this.readSnapshot(card, includeFiles, summary);
     const latest = this.board.listRuns(card.id)[0];
-    if (latest?.id !== result.runId || latest.status !== "review") throw new Error("A newer attempt started while Bakery read this review; refresh it");
+    if (latest?.id !== result.runId || latest.status !== "review") throw new Error("A newer attempt started while Alice read this review; refresh it");
     return result;
   }
   private async readSnapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
@@ -302,7 +339,7 @@ export class Integration {
     // does) moves HEAD without changing the tree, and must not mark the loaded diff stale.
     const [main, branch] = await Promise.all([git(repo, "rev-parse", "main"), git(worktree, "rev-parse", "HEAD")]);
     const base = await git(worktree, "merge-base", main, branch);
-    const temp = mkdtempSync(join(tmpdir(), "bakery-review-"));
+    const temp = mkdtempSync(join(tmpdir(), "alice-review-"));
     try {
       const index = join(temp, "index");
       // Seed from the worktree's own index: its stat cache lets `add -A` rehash only changed files.
@@ -334,14 +371,14 @@ export class Integration {
         const unsupported = /^:(120000|160000) |^:\d+ (120000|160000) |^-\t-\t/m.test(raw);
         return { runId: run.id, fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths, patchChars, unsupported };
       }
-      if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Bakery");
+      if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Alice");
       // One diff for every file, split at each header, instead of one git process per file. Git lists files
       // and emits patches in the same path order; if the counts ever disagree, fall back to per-file diffs.
       const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree];
       const patches = (await gitCommand(worktree, diffArgs, undefined, true)).split(/^(?=diff --git )/m).filter(Boolean);
       const files: ReviewDiff["files"] = [];
       for (const [i, path] of paths.entries()) files.push({ path, patch: patches.length === paths.length ? patches[i].trim() : await gitCommand(worktree, [...diffArgs, "--", path]) });
-      if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Bakery");
+      if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Alice");
       return { runId: run.id, fingerprint, work, tree, main, files, paths, patchChars: null as number | null, unsupported: false };
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }
@@ -385,6 +422,14 @@ export class Integration {
     return { fingerprint, work, runId };
   }
 
+  /** The paths that differ between two `work` values, to say what changed. Empty when the run changed or Git cannot tell. */
+  async workChanges(card: Card, before: string, after: string): Promise<string[]> {
+    const [run, from] = before.split(":"), [nextRun, to] = after.split(":");
+    if (run !== nextRun || !from || !to) return [];
+    try { return (await gitCommand((await this.location(card)).worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", from, to], undefined, true)).split("\0").filter(Boolean); }
+    catch { return []; }
+  }
+
   /** Changed paths, and the patch size when `measureChars`, without the diff viewer's 200-file and 2 MB caps. */
   async reviewSummary(card: Card, measureChars: boolean): Promise<ReviewSummary> {
     const { fingerprint, work, paths, patchChars, unsupported } = await this.sharedSnapshot(card, false, { measureChars });
@@ -411,7 +456,7 @@ export class Integration {
   // whose result tree is identical to its first parent.
   private reconciling: Promise<void> | null = null;
   /**
-   * Marks cards whose work someone merged into local main outside Bakery. Runs on the auto-review timer with async
+   * Marks cards whose work someone merged into local main outside Alice. Runs on the auto-review timer with async
    * Git, so it never stalls the server; a call while one is still running waits for that one instead of starting another.
    */
   reconcileExternallyMerged(): Promise<void> {
@@ -437,15 +482,162 @@ export class Integration {
         if (!this.board.listExternalMergeCandidates().some(item => item.card.id === card.id)) continue;
         this.board.recordExternalIntegration(card.id, run.id, candidate, merged[0]);
         this.reconciliationErrors.delete(card.id);
+        this.afterMerge(card.id);
         console.log(`Reconciled externally merged card ${card.id} at ${merged[0]}`);
       } catch (error) {
-        // Git worktrees can disappear independently of Bakery. Leave ambiguous cards unchanged.
+        // Git worktrees can disappear independently of Alice. Leave ambiguous cards unchanged.
         if (!this.reconciliationErrors.has(card.id)) console.error(`Could not reconcile card ${card.id}: ${String(error)}`);
         this.reconciliationErrors.add(card.id);
       }
     }
   }
 
+
+  private dependentUpdates: Promise<unknown> = Promise.resolve();
+  /**
+   * After `parentId` merges (Approve, its pull request, or by hand), brings every Review card that depends on it up to
+   * date with main, so it does not conflict later. Updates run one at a time, queued behind earlier ones.
+   */
+  updateDependents(parentId: string): Promise<DependentUpdate[]> { return this.queueDependentWork(() => this.updateDependentsNow(parentId)); }
+  /**
+   * Retries the updates deferred because the card was busy when its parent merged (see `updateDependent`), for cards
+   * that are back in Review and free. The auto-review tick calls it before starting reviews, so a card's next review
+   * sees current main.
+   */
+  retryDeferredDependents(): Promise<DependentUpdate[]> { return this.queueDependentWork(() => this.retryDeferredNow()); }
+  private queueDependentWork(work: () => Promise<DependentUpdate[]>): Promise<DependentUpdate[]> {
+    const next = this.dependentUpdates.then(work);
+    this.dependentUpdates = next.catch(() => {});
+    return next;
+  }
+  /** Resolves once every dependent update queued so far has finished. */
+  async dependentUpdatesSettled(): Promise<void> { await this.dependentUpdates; }
+  /** Starts `updateDependents` without waiting for it; a merge never fails because a dependent could not follow. */
+  private afterMerge(parentId: string) {
+    if (!this.board.listDependencies(parentId).dependents.some(card => card.status === "review")) return;
+    this.updateDependents(parentId).catch(error => console.error(`Could not update the cards that depend on ${parentId}: ${String(error)}`));
+  }
+  private async updateDependentsNow(parentId: string): Promise<DependentUpdate[]> {
+    const parent = this.board.getCard(parentId);
+    if (!parent) return [];
+    const results: DependentUpdate[] = [];
+    for (const ref of this.board.listDependencies(parentId).dependents) {
+      const card = this.board.getCard(ref.id);
+      if (card?.status === "review") results.push(await this.updateDependentNoted(card, parent));
+    }
+    return results;
+  }
+  private async retryDeferredNow(): Promise<DependentUpdate[]> {
+    const results: DependentUpdate[] = [];
+    for (const { cardId, parentId } of this.board.listDeferredDependentUpdates()) {
+      const card = this.board.getCard(cardId), parent = this.board.getCard(parentId);
+      // A card that was sent back keeps waiting until its next run reaches Review.
+      if (!card || !parent || card.status === "done" || card.status === "archived") this.board.clearDeferredDependentUpdate(cardId);
+      else if (card.status === "review") results.push(await this.updateDependentNoted(card, parent));
+    }
+    return results;
+  }
+  /** `updateDependent`, with what happened noted on the card. Anything but a deferral settles a waiting update. */
+  private async updateDependentNoted(card: Card, parent: Card): Promise<DependentUpdate> {
+    let result: DependentUpdate;
+    try { result = await this.updateDependent(card, parent); }
+    catch (error) { result = { cardId: card.id, outcome: "skipped", detail: `Alice could not bring this card up to date after "${parent.title}" merged: ${error instanceof Error ? error.message : String(error)}` }; }
+    if (result.outcome !== "deferred") this.board.clearDeferredDependentUpdate(card.id);
+    if (result.outcome !== "current" && result.detail) this.board.noteCard(card.id, result.detail);
+    return result;
+  }
+  /**
+   * Merges current main into one dependent card's worktree, keeping its uncommitted work uncommitted. Review
+   * worktrees usually hold the agent's work as uncommitted changes, which a plain rebase or merge would refuse, so
+   * the merge is first worked out on Git objects alone (`merge-tree`): the branch with main, then the uncommitted
+   * work on top of that. A conflict in either records the usual merge failure and changes nothing. A clean result
+   * moves the branch (a fast-forward, or a merge commit when the branch has commits of its own) and updates the files
+   * with `read-tree -m -u`, which refuses rather than overwrite a file edited after the snapshot. Staged changes are
+   * merged the same way on their own and stay staged. Everything that could stop the update (a conflict in the work or
+   * in what is staged, an ignored local file in the way) is found before anything changes, and changes nothing.
+   */
+  private async updateDependent(card: Card, parent: Card): Promise<DependentUpdate> {
+    const result = (outcome: DependentUpdate["outcome"], detail: string): DependentUpdate => ({ cardId: card.id, outcome, detail });
+    const after = `after "${parent.title}" merged`;
+    const run = this.board.listRuns(card.id)[0];
+    if (run?.status !== "review") return result("current", "");
+    // GitHub already tests an open pull request against main, and Alice sends its conflicts back from there.
+    if (card.prState === "OPEN" || card.prOverrideUrl) return result("current", "");
+    const busy = () => this.board.getApproval(card.id) ? "an approval is in progress" : this.board.getAutoReviewJob(run.id)?.state === "running" ? "an agent review is in progress" : "";
+    // Its worktree is in use. It is brought up to date once that finishes; see `retryDeferredDependents`.
+    const defer = () => {
+      const why = busy();
+      return result("deferred", this.board.deferDependentUpdate(card.id, parent.id) ? `Not brought up to date with main ${after} yet: ${why}. Alice updates it once that finishes` : "");
+    };
+    if (busy()) return defer();
+    const { repo, worktree } = await this.location(card);
+    for (const name of ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD"])
+      if (existsSync(resolve(worktree, await git(worktree, "rev-parse", "--git-path", name)))) return result("skipped", `Not brought up to date with main ${after}: the card worktree is in the middle of a Git operation (${name})`);
+    const prMode = this.board.integrationFor(card.repo) === "github-pr";
+    const mainName = prMode ? "origin/main" : "main";
+    const main = await git(repo, "rev-parse", "--verify", prMode ? "refs/remotes/origin/main" : "refs/heads/main");
+    const head = await git(worktree, "rev-parse", "HEAD");
+    if (await isAncestor(worktree, main, head)) return result("current", "");
+    const temp = mkdtempSync(join(tmpdir(), "alice-dependent-"));
+    try {
+      // The worktree as it stands, uncommitted and untracked files included, as a tree. See `snapshot`.
+      const index = join(temp, "index");
+      try { copyFileSync(resolve(worktree, await git(worktree, "rev-parse", "--git-path", "index")), index); }
+      catch { await gitCommand(worktree, ["read-tree", "HEAD"], index); }
+      await gitCommand(worktree, ["add", "-A"], index);
+      const work = await gitCommand(worktree, ["write-tree"], index);
+      // What is staged, from a copy of the real index so it is only read. Usually the same as HEAD.
+      const stagedIndex = join(temp, "staged");
+      copyFileSync(resolve(worktree, await git(worktree, "rev-parse", "--git-path", "index")), stagedIndex);
+      const staged = await gitCommand(worktree, ["write-tree"], stagedIndex);
+      const headTree = await git(worktree, "rev-parse", `${head}^{tree}`);
+      const conflict = (files: string[], what = "conflicts in") => {
+        const details = `Bringing the card up to date with ${mainName} (${main.slice(0, 12)}) ${after} ${what} ${files.join(", ")}. Alice changed nothing in the card worktree.`;
+        this.board.recordMergeFailure(card.id, files, details);
+        return result("conflict", `${details} Choose Fix conflict with Pi, or resolve it yourself`);
+      };
+      // The branch's own commits with main: a fast-forward when it has none.
+      const ownCommits = !await isAncestor(worktree, head, main);
+      const branch = ownCommits ? await mergeTreeAsync(worktree, [head, main]) : { tree: await git(worktree, "rev-parse", `${main}^{tree}`), conflicts: [] };
+      if (branch.conflicts.length) return conflict(branch.conflicts);
+      const merged = await mergeTreeAsync(worktree, [`--merge-base=${head}`, branch.tree, work]);
+      if (merged.conflicts.length) return conflict(merged.conflicts);
+      const stagedMerge = staged === headTree ? { tree: branch.tree, conflicts: [] } : await mergeTreeAsync(worktree, [`--merge-base=${head}`, branch.tree, staged]);
+      if (stagedMerge.conflicts.length) return conflict(stagedMerge.conflicts, "conflicts with changes staged in");
+      const collisions = await ignoredCollisions(worktree, work, merged.tree);
+      if (collisions.length) return conflict(collisions, "would overwrite local files Git ignores:");
+      // Git is asynchronous, so the writes below run in the repository's write queue (no approval, acceptance or reset
+      // of this repository interleaves) with the card held as for an approval (no new attempt or review action lands).
+      return await this.writes.run(repo, async () => {
+        const current = this.board.getCard(card.id);
+        if (current?.status !== "review" || this.board.listRuns(card.id)[0]?.id !== run.id) return result("skipped", `Not brought up to date with main ${after}: the card changed while Alice was checking it`);
+        if (busy()) return defer();
+        this.board.holdCard(card.id, run.id);
+        try {
+          const cardRef = await cardBranch(repo, card.id), ref = `refs/heads/${cardRef}`;
+          const newHead = ownCommits
+            ? await git(worktree, ...await commitIdentityArgs(worktree), "commit-tree", branch.tree, "-p", head, "-p", main, "-m", `Merge ${mainName} into ${cardRef}`, "-m", `${parent.title} (${parent.id}) merged; Alice brought this card up to date.`)
+            : main;
+          await git(worktree, "update-ref", "-m", `alice: update onto ${mainName} ${after}`, ref, newHead, head);
+          try { await gitCommand(worktree, ["read-tree", "-m", "-u", work, merged.tree], index); }
+          catch (error) {
+            await git(worktree, "update-ref", ref, head, newHead);
+            throw error;
+          }
+          // The branch moved under the real index. Point it at the new commit, so the card's work stays unstaged as before,
+          // or at the merged staged changes when some were staged. A refresh after `read-tree` only updates file stats.
+          if (staged === headTree) await git(worktree, "reset", "-q");
+          else {
+            await git(worktree, "read-tree", stagedMerge.tree);
+            try { await git(worktree, "update-index", "-q", "--refresh"); } catch { /* Exit 1 only lists files that differ from the index. */ }
+          }
+        } finally { this.board.releaseApproval(card.id); }
+        this.board.clearMergeFailure(card.id);
+        const requeued = this.board.requeueAutoReview(card.id, run.id);
+        return result("updated", `Brought up to date with ${mainName} (${main.slice(0, 12)}) ${after}${ownCommits ? ", with a merge commit on the card branch" : ""}.${requeued ? " Agent review runs again on the result." : " Refresh the diff to review it against the new main."}`);
+      });
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  }
 
   withdraw(card: Card): Promise<Card> {
     return this.writes.run(card.repo, async () => {
@@ -458,7 +650,7 @@ export class Integration {
   }
 
   /**
-   * Approve on a github-pr board: commit the reviewed work on `bakery/<id>`, push that branch to origin, and open
+   * Approve on a github-pr board: commit the reviewed work on `alice/<id>`, push that branch to origin, and open
    * a PR (or reuse the open one). Nothing merges locally; the card stays in Review until the PR merges on GitHub.
    * The operator's Approve (or, with auto-review on, the agent reviewer's approval) authorizes the push; the
    * implementing agent itself never pushes.
@@ -468,12 +660,14 @@ export class Integration {
    * the agent reviewer's approval on a board with auto-review on. Only "operator" means a person reviewed it.
    * `prechecked` waits for the hook check that started when the run reached Review (see `checkHooks`) and returns
    * the commit whose pre-push hook passed, or null; pushing exactly that commit skips the hook.
+   * `handoff` is the agent reviewer's findings when it left the card for a person: a new PR then opens as a draft and
+   * the findings are posted on it.
    */
-  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator", prechecked?: () => Promise<string | null>): Promise<Card> {
+  async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator", prechecked?: () => Promise<string | null>, handoff?: string): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integrationConfigured === "github-pr" && !this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
-    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; update that pull request yourself, or clear the link`);
+    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Alice only pushes ${await cardBranch(card.repo, card.id)}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
     return this.trackPush(card.id, async (step, push) => {
       step("Checking GitHub access");
@@ -486,16 +680,16 @@ export class Integration {
       const { repo, worktree, run } = await this.location(card);
       // As in `approve`: hold the card before Git commits its work, so no attempt or review write lands meanwhile.
       this.board.reserveApproval(card.id, run.id);
-      try { return await this.pushReviewed(card, reviewedFingerprint, github, draft, pushedBy, step, push, passed, slug, repo, worktree, run); }
+      try { return await this.pushReviewed(card, reviewedFingerprint, github, draft, pushedBy, step, push, passed, slug, repo, worktree, run, handoff); }
       finally { this.board.releaseApproval(card.id); }
     });
   }
   private async pushReviewed(card: Card, reviewedFingerprint: string, github: GitHub, draft: { title: string; body: string } | undefined,
     pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request", step: (name: string) => void,
-    push: (cwd: string, refspec: string, flags?: string[]) => Promise<void>, passed: string | null, slug: string, repo: string, worktree: string, run: Run): Promise<Card> {
+    push: (cwd: string, refspec: string, flags?: string[]) => Promise<void>, passed: string | null, slug: string, repo: string, worktree: string, run: Run, handoff?: string): Promise<Card> {
     const inspected = await this.snapshot(card, false);
     if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
-    const branch = `bakery/${card.id}`;
+    const branch = await cardBranch(repo, card.id);
     // An open PR keeps its title and body; only a new one must pass the repository's title check.
     const existing = await github.findByBranch(slug, branch);
     const hasOpenPr = existing?.state === "OPEN";
@@ -528,21 +722,28 @@ export class Integration {
         if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
         // Origin's branch moved between the fetch and the push. Git refused rather than overwrite it; do not retry.
         if (error instanceof PushError && /! \[(remote )?rejected\]|non-fast-forward|fetch first/.test(error.output))
-          throw new Error(`${branch} on origin changed while Bakery was pushing, so Git refused the push and nothing was overwritten. Approve again to merge the new commits into the card worktree\n\n${error.message}`);
+          throw new Error(`${branch} on origin changed while Alice was pushing, so Git refused the push and nothing was overwritten. Approve again to merge the new commits into the card worktree\n\n${error.message}`);
         throw error;
       }
     }
     step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
-    const why = { "operator": "changes the operator reviewed and approved in Bakery", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Bakery's agent reviewer approved, pushed automatically without human review", "auto-pull-request": "changes pushed automatically when the run reached Review, without human review" }[pushedBy];
+    const why = { "operator": "changes the operator reviewed and approved in Alice", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Alice's agent reviewer approved, pushed automatically without human review", "auto-pull-request": "changes pushed automatically when the run reached Review, without human review" }[pushedBy];
     const pushed = state === "push" ? { sha: candidate, why } : null;
-    const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body });
+    const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body }, handoff);
+    // A failed findings comment is kept and retried by the GitHub sync rather than lost.
+    if (handoff && !pr.handoffPosted) this.board.setHandoffPending(run.id, true);
+    // Explicit approval is the person's decision on a handoff draft: it becomes ready for review.
+    if (pushedBy === "operator" && this.board.autoReviewHandoff(run.id) !== null) {
+      await github.ready(slug, pr.number);
+      this.board.resolveHandoff(run.id);
+    }
     this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
     this.board.recordPullRequestPush(card.id, run.id);
     return this.board.getCard(card.id)!;
   }
 
   /**
-   * Gets a github-pr card ready for Approve when its run reaches Review: commits the work on `bakery/<id>` as Approve
+   * Gets a github-pr card ready for Approve when its run reaches Review: commits the work on `alice/<id>` as Approve
    * would (the repository's pre-commit and commit-msg hooks run), then runs the pre-push hook on that commit with
    * `git push --dry-run`, so nothing reaches origin. A refused commit throws `CommitHookError` and a refused pre-push
    * hook `PushHookError`. "unchecked" means Git
@@ -555,7 +756,7 @@ export class Integration {
     if (await gitAsync(worktree, ["diff", "--cached", "--name-only"], signal)) {
       await gitAsync(worktree, ["diff", "--cached", "--check"], signal);
       step("Committing the card's work (the repository's pre-commit hooks run)");
-      try { await gitAsync(worktree, [...await commitIdentityArgs(worktree), "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`], signal); }
+      try { await gitAsync(worktree, [...await commitIdentityArgs(worktree), "commit", "-m", `Alice card: ${card.title.slice(0, 70)}`], signal); }
       catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         // Identity and message are always set, so a failed commit here is the repository's commit hooks refusing it.
@@ -563,10 +764,10 @@ export class Integration {
         throw new CommitHookError(message, message.slice("commit failed: ".length));
       }
     }
-    if (!await clean(worktree)) throw new Error("The card worktree has uncommitted changes after Bakery committed it; a hook may have changed files");
+    if (!await clean(worktree)) throw new Error("The card worktree has uncommitted changes after Alice committed it; a hook may have changed files");
     const candidate = await git(worktree, "rev-parse", "HEAD");
     step("Running the pre-push hook on that commit (git push --dry-run, nothing is pushed)");
-    try { await pushBranch(worktree, `${candidate}:refs/heads/bakery/${card.id}`, () => {}, { flags: ["--dry-run"], signal }); }
+    try { await pushBranch(worktree, `${candidate}:refs/heads/${await cardBranch(worktree, card.id)}`, () => {}, { flags: ["--dry-run"], signal }); }
     catch (error) {
       if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
       if (error instanceof PushError) return { candidate, state: "unchecked", detail: error.message };
@@ -576,25 +777,32 @@ export class Integration {
   }
 
   /**
-   * The open PR from `bakery/<id>`, or a new one with `content` (default: the card title and body) plus the footer and
-   * run summary. `pushed` is what Bakery just pushed, commented on an open PR; null when nothing was pushed.
+   * The open PR from `alice/<id>`, or a new one with `content` (default: the card title and body) plus the footer and
+   * run summary. `pushed` is what Alice just pushed, commented on an open PR; null when nothing was pushed.
    */
-  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string } | null, content?: { title: string; body: string }): Promise<{ number: number; url: string }> {
-    const branch = `bakery/${card.id}`;
+  private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string } | null, content?: { title: string; body: string }, handoff?: string): Promise<{ number: number; url: string; handoffPosted: boolean }> {
+    const branch = await cardBranch(card.repo, card.id);
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
     const summary = (output || "").trim().slice(-3000);
     const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
-    if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
+    if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Alice pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
+    let handoffPosted = true;
     if (!url) {
-      url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
+      // The findings go in the body so they exist the moment the draft does; a separate comment could fail and never be retried.
+      const body = pullRequestBody(content?.body ?? card.body, card, { output });
+      url = await github.create(slug, branch, content?.title ?? cardTitle(card), handoff ? `${body}\n\n---\n\n${githubMarkdown(handoff)}` : body, !!handoff);
       this.delivered("pr", undefined);
+    } else if (handoff && existing?.state === "OPEN") {
+      // An existing pull request gets the findings as a comment; if it fails, the caller records it as pending.
+      try { await postPullRequestComment(github, slug, existing.number, handoff); }
+      catch (error) { console.error(`Could not post the reviewer's findings on ${slug}#${existing.number}: ${error instanceof Error ? error.message : String(error)}`); handoffPosted = false; }
     }
-    return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url };
+    return { number: Number(url.match(/\/pull\/(\d+)/)?.[1]), url, handoffPosted };
   }
 
   /**
-   * Done cards Bakery merged into local main whose approved candidate is not on origin/main, after a fetch, and
+   * Done cards Alice merged into local main whose approved candidate is not on origin/main, after a fetch, and
    * whether local main can be reset to origin/main. Works on a local board too, so switching to github-pr can list them.
    */
   async localMerges(repo: string): Promise<{ cards: LocalMerge[]; main: MainRecovery | null }> {
@@ -608,8 +816,8 @@ export class Integration {
   }
 
   /**
-   * "Publish as PR" for a Done card that Bakery merged into local main on a github-pr board: push the approved
-   * candidate to `bakery/<id>`, open its PR (or reuse the open one) as Approve does, then clear the local integration
+   * "Publish as PR" for a Done card that Alice merged into local main on a github-pr board: push the approved
+   * candidate to `alice/<id>`, open its PR (or reuse the open one) as Approve does, then clear the local integration
    * record and move the card back to Review, so it reaches Done when the PR merges. Local main is not touched here;
    * the result says whether it can be reset, which needs a separate confirmation.
    */
@@ -618,7 +826,7 @@ export class Integration {
     if (!this.board.features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
     if (repoBoard?.integration !== "github-pr") throw new Error("Switch this board to GitHub pull requests before publishing a card as a pull request");
     if (card.status !== "done") throw new Error("Only a Done card that was merged into local main can be published as a pull request");
-    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Bakery only pushes bakery/${card.id}; clear the link first`);
+    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Alice only pushes ${await cardBranch(card.repo, card.id)}; clear the link first`);
     const slug = boardGithubRepo(repoBoard);
     return this.trackPush(card.id, async (step, push) => {
       step("Checking GitHub access");
@@ -627,19 +835,19 @@ export class Integration {
       step("Fetching origin");
       await fetchOrigin(repo);
       const merge = this.board.listLocalMerges(repo).find(item => item.card.id === card.id);
-      if (!merge) throw new Error("This card was not merged into local main by Bakery; there is nothing to publish");
+      if (!merge) throw new Error("This card was not merged into local main by Alice; there is nothing to publish");
       const { candidate } = merge;
       const blocker = await publishBlocker(repo, card, candidate);
       if (blocker) throw new Error(blocker);
       if (await isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
-      const branch = `bakery/${card.id}`;
+      const branch = await cardBranch(repo, card.id);
       const state = await remoteBranchState(repo, branch, candidate, null);
       let toPush = candidate;
       let merged = 0;
       if (state === "diverged") {
         // No card worktree to merge into: merge in a scratch worktree, then push the result as a plain fast-forward.
         step(`Merging origin/${branch} into the approved commit`);
-        const scratch = mkdtempSync(join(tmpdir(), "bakery-publish-merge-"));
+        const scratch = mkdtempSync(join(tmpdir(), "alice-publish-merge-"));
         try {
           await git(repo, "worktree", "add", "--detach", scratch, candidate);
           ({ merged, head: toPush } = await mergeRemoteBranch(scratch, branch, true));
@@ -647,7 +855,7 @@ export class Integration {
           try { await push(scratch, `${toPush}:refs/heads/${branch}`); }
           catch (error) {
             if (error instanceof PushError && !error.hookFailed && /! \[(remote )?rejected\]|non-fast-forward|fetch first/.test(error.output))
-              throw new Error(`${branch} on origin changed while Bakery was pushing, so Git refused the push and nothing was overwritten. Publish again to merge the new commits`);
+              throw new Error(`${branch} on origin changed while Alice was pushing, so Git refused the push and nothing was overwritten. Publish again to merge the new commits`);
             throw error;
           }
         } finally {
@@ -655,18 +863,18 @@ export class Integration {
         }
       } else if (state === "push") {
         step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
-        // A plain push: if bakery/<id> on GitHub moved after the fetch, Git still refuses instead of overwriting it.
+        // A plain push: if alice/<id> on GitHub moved after the fetch, Git still refuses instead of overwriting it.
         await push(repo, `${candidate}:refs/heads/${branch}`);
       }
       step("Opening the pull request");
-      const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, state === "on-origin" ? null : { sha: toPush, why: merged ? `work the operator approved in Bakery and merged into local main earlier, merged with ${merged} commit${merged === 1 ? "" : "s"} already on the branch, now published as a pull request` : "work the operator approved in Bakery and merged into local main earlier, now published as a pull request" });
+      const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, state === "on-origin" ? null : { sha: toPush, why: merged ? `work the operator approved in Alice and merged into local main earlier, merged with ${merged} commit${merged === 1 ? "" : "s"} already on the branch, now published as a pull request` : "work the operator approved in Alice and merged into local main earlier, now published as a pull request" });
       return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: await this.mainRecovery(repo) };
     });
   }
 
   /**
    * Whether local main can go back to origin/main without losing anything: it is checked out with no uncommitted
-   * tracked changes, and every local commit on its first-parent line is a Bakery card merge whose card branch is
+   * tracked changes, and every local commit on its first-parent line is an Alice card merge whose card branch is
    * on origin. Null when local main has no commits that origin/main lacks.
    */
   async mainRecovery(repo: string): Promise<MainRecovery | null> {
@@ -676,7 +884,7 @@ export class Integration {
     const tip = await git(repo, "rev-parse", "refs/heads/main"), originMain = await git(repo, "rev-parse", "refs/remotes/origin/main");
     const local = (await git(repo, "rev-list", "--first-parent", `${originMain}..${tip}`)).split("\n").filter(Boolean);
     if (!local.length) return null;
-    const recovery = { tip, originMain, recoveryBranch: `bakery-recovery/${tip.slice(0, 12)}`, localCommits: local.length };
+    const recovery = { tip, originMain, recoveryBranch: `alice-recovery/${tip.slice(0, 12)}`, localCommits: local.length };
     const refuse = (reason: string): MainRecovery => ({ ...recovery, resettable: false, reason });
     if (head !== "main") return refuse(`The repository root is ${head ? `on branch ${head}` : "in detached HEAD"}, not main`);
     const dirty = await git(repo, "status", "--porcelain", "--untracked-files=no");
@@ -685,7 +893,7 @@ export class Integration {
       const [, ...parents] = (await git(repo, "rev-list", "--parents", "-n", "1", commit)).split(" ");
       const id = (await git(repo, "log", "-1", "--format=%B", commit)).match(/^Card: ([\w-]+)$/m)?.[1];
       const subject = await git(repo, "log", "-1", "--format=%s", commit);
-      if (parents.length < 2 || !id || !subject.startsWith("Merge card: ")) return refuse(`Local main has commit ${commit.slice(0, 12)} (${subject}) that is not a Bakery card merge`);
+      if (parents.length < 2 || !id || !subject.startsWith("Merge card: ")) return refuse(`Local main has commit ${commit.slice(0, 12)} (${subject}) that is not an Alice card merge`);
       const card = this.board.getCard(id);
       if (card?.locallyMerged) return refuse(`${card.title} (${id}) is still merged only into local main; publish it as a pull request first`);
       const onOrigin = async (ref: string) => {
@@ -693,13 +901,15 @@ export class Integration {
         for (const parent of parents.slice(1)) if (!await isAncestor(repo, parent, ref)) return false;
         return true;
       };
-      if (!await onOrigin(`refs/remotes/origin/bakery/${id}`) && !await onOrigin("refs/remotes/origin/main")) return refuse(`Card ${id}'s merged work is not on origin yet; publish it as a pull request first`);
+      let merged = await onOrigin("refs/remotes/origin/main");
+      for (const branch of cardBranches(id)) merged ||= await onOrigin(`refs/remotes/origin/${branch}`);
+      if (!merged) return refuse(`Card ${id}'s merged work is not on origin yet; publish it as a pull request first`);
     }
     return { ...recovery, resettable: true, reason: "" };
   }
 
   /**
-   * Resets local main to origin/main after saving its tip as `bakery-recovery/<sha>`. Only on the operator's
+   * Resets local main to origin/main after saving its tip as `alice-recovery/<sha>`. Only on the operator's
    * confirmation of the exact tip they saw, and only while `mainRecovery` still allows it. `reset --keep`
    * refuses instead of overwriting untracked files.
    */
@@ -726,7 +936,7 @@ export class Integration {
     if (await git(worktree, "write-tree") !== reviewedTree) throw new Error("Worktree changed since review; refresh the diff before approving");
     if (await git(worktree, "diff", "--cached", "--name-only")) {
       await git(worktree, "diff", "--cached", "--check");
-      await git(worktree, ...await commitIdentityArgs(worktree), "commit", "-m", `Bakery card: ${card.title.slice(0, 70)}`);
+      await git(worktree, ...await commitIdentityArgs(worktree), "commit", "-m", `Alice card: ${card.title.slice(0, 70)}`);
     }
     if (!await clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
     const candidate = await git(worktree, "rev-parse", "HEAD");
@@ -772,6 +982,7 @@ export class Integration {
   }
   private async completeAndPush(card: Card, runId: string, candidate: string, repo: string): Promise<Card> {
     const done = this.board.completeApproval(card.id, runId, candidate);
+    this.afterMerge(card.id);
     if (!this.board.boardForRepo(card.repo)?.pushMainAfterMerge) return done;
     try {
       await run("git", ["-C", repo, "push", "origin", "main"], { timeout: 120_000 });
@@ -829,10 +1040,10 @@ export class Integration {
     }
 
     if (approved.preparedHead && await isAncestor(repo, approved.preparedHead, "main")) {
-      if (await git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Bakery merged this card; inspect the result before closing it");
+      if (await git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Alice merged this card; inspect the result before closing it");
       return this.delivered("merge", await this.completeAndPush(card, run.id, approved.candidate, repo));
     }
-    if (await isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Bakery; inspect main before closing this card");
+    if (await isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Alice; inspect main before closing this card");
     const base = await git(repo, "rev-parse", "main");
     if (base !== inspected.main) throw new Error("Main changed since review; refresh the diff before approving");
     const directory = join(this.dataDir, "integrations");
@@ -841,7 +1052,7 @@ export class Integration {
     try {
       await git(repo, "worktree", "add", "--detach", scratch, base);
       try {
-        await git(scratch, ...await commitIdentityArgs(scratch), "merge", "--no-ff", "--no-edit", ...mergeMessage(card), approved.candidate);
+        await git(scratch, ...await commitIdentityArgs(scratch), "merge", "--no-ff", "--no-edit", ...mergeMessage(card, await cardBranch(repo, card.id)), approved.candidate);
       } catch (error) {
         // No integration was published. Read the scratch index before removing it so the UI can name the conflicts.
         let files: string[] = [];
@@ -863,7 +1074,7 @@ export class Integration {
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.
       return this.delivered("merge", await this.completeAndPush(card, run.id, approved.candidate, repo));
     } finally {
-      // Only remove Bakery's temporary integration checkout. Keep the card worktree on every failure.
+      // Only remove Alice's temporary integration checkout. Keep the card worktree on every failure.
       try { await git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }
     }
   }

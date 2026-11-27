@@ -1,12 +1,13 @@
-// `bakery-cli doctor`: checks the tools, data directory, server and boards Bakery depends on.
+// `alice doctor`: checks the tools, data directory, server and boards Alice depends on.
 // Local checks describe the machine running the CLI; board repository checks only run when the
 // server is on this machine, because a remote server's paths are on its own disk.
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { serviceCheck } from "./service.mjs";
 import { formatVersion } from "./version.mjs";
+import { dataDir } from "../server/legacy-names.ts";
+import { worktrunkVersion } from "../server/platform.ts";
 
 // Bare names like `pi` are npm `.cmd` shims on Windows, which only a shell can run.
 function run(bin, args, timeout = 20_000) {
@@ -28,7 +29,7 @@ function alive(pid) {
 function nodeCheck() {
   const major = Number(process.versions.node.split(".")[0]);
   return major >= 24 ? { status: "pass", name: "node", detail: `v${process.versions.node}` }
-    : { status: "fail", name: "node", detail: `v${process.versions.node}; Bakery needs Node 24 or newer` };
+    : { status: "fail", name: "node", detail: `v${process.versions.node}; Alice needs Node 24 or newer` };
 }
 
 function gitChecks() {
@@ -44,9 +45,9 @@ function gitChecks() {
 }
 
 function piChecks(env) {
-  const bin = env.BAKERY_PI_BIN ?? "pi";
+  const bin = env.ALICE_PI_BIN ?? "pi";
   const version = run(bin, ["--version"]);
-  if (!version.ok) return [{ status: "fail", name: "pi", detail: version.missing ? `${bin} ${version.hint ?? "not found"}; install Pi or set BAKERY_PI_BIN` : `${bin} --version failed: ${firstLine(version.output)}` }];
+  if (!version.ok) return [{ status: "fail", name: "pi", detail: version.missing ? `${bin} ${version.hint ?? "not found"}; install Pi or set ALICE_PI_BIN` : `${bin} --version failed: ${firstLine(version.output)}` }];
   const list = run(bin, ["--list-models"], 60_000);
   // Same table shape the server parses: a "provider model ..." header, then one model per line.
   const models = list.ok ? list.output.split("\n").map(line => line.trim().split(/\s+/)).filter(([provider, model]) => provider && model && provider !== "provider") : [];
@@ -58,16 +59,16 @@ function piChecks(env) {
 }
 
 function wtCheck(env) {
-  const bin = env.BAKERY_WT_BIN ?? "wt";
-  if (!bin) return { status: "pass", name: "worktrunk", detail: "turned off (BAKERY_WT_BIN is empty)" };
-  const version = run(bin, ["--version"]);
-  return version.ok ? { status: "pass", name: "worktrunk", detail: `${bin} ${firstLine(version.output)}` }
+  const bin = env.ALICE_WT_BIN ?? "wt";
+  if (!bin) return { status: "pass", name: "worktrunk", detail: "turned off (ALICE_WT_BIN is empty)" };
+  const version = worktrunkVersion(bin);
+  return version ? { status: "pass", name: "worktrunk", detail: `${bin} ${version}` }
     : { status: "warn", name: "worktrunk", detail: `${bin} not usable; worktree hooks won't run (optional)` };
 }
 
 // gh only matters on GitHub pull request boards, so it fails only when one exists.
 function ghCheck(env, boards) {
-  const bin = env.BAKERY_GH_BIN || "gh";
+  const bin = env.ALICE_GH_BIN || "gh";
   const needed = boards?.filter(board => board.integration === "github-pr").map(board => board.repo) ?? [];
   const problem = status => ({ status: needed.length ? "fail" : "warn", name: "gh", detail: `${status}; ${needed.length ? `needed by ${needed.join(", ")}` : "needed only for GitHub pull request boards"}` });
   const auth = run(bin, ["auth", "status"]);
@@ -77,7 +78,7 @@ function ghCheck(env, boards) {
 }
 
 function dataDirChecks(env) {
-  const dir = env.BAKERY_DATA_DIR ?? join(homedir(), ".local", "share", "bakery");
+  const dir = dataDir(env);
   let existing = dir;
   while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
   try { accessSync(existing, constants.W_OK); }
@@ -112,10 +113,10 @@ function boardChecks(board, local, host) {
 // Values that can carry credentials print as "set (hidden)": doctor output gets pasted into bug reports.
 const SECRET = /TOKEN|SECRET|KEY|PASSWORD|WEBHOOK|ENDPOINT/;
 
-/** The BAKERY_* variables this CLI sees. A remote server's own environment stays on its machine. */
+/** The ALICE_* variables this CLI sees. A remote server's own environment stays on its machine. */
 function envInfo(env) {
-  const names = Object.keys(env).filter(name => name.startsWith("BAKERY_")).sort();
-  if (!names.length) return [{ status: "info", name: "env", detail: "no BAKERY_* variables set" }];
+  const names = Object.keys(env).filter(name => name.startsWith("ALICE_")).sort();
+  if (!names.length) return [{ status: "info", name: "env", detail: "no ALICE_* variables set" }];
   return names.map(name => ({ status: "info", name: `env ${name}`, detail: SECRET.test(name) ? "set (hidden)" : env[name] }));
 }
 
@@ -143,15 +144,15 @@ export async function doctor({ env = process.env, origin, local, fetchBoards, fe
     boards = await fetchBoards();
     serverCheck = { status: "pass", name: "server", detail: `${origin.origin} (${local ? "local" : "remote"}, ${boards.length} board${boards.length === 1 ? "" : "s"})` };
   } catch (error) {
-    serverCheck = { status: "fail", name: "server", detail: `${error instanceof Error ? error.message : error}; ${local ? "start it with bakery-cli service install, npm start or npm run dev" : "check that the server is up and BAKERY_URL is right"}` };
+    serverCheck = { status: "fail", name: "server", detail: `${error instanceof Error ? error.message : error}; ${local ? "start it with alice service install, npm start or npm run dev" : "check that the server is up and ALICE_URL is right"}` };
   }
   // Tools, the data directory and repository paths belong to the machine the server runs on.
   const machine = local ? [nodeCheck(), ...gitChecks(), ...piChecks(env), wtCheck(env), ghCheck(env, boards), ...dataDirChecks(env), serviceCheck(env)].filter(Boolean) : [];
   // The versions come first. A remote server can run a different version than this CLI, so print both.
   const versions = [];
-  if (cliVersion) versions.push({ status: "pass", name: "bakery-cli", detail: formatVersion(cliVersion) });
+  if (cliVersion) versions.push({ status: "pass", name: "alice", detail: formatVersion(cliVersion) });
   const status = boards && fetchStatus ? await fetchStatus().catch(() => null) : null;
-  if (!local && fetchStatus) versions.push(status ? { status: "pass", name: "bakery server", detail: formatVersion(status) } : { status: "warn", name: "bakery server", detail: "version unavailable" });
+  if (!local && fetchStatus) versions.push(status ? { status: "pass", name: "alice server", detail: formatVersion(status) } : { status: "warn", name: "alice server", detail: "version unavailable" });
   const settings = boards && fetchSettings ? await fetchSettings().catch(() => null) : null;
   // Diagnostics come last as INFO rows: they never pass or fail, and the summary line ignores them.
   const info = [...(cliPath ? [{ status: "info", name: "cli path", detail: cliPath }] : []), ...envInfo(env), ...serverInfo(status, settings)];

@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an improvement to Bakery.
+description: Suggest an improvement to Alice.
 labels: [enhancement]
 body:
   - type: textarea

@@ -10,7 +10,7 @@ import { Worker } from "../server/worker.js";
 import { AutoPickup } from "../server/auto-pickup.js";
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-deps-")), repo = join(dir, "repo"), other = join(dir, "other"), data = join(dir, "data"), fakePi = join(dir, "fake-pi");
+  const dir = mkdtempSync(join(tmpdir(), "alice-deps-")), repo = join(dir, "repo"), other = join(dir, "other"), data = join(dir, "data"), fakePi = join(dir, "fake-pi");
   mkdirSync(repo); execFileSync("git", ["init", "-q", "-b", "main", repo]);
   writeFileSync(join(repo, "README.md"), "fixture\n");
   execFileSync("git", ["-C", repo, "add", "."]);
@@ -111,7 +111,7 @@ test("an edge to a card that no longer exists is dropped", async () => {
   try {
     const parent = item.card("Parent"), child = item.card("Child", [parent.id]);
     item.board.close();
-    // Bakery has no card delete path, and foreign keys block one; simulate a card removed outside the app.
+    // Alice has no card delete path, and foreign keys block one; simulate a card removed outside the app.
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(join(item.dir, "board.sqlite"));
     db.exec("PRAGMA foreign_keys=OFF");
@@ -135,7 +135,7 @@ async function freePort(): Promise<number> {
 }
 
 test("the HTTP API creates cards with dependencies, adds and removes them, and refuses a blocked start", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-deps-api-")), repo = join(home, "repo");
+  const home = mkdtempSync(join(tmpdir(), "alice-deps-api-")), repo = join(home, "repo");
   mkdirSync(repo); execFileSync("git", ["init", "-q", "-b", "main", repo]);
   writeFileSync(join(repo, "README.md"), "fixture\n");
   execFileSync("git", ["-C", repo, "add", "."]);
@@ -143,7 +143,7 @@ test("the HTTP API creates cards with dependencies, adds and removes them, and r
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: "/bin/false", BAKERY_WT_BIN: "" },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: "/bin/false", ALICE_WT_BIN: "" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   try {

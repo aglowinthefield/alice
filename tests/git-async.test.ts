@@ -16,7 +16,7 @@ test("a command that reads stdin sees EOF, as with the synchronous calls it repl
 });
 
 test("overlapping fetches of one repository share a Git process, and each caller keeps its own error policy", { skip: posix, timeout: 60_000 }, async () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "bakery-git-async-")));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "alice-git-async-")));
   const repo = join(dir, "repo");
   execFileSync("git", ["init", "-q", repo]);
   execFileSync("git", ["-C", repo, "remote", "add", "origin", join(dir, "missing.git")]);

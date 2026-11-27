@@ -10,7 +10,7 @@ const sentinel = (kind: string, enabled = true) => ({ id: `sen-${kind}`, boardId
 const overview = (jobs: ReturnType<typeof card>[], paused = false) => [
   { sentinel: sentinel("pr-health", !paused), name: "Broken pull requests", running: false, runs: [{ id: "r1", sentinelId: "sen-pr-health", status: "succeeded", startedAt: "2025-01-01T00:00:00Z", finishedAt: "2025-01-01T00:00:01Z", findings: [], summary: "1 new job card", error: null }],
     jobs: jobs.filter(job => job.idempotencyKey?.startsWith("sentinel:")).map(job => ({ ...job, sentinelId: "sen-pr-health" })) },
-  { sentinel: sentinel("pr-requests"), name: "/bakery requests", running: false, runs: [], jobs: jobs.filter(job => job.idempotencyKey?.startsWith("request:")).map(job => ({ ...job, sentinelId: "sen-pr-requests" })) },
+  { sentinel: sentinel("pr-requests"), name: "/alice requests", running: false, runs: [], jobs: jobs.filter(job => job.idempotencyKey?.startsWith("request:")).map(job => ({ ...job, sentinelId: "sen-pr-requests" })) },
 ];
 const cards = [
   card("k1", "Plain kanban card", "ready", null),

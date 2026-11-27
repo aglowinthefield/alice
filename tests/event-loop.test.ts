@@ -22,7 +22,7 @@ async function freePort(): Promise<number> {
 // has a Git call pending for as long as the test wants. Everything else runs real Git.
 test("a slow git call does not stop /api/status or /metrics from answering, and overlapping probes share it", { skip: process.platform === "win32" && "the fake git is a shell script" }, async () => {
   // Canonical, as the handler passes it to Git: under a symlinked TMPDIR the fake would otherwise never match.
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "bakery-slow-git-")));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "alice-slow-git-")));
   const slowRepo = join(dir, "slow-repo");
   mkdirSync(slowRepo); mkdirSync(join(dir, "home"));
   execFileSync("git", ["init", "-q", "-b", "main", slowRepo]);
@@ -70,7 +70,7 @@ test("a slow git call does not stop /api/status or /metrics from answering, and 
     assert.equal(status.status, 200);
     assert.equal(typeof (await status.json()).hostname, "string");
     const metrics = await (await fetch(`${url}/metrics`, { signal: AbortSignal.timeout(30_000) })).text();
-    assert.match(metrics, /^bakery_event_loop_delay_seconds\{stat="p99"\} \d/m);
+    assert.match(metrics, /^alice_event_loop_delay_seconds\{stat="p99"\} \d/m);
     assert.deepEqual(settled, [false, false], "both requests are still waiting on git");
 
     fake.release("root");
@@ -97,10 +97,10 @@ test("event-loop delay renders as p50, p99 and max in seconds, and a read starts
     // Nothing has been sampled since the read above reset the window.
     assert.deepEqual(delay.read(false), { p50: 0, p99: 0, max: 0 });
   } finally { delay.stop(); }
-  const text = renderMetrics({ runs: [], reviews: [], cards: [] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1", { p50: 0.001, p99: 0.25, max: 1.5 });
-  assert.match(text, /# TYPE bakery_event_loop_delay_seconds gauge/);
-  assert.match(text, /^bakery_event_loop_delay_seconds\{stat="p50"\} 0\.001$/m);
-  assert.match(text, /^bakery_event_loop_delay_seconds\{stat="p99"\} 0\.25$/m);
-  assert.match(text, /^bakery_event_loop_delay_seconds\{stat="max"\} 1\.5$/m);
-  assert.doesNotMatch(renderMetrics({ runs: [], reviews: [], cards: [] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1"), /event_loop/);
+  const text = renderMetrics({ runs: [], reviews: [], cards: [], closes: [] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1", { p50: 0.001, p99: 0.25, max: 1.5 });
+  assert.match(text, /# TYPE alice_event_loop_delay_seconds gauge/);
+  assert.match(text, /^alice_event_loop_delay_seconds\{stat="p50"\} 0\.001$/m);
+  assert.match(text, /^alice_event_loop_delay_seconds\{stat="p99"\} 0\.25$/m);
+  assert.match(text, /^alice_event_loop_delay_seconds\{stat="max"\} 1\.5$/m);
+  assert.doesNotMatch(renderMetrics({ runs: [], reviews: [], cards: [], closes: [] }, { runs: 0, reviews: 0, pullRequests: 0 }, "1"), /event_loop/);
 });

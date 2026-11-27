@@ -3,8 +3,8 @@
 import { agentLabel, messageUsage, type Usage } from "./agent.js";
 import { describeToolCall } from "./failure-summary.js";
 
-/** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
-export type LiveActivity = { tool: string; turn: number; since: string };
+import type { LiveActivity } from "../shared/wire.js";
+export type { LiveActivity };
 
 /** One tool call in the current turn. `since` is the epoch milliseconds it started. */
 export type PiTool = { id: string; name: string; finished: boolean; failed: boolean; since: number; detail: string };
@@ -31,6 +31,10 @@ export type PiEffect =
   | { type: "recordReport"; text: string }
   | { type: "completeTurn" }
   | { type: "live"; activity: LiveActivity }
+  /** A tool call started, with its raw arguments, for stuck detection (server/stuck.ts). Never stored. */
+  | { type: "toolStarted"; name: string; args: unknown }
+  /** A turn ended; `edited` says an edit or write call in it succeeded. The caller checks the worktree for other changes. */
+  | { type: "turnEnded"; edited: boolean }
   /** Turn end with tools used: list the worktree's changed files in the transcript (runs Git, so the caller does it). */
   | { type: "snapshotWorktree" };
 
@@ -95,12 +99,17 @@ export function reducePiEvent(previous: PiStreamState, input: unknown, { now, wo
       const index = state.tools.findIndex(item => item.id === tool.id);
       if (index >= 0) state.tools[index] = tool; else state.tools.push(tool);
       effects.push({ type: "live", activity: { tool: name, turn: state.turn || 1, since: new Date(now).toISOString() } });
+      effects.push({ type: "toolStarted", name, args: event.args });
     }
     if (event.type === "tool_execution_end" && typeof event.toolCallId === "string") {
       const index = state.tools.findIndex(item => item.id === event.toolCallId);
       if (index >= 0) state.tools[index] = { ...state.tools[index], finished: true, failed: event.isError === true };
     }
-    if (event.type === "turn_end") effects.push({ type: "completeTurn" });
+    if (event.type === "turn_end") {
+      // Before completeTurn, so once a turn is counted its worktree check is done.
+      effects.push({ type: "turnEnded", edited: state.tools.some(tool => tool.finished && !tool.failed && (tool.name === "edit" || tool.name === "write")) });
+      effects.push({ type: "completeTurn" });
+    }
     if (event.type === "turn_end" && state.tools.length) {
       const counts = new Map<string, number>();
       let failed = 0, unfinished = 0;

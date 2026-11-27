@@ -35,7 +35,7 @@ test("file names lose directories and control characters", () => {
 });
 
 test("a multi-MB upload streams to disk, lists, downloads intact, and its path reaches the discussion prompt", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-attach-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-attach-"));
   const repo = join(home, "repo"), data = join(home, "data"), fakePi = join(home, "pi-fake"), promptFile = join(home, "prompt.txt");
   mkdirSync(repo);
   execFileSync("git", ["init", "-q", repo]);
@@ -44,7 +44,7 @@ test("a multi-MB upload streams to disk, lists, downloads intact, and its path r
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: data, BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: data, ALICE_PORT: String(port), ALICE_PI_BIN: fakePi },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -100,8 +100,8 @@ test("a multi-MB upload streams to disk, lists, downloads intact, and its path r
     const sent = await json(`/boards/${boardId}/cards/${card.id}/discussion`, "POST", { message: "what is in it?", attachmentIds: [saved.id] });
     assert.equal(sent.status, 202);
     assert.deepEqual(sent.data.attachments.map((item: { id: string }) => item.id), [saved.id]);
-    await waitFor(() => existsSync(promptFile));
-    assert.ok(readFileSync(promptFile, "utf8").includes(onDisk));
+    // The fake Pi creates the file before printf finishes writing it, so wait for the content, not the file.
+    await waitFor(() => existsSync(promptFile) && readFileSync(promptFile, "utf8").includes(onDisk));
     const thread = (await json(`/boards/${boardId}/cards/${card.id}/discussion`)).data;
     assert.equal(thread.messages[0].attachments[0].id, saved.id);
     // The same file cannot be sent twice, and unknown ids are refused.
@@ -118,7 +118,7 @@ test("a multi-MB upload streams to disk, lists, downloads intact, and its path r
 });
 
 test("a work run's prompt lists the card's attachment paths", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-attach-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-attach-"));
   const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
   try {
     execFileSync("git", ["init", "-q", repo]);
@@ -141,7 +141,7 @@ test("a work run's prompt lists the card's attachment paths", async () => {
 });
 
 test("the startup sweep removes attachment folders no row points to and keeps the rest", () => {
-  const data = mkdtempSync(join(tmpdir(), "bakery-sweep-"));
+  const data = mkdtempSync(join(tmpdir(), "alice-sweep-"));
   const put = (...parts: string[]) => { const file = join(data, "attachments", ...parts); mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, "x"); return file; };
   const kept = put("card1", "att1", "a.txt"), partial = put("card1", "att2", "b.txt.part"), gone = put("card2", "att3", "c.txt");
   assert.equal(sweepOrphanAttachments(data, [{ cardId: "card1", id: "att1" }]), 2);
@@ -154,7 +154,7 @@ test("the startup sweep removes attachment folders no row points to and keeps th
 });
 
 test("purging an archived card's attachments removes its rows and folder, and refuses other cards", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-purge-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-purge-"));
   const repo = join(dir, "repo"), data = join(dir, "data");
   try {
     const board = new Board(join(dir, "board.sqlite"));

@@ -3768,8 +3768,10 @@ export function App() {
                       Pushes the card branch and opens its pull request when a
                       run reaches Review, without waiting for Approve. Only runs
                       that finish after you turn this on are pushed. With
-                      auto-review on, the agent reviewer&apos;s approval opens
-                      it instead.
+                      auto-review on, the agent reviewer goes first: its
+                      approval opens the pull request, a card it sends back
+                      reruns, and a card it hands to a person (or that is out of
+                      reruns) gets a draft pull request with its findings.
                     </span>
                   </span>
                 </label>
@@ -4102,9 +4104,11 @@ export function App() {
                 worktrees and runs the repository's checks itself. It can send a
                 card back to its implementer. When it approves, a pull-request
                 board opens the pull request; on a local board the card waits
-                for your Approve. Nothing merges into main without you.
-                Auto-review alone does not start Ready cards; enable Auto pickup
-                above.
+                for your Approve. Nothing merges into main without you. With
+                automatic pull requests on, a card the reviewer hands to a
+                person still gets a draft pull request with its findings, and
+                the reviewer never blocks it. Auto-review alone does not start
+                Ready cards; enable Auto pickup above.
               </p>
               <label className="mt-3 flex items-center gap-2 text-xs">
                 Agent reviews at the same time

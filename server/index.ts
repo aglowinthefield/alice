@@ -86,8 +86,8 @@ const readiness = new Readiness(board, integration, {
   sendBack: (card, error) => sendBackHookFailure(card, error),
 });
 /** Approve's push on a github-pr board: skips the pre-push hook for a commit that passed it at Review. */
-const openPullRequest = (card: Card, fingerprint: string, draft?: { title: string; body: string }, pushedBy?: "operator" | "ci-fix" | "agent-review" | "auto-pull-request") =>
-  integration.openPullRequest(card, fingerprint, github, draft, pushedBy, () => readiness.passedCommit(card.id));
+const openPullRequest = (card: Card, fingerprint: string, draft?: { title: string; body: string }, pushedBy?: "operator" | "ci-fix" | "agent-review" | "auto-pull-request", handoff?: string) =>
+  integration.openPullRequest(card, fingerprint, github, draft, pushedBy, () => readiness.passedCommit(card.id), handoff);
 board.onRun((event, run) => {
   if (event === "started") readiness.cancel(run.cardId);
   if (event === "finished" && run.worktree && board.boardForRepo(board.getCard(run.cardId)?.repo ?? "")?.sharedCaches.includes("turbo")) {
@@ -115,8 +115,8 @@ async function draftForPullRequest(card: Card, fingerprint: string, lead: string
   if (draft.problem) throw new Error(`${lead}: ${draft.problem}. Use Approve and open PR`);
   return draft;
 }
-async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request"): Promise<Card> {
-  const opened = await sendBackRefusedPush(card, () => openPullRequest(card, fingerprint, draft, pushedBy));
+async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request", handoff?: string): Promise<Card> {
+  const opened = await sendBackRefusedPush(card, () => openPullRequest(card, fingerprint, draft, pushedBy, handoff));
   void githubSync.syncBoard(board.boardForRepo(card.repo)!.id);
   return opened;
 }
@@ -130,10 +130,11 @@ const autoReview = new AutoReview(board, integration, piBin, card => worker.star
     if (!fresh || fresh.status !== "review" || fresh.prOverrideUrl) throw new Error("The card changed or was linked to a pull request during drafting");
     return pushDrafted(fresh, fingerprint, draft, "agent-review");
   });
-// Without auto-review, a github-pr board can still open each card's pull request as soon as its run reaches Review.
+// A github-pr board can open each card's pull request as soon as its run reaches Review. With auto-review on, it waits
+// for the agent reviewer and then opens a draft for a card the reviewer left to a person.
 const autoPullRequest = new AutoPullRequest(board, card => integration.reviewFingerprint(card),
   (card, fingerprint) => draftForPullRequest(card, fingerprint, "The pull request draft needs a person"),
-  (card, fingerprint, draft) => pushDrafted(card, fingerprint, draft, "auto-pull-request"));
+  (card, fingerprint, draft, handoff) => pushDrafted(card, fingerprint, draft, "auto-pull-request", handoff));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);

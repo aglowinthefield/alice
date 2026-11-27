@@ -277,6 +277,10 @@ export class GitHub {
     }
     return protection.required_pull_request_reviews ? "branch protection requires a pull request" : null;
   }
+  /** Marks a draft PR ready for review. */
+  async ready(repo: string, number: number): Promise<void> {
+    await this.gh(["pr", "ready", String(number), "--repo", repo]);
+  }
   /** Posts a comment on a PR. */
   async comment(repo: string, number: number, body: string): Promise<void> {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
@@ -333,9 +337,9 @@ export class GitHub {
   async editComment(repo: string, commentId: string, body: string): Promise<void> {
     await this.gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`]);
   }
-  /** Opens a PR and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
-  async create(repo: string, branch: string, title: string, body: string): Promise<string> {
-    const output = await this.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", title, "--body", body]);
+  /** Opens a PR (a draft one when asked) and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
+  async create(repo: string, branch: string, title: string, body: string, draft = false): Promise<string> {
+    const output = await this.gh(["pr", "create", "--repo", repo, "--head", branch, "--base", "main", "--title", title, "--body", body, ...(draft ? ["--draft"] : [])]);
     const url = output.trim().split("\n").reverse().find(line => parsePullRequestUrl(line.trim()));
     if (!url) throw new Error(`gh pr create did not print a pull request URL: ${output.trim().slice(0, 500)}`);
     return url.trim();
@@ -351,8 +355,13 @@ const aliceIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/al
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${aliceIconUrl()}" width="16" height="16" alt="" /> Posted by Alice`); }
+  try { await postPullRequestComment(github, repo, number, body); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+/** Like `commentOnPullRequest`, but a failure to post is thrown, for comments that must not be lost. */
+export function postPullRequestComment(github: GitHub, repo: string, number: number, body: string): Promise<void> {
+  return github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${aliceIconUrl()}" width="16" height="16" alt="" /> Posted by Alice`);
 }
 
 /** Runs a reaction; one that fails is logged, never blocking the work it acknowledges. */
@@ -478,6 +487,10 @@ export class GitHubSync {
         return;
       }
       const syncStart = Date.now();
+      for (const pending of this.board.listPendingHandoffs(repoBoard.repo)) {
+        try { await postPullRequestComment(this.github, repo, pending.prNumber, pending.handoff); this.board.setHandoffPending(pending.runId, false); }
+        catch (error) { console.error(`Could not post the reviewer's findings on ${repo}#${pending.prNumber}: ${error instanceof Error ? error.message : String(error)} (retrying)`); }
+      }
       await this.settleCards(repoBoard, repo);
       await fastForwardMain(repoBoard.repo);
       console.debug(`[sync ${repo}] settled ${this.board.listPullRequestCards(repoBoard.repo).length} PR card(s) in ${Date.now() - syncStart}ms`);

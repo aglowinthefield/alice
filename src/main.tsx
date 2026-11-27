@@ -145,7 +145,11 @@ import {
   type PaletteItem,
 } from "./command-palette.js";
 import { themeNames, themes } from "./themes.js";
-import { ReadyCheckHost, checkBeforeReady } from "./ready-check.js";
+import {
+  ReadyCheckHost,
+  checkBeforeReady,
+  turnIntoPlans,
+} from "./ready-check.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1539,10 +1543,15 @@ export function App() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead.
+  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead, and Turn into
+  // a plan rewrites the wide ones as planning cards before the move.
   const readyAfterCheck = async (moving: Card[]) => {
     const check = await checkBeforeReady(moving);
     if (check.choice === "edit") setEditing(check.card);
+    if (check.choice === "plan")
+      return (
+        !!boardId && (await action(() => turnIntoPlans(boardId, check.cards)))
+      );
     return check.choice === "ready";
   };
   const moveSelected = async () => {

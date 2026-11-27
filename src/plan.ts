@@ -2,7 +2,7 @@
 export type Subtask = { id: string; title: string; body: string; dependsOn: string[] };
 
 /**
- * Reads the last fenced `bakery-plan` block in an agent report: a JSON array of
+ * Reads the last fenced `alice-plan` block in an agent report: a JSON array of
  * `{ id, title, body, dependsOn? }`. Returns the subtasks in an order where every one follows its dependencies,
  * or an error naming what is wrong (bad JSON, duplicate or unknown ids, a cycle, more than 20 subtasks).
  * A report without the block has no plan.

@@ -10,7 +10,7 @@ const boards = [
 ];
 const merged: string[] = [];
 const pulls = [
-  { number: 7, title: "Add widgets", url: "https://github.com/acme/gh/pull/7", headRefName: "bakery/c1", isDraft: false, updatedAt: "2025-01-01T00:00:00Z", author: { login: "me" },
+  { number: 7, title: "Add widgets", url: "https://github.com/acme/gh/pull/7", headRefName: "alice/c1", isDraft: false, updatedAt: "2025-01-01T00:00:00Z", author: { login: "me" },
     card: { id: "c1", title: "Widgets", status: "review", prChecks: "passing" }, checks: "passing" },
   { number: 8, title: "Outside change", url: "https://github.com/acme/gh/pull/8", headRefName: "feature", isDraft: true, updatedAt: "2025-01-02T00:00:00Z", author: { login: "you" }, card: null },
 ];

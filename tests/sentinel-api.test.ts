@@ -15,8 +15,8 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-test("with BAKERY_SENTINEL=0, run-now and resume dispatch no work", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-sentinel-api-"));
+test("with ALICE_SENTINEL=0, run-now and resume dispatch no work", async () => {
+  const home = mkdtempSync(join(tmpdir(), "alice-sentinel-api-"));
   let child: ChildProcess | undefined;
   try {
     const repo = join(home, "code", "alpha"), dataDir = join(home, "data");
@@ -25,7 +25,7 @@ test("with BAKERY_SENTINEL=0, run-now and resume dispatch no work", async () => 
     const port = await freePort(), url = `http://127.0.0.1:${port}`;
     child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
       cwd: process.cwd(),
-      env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_SENTINEL: "0", BAKERY_GH_BIN: "false" },
+      env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_SENTINEL: "0", ALICE_GH_BIN: "false" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const end = Date.now() + 15_000;

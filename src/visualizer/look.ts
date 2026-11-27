@@ -1,7 +1,7 @@
 import { themeType } from "../themes.js";
 import type { VisualState } from "./graph.js";
 
-/** The Bakery CSS variables the Visualizer reads. */
+/** The Alice CSS variables the Visualizer reads. */
 export const lookVariables = [
   "--background",
   "--foreground",

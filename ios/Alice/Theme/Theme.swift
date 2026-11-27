@@ -107,11 +107,11 @@ struct SectionLabel: View {
     }
 }
 
-/// bakery. wordmark with the primary-coloured dot.
+/// alice. wordmark with the primary-coloured dot.
 struct Wordmark: View {
     var size: CGFloat = 18
     var body: some View {
-        (Text("bakery").foregroundStyle(T.foreground) + Text(".").foregroundStyle(T.primary))
+        (Text("alice").foregroundStyle(T.foreground) + Text(".").foregroundStyle(T.primary))
             .font(.ui(size, .semibold)).tracking(-size * 0.04)
     }
 }

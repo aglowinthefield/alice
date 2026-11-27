@@ -1,5 +1,6 @@
 // Bakery is becoming Alice. For one release Bakery's old names keep working, and this module is the one place that
 // knows them, so dropping them later is this file plus its call sites.
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -25,5 +26,24 @@ export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
   return existsSync(legacy) ? legacy : join(homedir(), ".local", "share", "alice");
 }
 
+/** The board's database in `dir`: `alice.sqlite`, or `bakery.sqlite` when only that one exists there. */
+export function databaseFile(dir: string): string {
+  const legacy = join(dir, "bakery.sqlite"), current = join(dir, "alice.sqlite");
+  return !existsSync(current) && existsSync(legacy) ? legacy : current;
+}
+
 /** The branches a card's PR may come from, newest name first: cards opened before the rename push `bakery/<id>`. */
 export const cardBranches = (cardId: string): string[] => [`alice/${cardId}`, `bakery/${cardId}`];
+
+/**
+ * The branch a card works on in `repo`: the first of `cardBranches` that exists there, locally or on origin, else
+ * `alice/<id>`. A card whose worktree or PR was made before the rename stays on `bakery/<id>`.
+ */
+export function cardBranch(repo: string, cardId: string): string {
+  const branches = cardBranches(cardId);
+  const exists = (branch: string) => {
+    try { execFileSync("git", ["-C", repo, "show-ref", "--quiet", "--", `refs/heads/${branch}`, `refs/remotes/origin/${branch}`], { stdio: "ignore" }); return true; }
+    catch { return false; }
+  };
+  return branches.find(exists) ?? branches[0];
+}

@@ -33,7 +33,7 @@ test("command palette: open anywhere, search cards, run board actions", async ()
   try {
     const page = await browser.newPage();
     await page.addInitScript(() =>
-      localStorage.setItem("bakery-view", "board"),
+      localStorage.setItem("alice-view", "board"),
     );
     await page.route("**/api/**", async (route) => {
       const request = route.request();

@@ -5,7 +5,7 @@ import { createServer as createViteServer } from "vite";
 import config from "../vite.config.js";
 
 test("Vite rewrites same-origin UI requests but preserves unrelated origins for API rejection", async () => {
-  const targetOrigin = new URL(process.env.BAKERY_API_TARGET ?? "http://127.0.0.1:4317").origin;
+  const targetOrigin = new URL(process.env.ALICE_API_TARGET ?? "http://127.0.0.1:4317").origin;
   const api = createServer((req, res) => {
     const origin = req.headers.origin;
     res.writeHead(origin === targetOrigin ? 200 : 403, { "Content-Type": "application/json" });

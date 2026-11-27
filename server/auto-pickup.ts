@@ -35,7 +35,7 @@ export class AutoPickup {
       } catch (error) {
         if (error instanceof RunLimitError) continue;
         this.board.cancelQueuedStart(card.id);
-        this.board.noteCard(card.id, `Bakery could not start the queued attempt: ${error instanceof Error ? error.message : String(error)}. Run it again, or review it yourself.`);
+        this.board.noteCard(card.id, `Alice could not start the queued attempt: ${error instanceof Error ? error.message : String(error)}. Run it again, or review it yourself.`);
       }
     }
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {

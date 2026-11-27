@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adoptLegacyEnv, dataDir } from "../server/legacy-names.js";
+import { adoptLegacyEnv, cardBranch, databaseFile, dataDir } from "../server/legacy-names.js";
 import { parseLock } from "../server/pr-lock.js";
 import { parsePlan } from "../src/plan.js";
+import { adoptLegacyStorage } from "../src/legacy-storage.js";
 
 test("BAKERY_* settings fill their ALICE_* names, and an ALICE_* setting wins", () => {
   const env: NodeJS.ProcessEnv = { BAKERY_PORT: "4317", BAKERY_HOST: "old", ALICE_HOST: "new", PATH: "/bin" };
@@ -38,4 +40,48 @@ test("plan blocks and PR lock comments are read under either name", () => {
     assert.ok(plan && "subtasks" in plan, name);
     assert.equal(parseLock(`<!-- ${name}-lock {"holder":"x","startedAt":"2026-11-26T10:00:00Z"} -->`)?.holder, "x", name);
   }
+});
+
+test("a new data dir gets alice.sqlite, and one that holds only bakery.sqlite keeps it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-data-"));
+  try {
+    assert.equal(databaseFile(dir), join(dir, "alice.sqlite"));
+    writeFileSync(join(dir, "bakery.sqlite"), "");
+    assert.equal(databaseFile(dir), join(dir, "bakery.sqlite"));
+    writeFileSync(join(dir, "alice.sqlite"), "");
+    assert.equal(databaseFile(dir), join(dir, "alice.sqlite"), "alice.sqlite wins once it exists");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a card works on alice/<id>, or on the bakery/<id> branch it already has", () => {
+  const repo = mkdtempSync(join(tmpdir(), "alice-branch-"));
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { stdio: "pipe" });
+  try {
+    git("init", "-q", "-b", "main");
+    git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init");
+    assert.equal(cardBranch(repo, "new"), "alice/new");
+    git("branch", "bakery/old");
+    assert.equal(cardBranch(repo, "old"), "bakery/old");
+    git("branch", "alice/old");
+    assert.equal(cardBranch(repo, "old"), "alice/old", "the new name wins when both exist");
+    git("update-ref", "refs/remotes/origin/bakery/pushed", "HEAD");
+    assert.equal(cardBranch(repo, "pushed"), "bakery/pushed", "a PR branch only on origin counts too");
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+test("old browser keys are copied once, so a setting cleared later stays cleared", () => {
+  const map = new Map<string, string>([["bakery-chat-collapsed", "1"]]);
+  const storage = {
+    get length() { return map.size; },
+    key: (index: number) => [...map.keys()][index] ?? null,
+    getItem: (key: string) => map.get(key) ?? null,
+    setItem: (key: string, value: string) => { map.set(key, value); },
+    removeItem: (key: string) => { map.delete(key); },
+    clear: () => map.clear(),
+  } as Storage;
+  adoptLegacyStorage(storage);
+  assert.equal(map.get("alice-chat-collapsed"), "1");
+  map.delete("alice-chat-collapsed");
+  adoptLegacyStorage(storage);
+  assert.equal(map.has("alice-chat-collapsed"), false);
 });

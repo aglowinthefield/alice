@@ -1,6 +1,6 @@
-import { spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 /**
  * Finds `bin` the way Windows would: each PATH entry, trying every PATHEXT extension.
@@ -63,6 +63,26 @@ export function command(
   if (!/\.(cmd|bat)$/i.test(file)) return [file, args];
   const script = shimScript(file);
   return script ? [process.execPath, [script, ...args]] : [file, args];
+}
+
+/**
+ * Worktrunk's version line (`wt v0.9.0`) when `wtBin` is Worktrunk, undefined for any other binary with that name
+ * (wiredtiger ships one). On Windows, `wt` is usually the Windows Terminal app alias, which answers `--version` with
+ * a popup dialog, so a `wt` under a WindowsApps directory is never run.
+ */
+export function worktrunkVersion(
+  wtBin: string,
+  platform: string = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (!wtBin) return undefined;
+  if (platform === "win32" && /^WindowsApps$/i.test(basename(dirname(findOnWindows(wtBin, env) ?? "")))) return undefined;
+  try {
+    const out = execFileSync(...command(wtBin, ["--version"], platform, env), { encoding: "utf8", env, stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }).trim();
+    return /^wt v\d/.test(out) ? out.split("\n")[0] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

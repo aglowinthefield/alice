@@ -1,6 +1,6 @@
 import { repoIcons } from "../src/repo-appearance.js";
-import { execFile, execFileSync } from "node:child_process";
-import { command } from "./platform.js";
+import { execFile } from "node:child_process";
+import { command, worktrunkVersion } from "./platform.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Board, Card, RepoBoard } from "./board.js";
@@ -751,7 +751,7 @@ export class GitHubSync {
   private async removeWorktree(repo: string, card: Card): Promise<void> {
     const branch = cardBranch(repo, card.id), worktree = join(this.dataDir, "worktrees", card.id);
     try {
-      if (this.wtBin && hasWorktrunk(this.wtBin)) await run(this.wtBin, ["-C", repo, "remove", branch, "--yes", "--foreground", "--force-delete"], repo, 120_000);
+      if (this.wtBin && worktrunkVersion(this.wtBin)) await run(this.wtBin, ["-C", repo, "remove", branch, "--yes", "--foreground", "--force-delete"], repo, 120_000);
       else {
         if (existsSync(worktree)) await git(repo, "worktree", "remove", worktree);
         await git(repo, "branch", "-D", branch);
@@ -762,8 +762,3 @@ export class GitHubSync {
   }
 }
 
-/** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name. */
-export function hasWorktrunk(wtBin: string): boolean {
-  try { return /^wt v\d/.test(execFileSync(...command(wtBin, ["--version"]), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 })); }
-  catch { return false; }
-}

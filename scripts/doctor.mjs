@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { serviceCheck } from "./service.mjs";
 import { formatVersion } from "./version.mjs";
 import { dataDir } from "../server/legacy-names.ts";
+import { worktrunkVersion } from "../server/platform.ts";
 
 // Bare names like `pi` are npm `.cmd` shims on Windows, which only a shell can run.
 function run(bin, args, timeout = 20_000) {
@@ -60,8 +61,8 @@ function piChecks(env) {
 function wtCheck(env) {
   const bin = env.ALICE_WT_BIN ?? "wt";
   if (!bin) return { status: "pass", name: "worktrunk", detail: "turned off (ALICE_WT_BIN is empty)" };
-  const version = run(bin, ["--version"]);
-  return version.ok ? { status: "pass", name: "worktrunk", detail: `${bin} ${firstLine(version.output)}` }
+  const version = worktrunkVersion(bin);
+  return version ? { status: "pass", name: "worktrunk", detail: `${bin} ${version}` }
     : { status: "warn", name: "worktrunk", detail: `${bin} not usable; worktree hooks won't run (optional)` };
 }
 

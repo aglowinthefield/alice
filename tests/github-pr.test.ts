@@ -11,8 +11,9 @@ import { Worker } from "../server/worker.js";
 import { Integration, PushHookError, type CommitHookError } from "../server/integration.js";
 import { Readiness } from "../server/readiness.js";
 import { AutoReview } from "../server/auto-review.js";
-import { GitHub, GitHubSync, aliceRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
+import { GitHub, GitHubSync, aliceRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
+import { worktrunkVersion } from "../server/platform.js";
 import { diffSummary, draftPrompt, draftPullRequest, maxDraftPatchChars, readPullRequestRules, type PullRequestRules } from "../server/pr-draft.js";
 import type { Card, Run } from "../server/board.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
@@ -916,7 +917,7 @@ test("github-pr: a retry after a merge-based conflict repair merges the newer or
 });
 
 // Worktrunk itself, when installed: `wt remove` cleans up a squash-merged card and `wt step rebase` rebases a retry.
-test("github-pr with Worktrunk: wt removes a squash-merged Done card and rebases an unpushed retry", { skip: !hasWorktrunk("wt") && "wt is not installed" }, async () => {
+test("github-pr with Worktrunk: wt removes a squash-merged Done card and rebases an unpushed retry", { skip: !worktrunkVersion("wt") && "wt is not installed" }, async () => {
   const f = fixture("wt");
   try {
     const retried = await reviewedCard(f, "Retry");

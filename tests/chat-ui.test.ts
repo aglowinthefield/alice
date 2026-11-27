@@ -422,6 +422,15 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
   }
 });
 
+/**
+ * Waits for Inter to load and the render it causes to land. The chat list measures its labels in the font on screen,
+ * so a maximum read while the fallback still shows would change under the test once Inter swaps in.
+ */
+async function fontsLoaded(page: Page) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
 async function waitUntil(condition: () => boolean | Promise<boolean>, timeout = 10_000) {
   for (const started = Date.now(); !(await condition()); await new Promise(resolve => setTimeout(resolve, 25)))
     if (Date.now() - started > timeout) throw new Error("timed out waiting for the condition");
@@ -702,6 +711,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     const width = async () => Math.round((await nav.boundingBox())!.width);
     const value = async (name: string) => Number(await divider.getAttribute(name));
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     const max = await value("aria-valuemax"), min = await value("aria-valuemin");
     assert.equal(min, 180);
@@ -742,6 +752,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const saved = await width();
     await page.reload();
     await nav.getByRole("button", { name: /^Why is card B/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     assert.equal(await width(), saved, "the chosen width survives a reload");
 
@@ -852,6 +863,7 @@ test("at the maximum a wide-glyph label with a badge fits with fractional widths
     const nav = page.getByRole("navigation", { name: "Chats" });
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
     await divider.focus();
     await page.keyboard.press("End");

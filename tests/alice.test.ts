@@ -5,10 +5,10 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 const cli = fileURLToPath(new URL("../scripts/alice.mjs", import.meta.url));
-const board = { id: "board-one", repo: "/tmp/alice-project", limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
+const board = { id: "board-one", repo: resolve("/tmp/alice-project"), limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z", autoReviewEnabled: false, autoPickupError: "" };
 
 const cards = [
   { id: "card-one", title: "Make an improvement", body: "Line one\nLine two", repo: board.repo, status: "triage", priority: 50, attempts: 3, reviewRounds: 2 },
@@ -203,7 +203,7 @@ test("ready lists a Triage card's flags and moves it only with --yes", async () 
 });
 
 test("add captures a Triage card on the board for the current directory", async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "alice-add-")));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "alice-add-")));
   const alpha = join(root, "alpha"), beta = join(root, "beta"), elsewhere = join(root, "elsewhere");
   for (const dir of [join(alpha, "src"), beta, elsewhere]) mkdirSync(dir, { recursive: true });
   const f = await fixture([{ ...board, repo: alpha }, { ...board, id: "board-two", repo: beta }]);
@@ -260,8 +260,9 @@ test("open prints and opens the board or a card by its short ID, through $BROWSE
     const printed = await f.run("open", "card-one", "--print");
     assert.match(printed.stdout, /\/board\/board-one\/card\/card-one\n$/);
     assert.notEqual((await f.run("cards", "--print")).code, 0, "--print only goes with open");
-    // The browser runs detached; wait for both opens to land.
-    for (let i = 0; i < 50 && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    // The browser runs detached; wait for both opens to land. On Windows each goes through node and sh, which can take
+    // a while; the deadline only keeps a browser that never runs from hanging the test.
+    for (const deadline = Date.now() + 30_000; Date.now() < deadline && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2);) await new Promise(resolve => setTimeout(resolve, 20));
     assert.deepEqual(readFileSync(log, "utf8").trim().split("\n").map(url => new URL(url).pathname), ["/board/board-one", "/board/board-one/card/card-one"]);
   } finally {
     if (saved === undefined) delete process.env.BROWSER; else process.env.BROWSER = saved;
@@ -353,7 +354,7 @@ test("a daily pickup limit of 0 means no limit in output and settings", async ()
 });
 
 test("ambiguous boards require a selector and bad card ids fail before mutation", async () => {
-  const f = await fixture([board, { ...board, id: "board-two", repo: "/tmp/another-project" }]);
+  const f = await fixture([board, { ...board, id: "board-two", repo: resolve("/tmp/another-project") }]);
   try {
     assert.match((await f.run("cards")).stderr, /More than one board/);
     assert.match((await f.run("cards", "--board", board.repo)).stdout, /card-one/);
@@ -399,7 +400,7 @@ test("show prints the card, its attempts and the latest auto-review verdict", as
     assert.equal(shown.code, 0, shown.stderr);
     assert.match(shown.stdout, /^Make an improvement$/m);
     assert.match(shown.stdout, /^status\ttriage$/m);
-    assert.match(shown.stdout, /^repo\t\/tmp\/alice-project$/m);
+    assert.equal(shown.stdout.split("\n").includes(`repo\t${board.repo}`), true);
     assert.match(shown.stdout, /^Line one\nLine two$/m);
     assert.match(shown.stdout, /^#2\treview\tpi\/claude$/m);
     assert.match(shown.stdout, /^depends on\tcard-done\tdone\tFinished\ndepends on\tcard-ready\tready\tNot yet\ndependent\tcard-later\ttriage\tFollow-up$/m);
@@ -475,7 +476,7 @@ test("purge-attachments needs --yes and reports what each card lost", async () =
 });
 
 test("stats prints per-lane counts and pickup state for the selected board", async () => {
-  const f = await fixture([{ ...board, cardCounts: { triage: 2, review: 1, done: 4 } }, { ...board, id: "board-two", repo: "/tmp/another-project", cardCounts: { ready: 9 } }]);
+  const f = await fixture([{ ...board, cardCounts: { triage: 2, review: 1, done: 4 } }, { ...board, id: "board-two", repo: resolve("/tmp/another-project"), cardCounts: { ready: 9 } }]);
   try {
     assert.match((await f.run("stats")).stderr, /More than one board/);
     const stats = await f.run("stats", "--board", board.id);
@@ -607,9 +608,10 @@ test("doctor fails the server check when Alice is not running", async t => {
 test("board-add posts the repository path to the HTTP API", async () => {
   const f = await fixture();
   try {
+    const repo = resolve("/tmp/new-repo");
     const out = JSON.parse((await f.run("board-add", "/tmp/new-repo", "--json")).stdout);
-    assert.deepEqual(out, { id: "board-new", repo: "/tmp/new-repo" });
-    assert.deepEqual(f.requests.find(item => item.method === "POST" && item.path === "/api/boards")?.input, { repo: "/tmp/new-repo" });
+    assert.deepEqual(out, { id: "board-new", repo });
+    assert.deepEqual(f.requests.find(item => item.method === "POST" && item.path === "/api/boards")?.input, { repo });
   } finally { await f.close(); }
 });
 

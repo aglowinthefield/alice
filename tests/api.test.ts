@@ -52,7 +52,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -96,7 +96,8 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       if (expected === 403)
         assert.equal(JSON.parse(response.body).error, host.startsWith("untrusted.") ? "Local access only" : "Origin rejected");
     }
-    assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
+    // Windows has no POSIX mode bits; the data directory is private through the user profile's ACL.
+    if (process.platform !== "win32") assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
     // The Logs view: the server's own output, including a debug line for each failed request.
     assert.equal((await request("/logs?after=x")).status, 400);
     const logs = (await request("/logs")).data as { startedAt: string; entries: { seq: number; level: string; message: string }[] };
@@ -104,11 +105,11 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.ok(logs.entries.some(entry => entry.level === "debug" && entry.message === "GET /api/logs?after=x -> 400: after must be a whole number"));
     assert.deepEqual((await request(`/logs?after=${logs.entries.at(-1)!.seq}`)).data.entries, []);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Fal")).data, ["~/code/alpha/", "~/code/alpine/"]);
-    assert.deepEqual((await request(`/path-suggestions?path=${encodeURIComponent(join(home, "code") + "/al")}`)).data, [alpha + "/", join(home, "code", "alpine") + "/"]);
+    assert.deepEqual((await request(`/path-suggestions?path=${encodeURIComponent(join(home, "code") + "/al")}`)).data, ["alpha", "alpine"].map(name => `${join(home, "code")}/${name}/`));
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Falpha%2F")).data, ["~/code/alpha/subfolder/"]);
     assert.deepEqual((await request("/path-suggestions?path=code%2Fal")).data, []);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fmissing%2Fa")).data, []);
-    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha")}`)).data.root, realpathSync(alpha));
+    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha")}`)).data.root, realpathSync.native(alpha));
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpine")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha/subfolder")}`)).status, 400);
@@ -133,7 +134,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.deepEqual(prefs((await request("/settings")).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
-    assert.equal(first.repo, realpathSync(alpha));
+    assert.equal(first.repo, realpathSync.native(alpha));
     assert.deepEqual([first.icon, first.color], ["sprinkle_donut", "violet"]);
     assert.equal(first.autoCollapseEmptySwimlanes, false);
     assert.equal(first.autoReviewEnabled, false);
@@ -214,7 +215,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
     execFileSync("git", ["-C", alpha, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
-    assert.equal(card.repo, realpathSync(alpha));
+    assert.equal(card.repo, realpathSync.native(alpha));
     assert.equal(card.status, "triage");
     assert.equal(card.priority, 0, "new cards default to Normal");
     for (const priority of ["critical", "HIGH", 101, -101, 0.5, null])
@@ -276,11 +277,11 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
     assert.equal((await request(`/boards/${first.id}`, "PATCH", { repo: beta })).status, 400);
     const moved = await request(`/boards/${first.id}`, "PATCH", { repo: "~/code/gamma" });
-    assert.equal(moved.data.repo, realpathSync(gamma));
+    assert.equal(moved.data.repo, realpathSync.native(gamma));
     assert.equal(moved.status, 200);
     assert.equal(moved.data.autoCollapseEmptySwimlanes, true);
     assert.deepEqual([moved.data.icon, moved.data.color], ["croissant", "coral"]);
-    assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync(gamma));
+    assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync.native(gamma));
     assert.equal((await request(`/boards/${first.id}`, "DELETE")).status, 200);
     assert.equal((await request(`/boards/${first.id}/cards`)).status, 404);
     assert.deepEqual(await everyTitle(), ["Beta keyed"]);
@@ -311,6 +312,9 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Typed", body: "", origin: "ui" })).data.source, "ui");
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Agent", body: "", source: "hermes" })).data.source, "hermes");
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Follow-up", body: "", source: "follow-up", idempotencyKey: "follow-up:run:0" })).data.source, "follow-up");
+  } catch (error) {
+    // A reset connection says nothing about why the server went away, so keep what it printed and how it ended.
+    throw new Error(`${error instanceof Error ? error.stack : error}\nserver exit=${child.exitCode} signal=${child.signalCode} stderr: ${output}`, { cause: error });
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
@@ -333,7 +337,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -391,7 +395,7 @@ test("POST start while the server drains answers 202 queued and does not start a
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
@@ -445,7 +449,7 @@ ${event({ type: "agent_settled", aborted: false })}
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -504,7 +508,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -557,10 +561,10 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
-  let output = "";
+  let output = "", db: DatabaseSync | undefined;
   child.stderr?.on("data", chunk => { output += chunk.toString(); });
   try {
     const url = `http://127.0.0.1:${port}`;
@@ -582,11 +586,11 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       }
       return { card, base };
     };
-    const db = new DatabaseSync(join(home, "data", "alice.sqlite"));
+    db = new DatabaseSync(join(home, "data", "alice.sqlite"));
     const first = await toReview("Waiting"), second = await toReview("Draining");
-    db.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
+    db!.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
     const requestWhileWaiting = async ({ card, base }: { card: { id: string }; base: string }) => {
-      db.prepare("UPDATE cards SET prState='MERGED' WHERE id=?").run(card.id);
+      db!.prepare("UPDATE cards SET prState='MERGED' WHERE id=?").run(card.id);
       const listed = async () => ((await request(`/boards/${board.id}/cards`)).data as { id: string; reviewWait: string; startQueued: boolean }[]).find(item => item.id === card.id)!;
       assert.equal((await listed()).reviewWait, "github");
       const fingerprint = (await request(`${base}/review?fingerprint=1`)).data.fingerprint;
@@ -605,6 +609,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
     await drained;
     await requestWhileWaiting(second);
   } finally {
+    db?.close(); // An open handle keeps board.sqlite locked on Windows.
     if (child.exitCode === null) {
       child.kill("SIGTERM");
       await new Promise(resolve => child.once("close", resolve));

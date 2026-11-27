@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { command } from "./platform.js";
+import { command, killTree } from "./platform.js";
 import { settledReply } from "./agent.js";
 import type { Card, DiscussionMessage, Run } from "./board.js";
 
@@ -30,8 +30,8 @@ export function discuss({ prompt, cwd, piBin, models }: { prompt: string; cwd: s
     // A screenshot the agent reads back makes one event line several MB, so the cap matches the worker's.
     const chunks: Buffer[] = [];
     let stdoutBytes = 0, stderr = "", exceeded = false;
-    const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 10 * 60_000);
-    child.stdout?.on("data", (chunk: Buffer) => { chunks.push(chunk); stdoutBytes += chunk.length; if (stdoutBytes > 500_000_000) { exceeded = true; child.kill("SIGTERM"); } });
+    const timer = setTimeout(() => { exceeded = true; killTree(child); }, 10 * 60_000);
+    child.stdout?.on("data", (chunk: Buffer) => { chunks.push(chunk); stdoutBytes += chunk.length; if (stdoutBytes > 500_000_000) { exceeded = true; killTree(child); } });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-1000); });
     child.once("error", error => { clearTimeout(timer); reject(new Error(`Pi could not start: ${error.message}`)); });
     child.once("close", code => {

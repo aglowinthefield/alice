@@ -149,13 +149,13 @@ test("the server sends only counts once the Settings toggle is on, and nothing b
   await new Promise<void>(resolve => sink.listen(0, "127.0.0.1", resolve));
   const port = await freePort();
   const start = (endpoint: string | undefined) => spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"],
+    cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe", "ipc"],
     env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_TELEMETRY_ENDPOINT: endpoint ?? "" },
   });
   const url = `http://127.0.0.1:${port}/api`;
   const call = async (path: string, method = "GET", input?: unknown) => { const r = await fetch(url + path, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined }); return { status: r.status, data: await r.json() as any }; };
   const up = async (child: ReturnType<typeof start>) => { const deadline = Date.now() + 8000; while (true) { try { await fetch(`${url}/boards`); return; } catch { if (Date.now() > deadline || child.exitCode !== null) throw new Error("server did not start"); await new Promise(r => setTimeout(r, 25)); } } };
-  const stop = (child: ReturnType<typeof start>) => new Promise<void>(resolve => { child.once("close", () => resolve()); child.kill("SIGTERM"); });
+  const stop = (child: ReturnType<typeof start>) => new Promise<void>(resolve => { child.once("close", () => resolve()); if (process.platform === "win32") child.send({ type: "shutdown" }); else child.kill("SIGTERM"); });
   try {
     // No endpoint: hidden and refused.
     let child = start(undefined); await up(child);

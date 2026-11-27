@@ -155,6 +155,9 @@ export function ChatView({
   );
   const [contentWidth, setContentWidth] = useState<number | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  // Bumped when a web font finishes loading. Inter swaps in after the first layout, which changes the labels' widths
+  // without a render, so the list measures them again.
+  const [, setFontsLoaded] = useState(0);
   const [sideBySide, setSideBySide] = useState(
     () => window.matchMedia("(min-width: 768px)").matches,
   );
@@ -309,8 +312,15 @@ export function ChatView({
       observer?.disconnect();
     };
   }, []);
+  useEffect(() => {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    const update = () => setFontsLoaded((count) => count + 1);
+    fonts.addEventListener("loadingdone", update);
+    return () => fonts.removeEventListener("loadingdone", update);
+  }, []);
   // The widest a row needs to show its whole label, measured from what is displayed, so it follows the labels,
-  // the date grouping, the unread badges and the chat list.
+  // the date grouping, the unread badges, the fonts and the chat list.
   useLayoutEffect(() => {
     const nav = rail.current;
     if (!nav || collapsed) return;

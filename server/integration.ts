@@ -83,8 +83,8 @@ const worktreeArgs = {
   branch: ["symbolic-ref", "--short", "HEAD"], unmerged: ["ls-files", "-u"],
 } as const;
 function worktreeProblem(facts: WorktreeFacts, repo: string, worktree: string, cardId: string): string | null {
-  if (realpathSync(facts.repoTop) !== realpathSync(repo) || realpathSync(facts.worktreeTop) !== realpathSync(worktree) ||
-    realpathSync(facts.repoCommon) !== realpathSync(facts.worktreeCommon) || !cardBranches(cardId).includes(facts.branch)) return "Card worktree is not on its expected branch in this repository";
+  if (realpathSync.native(facts.repoTop) !== realpathSync.native(repo) || realpathSync.native(facts.worktreeTop) !== realpathSync.native(worktree) ||
+    realpathSync.native(facts.repoCommon) !== realpathSync.native(facts.worktreeCommon) || !cardBranches(cardId).includes(facts.branch)) return "Card worktree is not on its expected branch in this repository";
   if (facts.unmerged) return "Resolve conflicts in the card worktree before review";
   return null;
 }
@@ -198,9 +198,9 @@ export type PushProgress = { step: string; log: string[]; startedAt: string; fin
 const progressLogLines = 400;
 
 /**
- * `git push` without blocking the server, streaming stdout and stderr together, in order, into `onLine`. A
- * pre-push hook's own stdout is part of the push output, so a failure message carries everything it printed, not
- * only stderr. `\r` progress redraws replace the line they redraw.
+ * `git push` without blocking the server, streaming stdout and stderr together into `onLine`. A pre-push hook's own
+ * stdout is part of the push output, so a failure message carries everything it printed, not only stderr. Git passes
+ * the hook's stdout to its stdout, a separate pipe, so each stream's lines stay in order but the two interleave as read. `\r` progress redraws replace the line they redraw.
  */
 /** A failed `git push`. `hookFailed` when a pre-push hook refused it, as opposed to the remote or the network. */
 export class PushError extends Error {
@@ -327,7 +327,7 @@ export class Integration {
     if (!run || !run.worktree || !(card.status === "review" && run.status === "review" ||
       allowFailed && card.status === "failed" && run.status === "failed")) throw new Error("Only a reviewed run can be inspected or approved");
     const repo = card.repo, worktree = join(this.dataDir, "worktrees", card.id);
-    if (!existsSync(worktree) || realpathSync(worktree) !== realpathSync(run.worktree)) throw new Error("Card worktree is missing or has moved");
+    if (!existsSync(worktree) || realpathSync.native(worktree) !== realpathSync.native(run.worktree)) throw new Error("Card worktree is missing or has moved");
     return { repo, worktree, run };
   }
   private location(card: Card, allowFailed = false) {

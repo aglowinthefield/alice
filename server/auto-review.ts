@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { command } from "./platform.js";
+import { command, killTree } from "./platform.js";
 import { Board, RunLimitError, type Attachment, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "../shared/agent-models.js";
@@ -144,7 +144,7 @@ export class AutoReview {
   }
   async shutdown(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
-    for (const reviewer of this.reviewers.values()) reviewer.kill("SIGTERM");
+    for (const reviewer of this.reviewers.values()) killTree(reviewer);
     while (this.activeReviews.size) await new Promise(resolve => setTimeout(resolve, 50));
   }
   /** Stops claiming new reviews and resolves once the review in progress, if any, has finished. */
@@ -293,11 +293,11 @@ export class AutoReview {
       let stdout = "", stderr = "", exceeded = false, pending = "";
       const progress = new ReviewProgress(Date.now());
       let reportedAt = 0;
-      const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 20 * 60_000);
+      const timer = setTimeout(() => { exceeded = true; killTree(child); }, 20 * 60_000);
       child.stdout?.on("data", (chunk: Buffer) => {
         const text = chunk.toString();
         stdout += text;
-        if (stdout.length > 20_000_000) { exceeded = true; child.kill("SIGTERM"); }
+        if (stdout.length > 20_000_000) { exceeded = true; killTree(child); }
         pending += text;
         const lines = pending.split("\n"); pending = lines.pop() ?? "";
         for (const line of lines) progress.feed(line);

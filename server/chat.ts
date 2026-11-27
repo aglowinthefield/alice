@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { command } from "./platform.js";
+import { command, killTree } from "./platform.js";
 import { settledReply } from "./agent.js";
 import { piModelArgs } from "../shared/agent-models.js";
 import { publishChatImages } from "./chat-images.js";
@@ -103,8 +103,8 @@ export function writeTopic(piBin: string, cwd: string, models: string[], message
   return new Promise((resolve, reject) => {
     const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
-    const timer = setTimeout(() => child.kill("SIGTERM"), 60_000);
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 200_000) child.kill("SIGTERM"); });
+    const timer = setTimeout(() => killTree(child), 60_000);
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 200_000) killTree(child); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-1000); });
     child.once("error", error => { clearTimeout(timer); reject(error); });
     child.once("close", code => {
@@ -258,7 +258,7 @@ export class Chats {
     if (!turn) return;
     turn.stopped = true;
     // Pi's tool processes share its pipes, so end the whole group or the turn would not finish until they exit.
-    try { if (process.platform !== "win32" && turn.child.pid) process.kill(-turn.child.pid, "SIGTERM"); else turn.child.kill("SIGTERM"); } catch { turn.child.kill("SIGTERM"); }
+    try { if (process.platform !== "win32" && turn.child.pid) process.kill(-turn.child.pid, "SIGTERM"); else killTree(turn.child); } catch { killTree(turn.child); }
   }
 
   /** Stops any reply, then removes the chat and its Pi session file. */

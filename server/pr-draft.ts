@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { command } from "./platform.js";
+import { command, killTree } from "./platform.js";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Card, Run } from "./board.js";
@@ -156,14 +156,14 @@ function runPi(piBin: string, prompt: string, cwd: string, models: string[], onP
   return new Promise((resolve, reject) => {
     const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", exceeded = false;
-    const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 3 * 60_000);
+    const timer = setTimeout(() => { exceeded = true; killTree(child); }, 3 * 60_000);
     let pending = "";
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
       const lines = (pending + chunk.toString()).split("\n");
       pending = lines.pop() ?? "";
       for (const line of lines) { const step = progressLine(line); if (step) onProgress(step); }
-      if (stdout.length > 1_000_000) { exceeded = true; child.kill("SIGTERM"); }
+      if (stdout.length > 1_000_000) { exceeded = true; killTree(child); }
     });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
     child.once("error", error => { clearTimeout(timer); reject(error); });

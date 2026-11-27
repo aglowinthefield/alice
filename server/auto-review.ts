@@ -2,7 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { command } from "./platform.js";
 import { Board, RunLimitError, type Attachment, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, settledReply, usageInStream } from "./agent.js";
-import { piModelArgs } from "./agent-models.js";
+import { piModelArgs } from "../shared/agent-models.js";
 import { Integration } from "./integration.js";
 import { attachmentPath } from "./attachments.js";
 import { atReviewCapacity, loopGuards, needsPatchSize, reviewDiffRefusal } from "./repo-limits.js";

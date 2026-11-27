@@ -14,7 +14,7 @@ import { api } from "./api.js";
 import { repoName } from "./repo-appearance.js";
 import { formatCost } from "./usage.js";
 import type { Board } from "./model.js";
-import type { GroupRow, Stats } from "../server/stats.js";
+import type { GroupRow, Stats } from "../shared/wire.js";
 import { closeReasonLabels } from "./close-card.js";
 import {
   Card,

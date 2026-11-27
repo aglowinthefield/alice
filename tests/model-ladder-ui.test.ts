@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import { createServer } from "vite";
-import { emptyAgentModels } from "../server/agent-models.js";
+import { emptyAgentModels } from "../shared/agent-models.js";
 
 test("a repository's Card retries model is saved with its other models and is not in global Settings", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });

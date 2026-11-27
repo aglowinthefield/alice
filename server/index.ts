@@ -37,7 +37,7 @@ import { SentinelStore } from "./sentinel-store.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
-import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
+import { parseModelList, piModelArgs, validateAgentModels } from "../shared/agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
 import { PushNotifications } from "./push.js";
@@ -521,6 +521,10 @@ const server = createServer(async (req, res) => {
         if (keys.some(key => key !== "autoReviewMaxFiles" && key !== "autoReviewMaxPatchChars") || [input.autoReviewMaxFiles, input.autoReviewMaxPatchChars].some(value => value !== undefined && !Number.isSafeInteger(value))) throw new Error("Update autoReviewMaxFiles and autoReviewMaxPatchChars as integers (0 for no limit), separately from other board settings");
         send(res, 200, board.setAutoReviewDiffLimits(repoBoard.id, { maxFiles: input.autoReviewMaxFiles as number | undefined, maxPatchChars: input.autoReviewMaxPatchChars as number | undefined })); return;
       }
+      if ("staleReviewDays" in input) {
+        if (Object.keys(input).length !== 1) throw new Error("Update staleReviewDays separately from other board settings");
+        send(res, 200, board.setStaleReviewDays(repoBoard.id, input.staleReviewDays)); return;
+      }
       if ("limitsEnabled" in input) {
         if (Object.keys(input).length !== 1 || typeof input.limitsEnabled !== "boolean") throw new Error("Update limitsEnabled as a boolean, separately from other board settings");
         send(res, 200, board.setLimitsEnabled(repoBoard.id, input.limitsEnabled)); return;
@@ -818,8 +822,13 @@ const server = createServer(async (req, res) => {
         if (req.method === "POST" && action === "start") {
           if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
           // During a restart drain, remember the start and replay it once the new server is up.
+          // "Run again on current main" (a stale Review card): the run first brings the work up to date with main.
+          const { currentMain } = req.headers["content-type"]?.startsWith("application/json") ? await body(req) : {};
+          if (currentMain !== undefined && typeof currentMain !== "boolean") throw new Error("currentMain must be a boolean");
+          if (currentMain && item.status !== "review") throw new Error("Only a Review card can run again on current main");
+          if (draining.on && currentMain) throw new Error("Alice is restarting to load code changes; run again on current main after the restart");
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
-          send(res, 202, worker.start(item, "manual", "", undefined, true)); return;
+          send(res, 202, worker.start(item, "manual", currentMain ? "on current main" : "", undefined, true, !!currentMain)); return;
         }
         if (req.method === "POST" && action === "recover") {
           // Same gates as /start, since a recovery is a paid run.

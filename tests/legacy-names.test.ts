@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { adoptLegacyEnv, cardBranch, databaseFile, dataDir } from "../server/legacy-names.js";
 import { parseLock } from "../server/pr-lock.js";
 import { parsePlan } from "../src/plan.js";
+import { adoptLegacyStorage } from "../src/legacy-storage.js";
 
 test("BAKERY_* settings fill their ALICE_* names, and an ALICE_* setting wins", () => {
   const env: NodeJS.ProcessEnv = { BAKERY_PORT: "4317", BAKERY_HOST: "old", ALICE_HOST: "new", PATH: "/bin" };
@@ -63,5 +64,24 @@ test("a card works on alice/<id>, or on the bakery/<id> branch it already has", 
     assert.equal(cardBranch(repo, "old"), "bakery/old");
     git("branch", "alice/old");
     assert.equal(cardBranch(repo, "old"), "alice/old", "the new name wins when both exist");
+    git("update-ref", "refs/remotes/origin/bakery/pushed", "HEAD");
+    assert.equal(cardBranch(repo, "pushed"), "bakery/pushed", "a PR branch only on origin counts too");
   } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+test("old browser keys are copied once, so a setting cleared later stays cleared", () => {
+  const map = new Map<string, string>([["bakery-chat-collapsed", "1"]]);
+  const storage = {
+    get length() { return map.size; },
+    key: (index: number) => [...map.keys()][index] ?? null,
+    getItem: (key: string) => map.get(key) ?? null,
+    setItem: (key: string, value: string) => { map.set(key, value); },
+    removeItem: (key: string) => { map.delete(key); },
+    clear: () => map.clear(),
+  } as Storage;
+  adoptLegacyStorage(storage);
+  assert.equal(map.get("alice-chat-collapsed"), "1");
+  map.delete("alice-chat-collapsed");
+  adoptLegacyStorage(storage);
+  assert.equal(map.has("alice-chat-collapsed"), false);
 });

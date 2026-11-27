@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn validates_and_normalizes_server_origins() {
         assert_eq!(
-            server_url(" https://BAKERY.example:443 ", false)
+            server_url(" https://ALICE.example:443 ", false)
                 .unwrap()
                 .as_str(),
             "https://alice.example/"

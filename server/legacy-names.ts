@@ -36,13 +36,13 @@ export function databaseFile(dir: string): string {
 export const cardBranches = (cardId: string): string[] => [`alice/${cardId}`, `bakery/${cardId}`];
 
 /**
- * The branch a card works on in `repo`: the first of `cardBranches` that exists there, else `alice/<id>`. A card whose
- * worktree was made before the rename stays on `bakery/<id>`.
+ * The branch a card works on in `repo`: the first of `cardBranches` that exists there, locally or on origin, else
+ * `alice/<id>`. A card whose worktree or PR was made before the rename stays on `bakery/<id>`.
  */
 export function cardBranch(repo: string, cardId: string): string {
   const branches = cardBranches(cardId);
   const exists = (branch: string) => {
-    try { execFileSync("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { stdio: "ignore" }); return true; }
+    try { execFileSync("git", ["-C", repo, "show-ref", "--quiet", "--", `refs/heads/${branch}`, `refs/remotes/origin/${branch}`], { stdio: "ignore" }); return true; }
     catch { return false; }
   };
   return branches.find(exists) ?? branches[0];

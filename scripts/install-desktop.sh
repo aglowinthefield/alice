@@ -16,13 +16,14 @@ legacy_app=""
 # An existing state directory keeps its old name, so its Cargo cache and install stamp carry over.
 state=${XDG_STATE_HOME:-$HOME/.local/state}/bakery
 [[ -d $state ]] || state=${XDG_STATE_HOME:-$HOME/.local/state}/alice
-# launchd keys an installed job on its label, so the label and log keep their old names.
-label=dev.bakery.desktop-update
+# launchd keys an installed job on its label, so an installed job keeps its old label and log.
+label=dev.alice.desktop-update logname=alice-desktop-update
+[[ -f $HOME/Library/LaunchAgents/dev.bakery.desktop-update.plist ]] && label=dev.bakery.desktop-update logname=bakery-desktop-update
 mkdir -p "$state"
 
 if [[ ${1:-} == --launchd ]]; then
   plist=$HOME/Library/LaunchAgents/$label.plist
-  log=$HOME/Library/Logs/bakery-desktop-update.log
+  log=$HOME/Library/Logs/$logname.log
   # launchd starts jobs with a bare PATH, so keep the one that finds node, npm and cargo now.
   cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

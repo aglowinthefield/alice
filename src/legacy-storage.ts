@@ -2,8 +2,13 @@
 // each one fills its `alice-*` name when that is unset, so the UI reads and writes only `alice-*` and nobody loses a
 // setting. The old keys stay put for one release; dropping them later is this file plus its import in entry.tsx.
 
-/** Copies every `bakery-*` key in `storage` to its `alice-*` name, unless that name already has a value. */
+/**
+ * Copies every `bakery-*` key in `storage` to its `alice-*` name, unless that name already has a value. It runs once
+ * per storage: after that a missing `alice-*` key means the setting was cleared, not that it was never copied.
+ */
 export function adoptLegacyStorage(storage: Storage): void {
+  if (storage.getItem("alice-adopted-bakery-keys") !== null) return;
+  storage.setItem("alice-adopted-bakery-keys", "1");
   const legacy: string[] = [];
   for (let index = 0; index < storage.length; index++) {
     const key = storage.key(index);

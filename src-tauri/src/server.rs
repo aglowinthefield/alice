@@ -3,7 +3,7 @@ use url::Url;
 
 pub fn server_url(value: &str, allow_http: bool) -> Result<Url, String> {
     let url = Url::parse(value.trim()).map_err(|_| {
-        "Enter a full server address, such as https://bakery.example.ts.net.".to_string()
+        "Enter a full server address, such as https://alice.example.ts.net.".to_string()
     })?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err("Use an HTTP or HTTPS server address.".into());
@@ -25,17 +25,17 @@ pub fn server_url(value: &str, allow_http: bool) -> Result<Url, String> {
 }
 
 /// Addresses typed without a scheme try HTTPS and, where HTTP is allowed, HTTP, in that order of preference.
-/// Without a port they use Bakery's default, 4317.
+/// Without a port they use Alice's default, 4317.
 pub fn server_candidates(value: &str, allow_http: bool) -> Result<Vec<Url>, String> {
     let value = value.trim();
     if value.is_empty() {
-        return Err("Enter your server address, such as bakery.example.ts.net.".into());
+        return Err("Enter your server address, such as alice.example.ts.net.".into());
     }
     if value.contains("://") {
         return Ok(vec![server_url(value, allow_http)?]);
     }
     // A non-special scheme keeps the port exactly as typed, so ":443" is not mistaken for no port.
-    let typed_port = Url::parse(&format!("bakery://{value}"))
+    let typed_port = Url::parse(&format!("alice://{value}"))
         .ok()
         .and_then(|url| url.port());
     let mut candidates = Vec::new();
@@ -144,7 +144,7 @@ pub async fn probe_first(candidates: Vec<Url>) -> Result<Url, String> {
     }
     let answered = errors
         .iter()
-        .position(|error| !error.starts_with("Cannot reach Bakery"));
+        .position(|error| !error.starts_with("Cannot reach Alice"));
     Err(errors.swap_remove(answered.unwrap_or(errors.len() - 1)))
 }
 
@@ -155,24 +155,24 @@ pub async fn probe(url: &Url) -> Result<(), String> {
         .build()
         .map_err(|error| error.to_string())?;
     let status = client.get(url.join("api/status").map_err(|error| error.to_string())?)
-        .send().await.map_err(|error| format!("Cannot reach Bakery. Check the address, TLS certificate, and Tailnet connection. {error}"))?;
+        .send().await.map_err(|error| format!("Cannot reach Alice. Check the address, TLS certificate, and Tailnet connection. {error}"))?;
     if status.status() == reqwest::StatusCode::FORBIDDEN {
         return Err(
-            "Bakery rejected this hostname. Add it to BAKERY_ALLOWED_HOSTS on the server.".into(),
+            "Alice rejected this hostname. Add it to ALICE_ALLOWED_HOSTS on the server.".into(),
         );
     }
     if !status.status().is_success() {
-        return Err(format!("Bakery returned HTTP {}. Use a direct private server address; login redirects are not supported.", status.status()));
+        return Err(format!("Alice returned HTTP {}. Use a direct private server address; login redirects are not supported.", status.status()));
     }
     status
         .json::<Status>()
         .await
-        .map_err(|_| "This address did not return Bakery's status API.".to_string())?;
+        .map_err(|_| "This address did not return Alice's status API.".to_string())?;
     let page = client
         .get(url.clone())
         .send()
         .await
-        .map_err(|error| format!("Cannot load the Bakery UI: {error}"))?;
+        .map_err(|error| format!("Cannot load the Alice UI: {error}"))?;
     let html = page
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -184,7 +184,7 @@ pub async fn probe(url: &Url) -> Result<(), String> {
                 .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/html"))
         });
     if !page.status().is_success() || !html {
-        return Err("The server is reachable but is not serving the Bakery UI. Build it and set BAKERY_SERVE_UI=1 on the server.".into());
+        return Err("The server is reachable but is not serving the Alice UI. Build it and set ALICE_SERVE_UI=1 on the server.".into());
     }
     Ok(())
 }
@@ -197,23 +197,23 @@ mod tests {
     #[test]
     fn validates_and_normalizes_server_origins() {
         assert_eq!(
-            server_url(" https://BAKERY.example:443 ", false)
+            server_url(" https://ALICE.example:443 ", false)
                 .unwrap()
                 .as_str(),
-            "https://bakery.example/"
+            "https://alice.example/"
         );
         assert!(server_url("http://127.0.0.1:4317", false).is_ok());
-        assert!(server_url("http://bakery.example:4317", true).is_ok());
+        assert!(server_url("http://alice.example:4317", true).is_ok());
         for value in [
-            "http://bakery.example",
+            "http://alice.example",
             "file:///tmp/a",
             "javascript:alert(1)",
-            "https://user:secret@bakery.example",
-            "https://bakery.example/board/1",
-            "https://bakery.example/?key=secret",
-            "https://bakery.example/#board",
+            "https://user:secret@alice.example",
+            "https://alice.example/board/1",
+            "https://alice.example/?key=secret",
+            "https://alice.example/#board",
             "https://tauri.localhost",
-            "bakery.example",
+            "alice.example",
         ] {
             assert!(server_url(value, false).is_err(), "accepted {value}");
         }
@@ -239,34 +239,31 @@ mod tests {
             urls("mochi.example.ts.net:4318", false),
             ["https://mochi.example.ts.net:4318/"]
         );
-        assert_eq!(
-            urls("bakery.example:443", false),
-            ["https://bakery.example/"]
-        );
+        assert_eq!(urls("alice.example:443", false), ["https://alice.example/"]);
         assert_eq!(
             urls("127.0.0.1", false),
             ["https://127.0.0.1:4317/", "http://127.0.0.1:4317/"]
         );
         assert_eq!(
-            urls("https://bakery.example", false),
-            ["https://bakery.example/"]
+            urls("https://alice.example", false),
+            ["https://alice.example/"]
         );
-        for value in ["", "bakery.example/board/1", "user:secret@bakery.example"] {
+        for value in ["", "alice.example/board/1", "user:secret@alice.example"] {
             assert!(server_candidates(value, true).is_err(), "accepted {value}");
         }
     }
 
     #[test]
     fn remote_navigation_stays_on_the_exact_origin() {
-        let origin = server_url("https://bakery.example:8443", false).unwrap();
+        let origin = server_url("https://alice.example:8443", false).unwrap();
         assert!(same_origin(
             &origin,
-            &Url::parse("https://bakery.example:8443/board/1").unwrap()
+            &Url::parse("https://alice.example:8443/board/1").unwrap()
         ));
         for target in [
-            "http://bakery.example:8443/",
-            "https://bakery.example/",
-            "https://bakery.example.evil:8443/",
+            "http://alice.example:8443/",
+            "https://alice.example/",
+            "https://alice.example.evil:8443/",
             "https://other.example:8443/",
             "file:///tmp/a",
             "tauri://localhost/",
@@ -389,7 +386,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probes_both_the_bakery_api_and_hosted_ui() {
+    async fn probes_both_the_alice_api_and_hosted_ui() {
         assert!(check(vec![
             (
                 "200 OK",
@@ -403,7 +400,7 @@ mod tests {
         assert!(check(vec![("403 Forbidden", "application/json", "{}")])
             .await
             .unwrap_err()
-            .contains("BAKERY_ALLOWED_HOSTS"));
+            .contains("ALICE_ALLOWED_HOSTS"));
         assert!(check(vec![("302 Found", "text/html", "login")])
             .await
             .unwrap_err()
@@ -422,6 +419,6 @@ mod tests {
         ])
         .await
         .unwrap_err()
-        .contains("BAKERY_SERVE_UI"));
+        .contains("ALICE_SERVE_UI"));
     }
 }

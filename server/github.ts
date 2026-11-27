@@ -7,6 +7,7 @@ import type { Board, Card, RepoBoard } from "./board.js";
 import { githubRepo, parsePullRequestUrl } from "./github-url.js";
 import { githubMarkdown } from "./github-markdown.js";
 import { loopGuards } from "./repo-limits.js";
+import { cardBranch, cardBranches } from "./legacy-names.js";
 
 // GitHub pull request integration. On a `github-pr` board a card is Done once its PR has merged on GitHub
 // and the merge commit is on origin/main. Local main is only ever fast-forwarded to origin/main.
@@ -83,12 +84,12 @@ export async function fastForwardMain(repo: string): Promise<boolean> {
   catch { throw new Error("origin/main does not exist; fetch the repository's origin and check its default branch is main"); }
   let head = "";
   try { head = await git(repo, "symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Detached HEAD. */ }
-  if (head !== "main") throw new Error(`The repository root is ${head ? `on branch ${head}` : "in detached HEAD"}, not main. Check out main at ${repo}; Bakery keeps it in step with origin/main`);
+  if (head !== "main") throw new Error(`The repository root is ${head ? `on branch ${head}` : "in detached HEAD"}, not main. Check out main at ${repo}; Alice keeps it in step with origin/main`);
   const dirty = (await run("git", ["-C", repo, "status", "--porcelain", "--untracked-files=no"])).stdout.split("\n").filter(Boolean).map(line => line.slice(3));
-  if (dirty.length) throw new Error(`Local main at ${repo} has uncommitted changes (${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? ", …" : ""}). Bakery fast-forwards main only from a clean checkout; commit them on a branch or discard them`);
+  if (dirty.length) throw new Error(`Local main at ${repo} has uncommitted changes (${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? ", …" : ""}). Alice fast-forwards main only from a clean checkout; commit them on a branch or discard them`);
   const ahead = Number(await git(repo, "rev-list", "--count", "origin/main..main"));
   const behind = Number(await git(repo, "rev-list", "--count", "main..origin/main"));
-  if (ahead) throw new Error(`Local main ${behind ? "has diverged from" : "is ahead of"} origin/main (${ahead} local commit${ahead === 1 ? "" : "s"}${behind ? `, ${behind} behind` : ""}). Bakery only fast-forwards main; move the local commits to a branch and reset main yourself`);
+  if (ahead) throw new Error(`Local main ${behind ? "has diverged from" : "is ahead of"} origin/main (${ahead} local commit${ahead === 1 ? "" : "s"}${behind ? `, ${behind} behind` : ""}). Alice only fast-forwards main; move the local commits to a branch and reset main yourself`);
   if (!behind) return false;
   try { await git(repo, "merge", "--ff-only", "--quiet", "origin/main"); }
   catch (error) { throw new Error(`Fast-forward of main to origin/main failed: ${(error as Error).message}`); }
@@ -142,7 +143,7 @@ export function trimFailedLog(log: string, maxLines = 60, maxChars = 4000): stri
   return lines.slice(-maxLines).join("\n").slice(-maxChars);
 }
 
-const draftCi = "CI is failing on a draft PR. Bakery doesn't send drafts back for CI fixes; mark the PR ready for review and it will.";
+const draftCi = "CI is failing on a draft PR. Alice doesn't send drafts back for CI fixes; mark the PR ready for review and it will.";
 
 /** Most automatic CI fix runs per card. After that a failing PR waits for the operator. */
 export const maxCiReworks = loopGuards.ciFixRuns;
@@ -155,19 +156,20 @@ const ciFixUnchanged = (head: string) => `The CI fix run made no change, so CI s
  * comment to its review. `at` is when it was posted; a pending (unsubmitted) review has none and is never read.
  */
 export type PrComment = { id: string; at: string; author: string; association: string; body: string; path?: string; line?: number | null; reviewId?: string };
-/** One change a person asked Bakery for on GitHub, as the agent's prompt lists it. */
+/** One change a person asked Alice for on GitHub, as the agent's prompt lists it. */
 export type PrRequest = { author: string; comment: string; path?: string; line?: number | null };
 // Only people with a say in the repository can send a card back; anyone else's comment is just a comment.
 const trustedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
-const mentionsBakery = (body: string) => /^\s*\/bakery(?![\w-])/i.test(body);
+// `/bakery`, the command's name before the rename, still works.
+const mentionsAlice = (body: string) => /^\s*\/(?:alice|bakery)(?![\w-])/i.test(body);
 
 /**
- * The requests in `comments` posted after `since`: each comment by a trusted author that starts with `/bakery`
- * (not `@bakery`, which would notify an unrelated GitHub account). A review whose summary starts that way brings all of its inline comments along, so "Request changes"
- * with `/bakery` in the summary sends the whole review. `latest` is the newest request's time, the next `since`.
+ * The requests in `comments` posted after `since`: each comment by a trusted author that starts with `/alice`
+ * (not `@alice`, which would notify an unrelated GitHub account). A review whose summary starts that way brings all of its inline comments along, so "Request changes"
+ * with `/alice` in the summary sends the whole review. `latest` is the newest request's time, the next `since`.
  */
-export function bakeryRequests(comments: PrComment[], since: string): { requests: PrRequest[]; latest: string | null; asked: PrComment[] } {
-  const asked = comments.filter(item => item.at > since && trustedAssociations.includes(item.association) && mentionsBakery(item.body));
+export function aliceRequests(comments: PrComment[], since: string): { requests: PrRequest[]; latest: string | null; asked: PrComment[] } {
+  const asked = comments.filter(item => item.at > since && trustedAssociations.includes(item.association) && mentionsAlice(item.body));
   const reviews = new Set(asked.filter(item => !item.path).map(item => item.id));
   const picked = comments.filter(item => asked.includes(item) || (item.reviewId && reviews.has(item.reviewId) && item.body.trim()));
   return {
@@ -182,17 +184,17 @@ const prCommentsQuery = `query($owner: String!, $name: String!, $number: Int!) {
   reviews(last: 50) { nodes { id submittedAt authorAssociation author { login } body comments(first: 100) { nodes { id createdAt authorAssociation author { login } body path line originalLine } } } }
 } } }`;
 
-/** The reaction Bakery leaves on a `/bakery` comment it has read. GitHub's set has no pie; eyes says "seen". */
+/** The reaction Alice leaves on a `/alice` comment it has read. GitHub's set has no pie; eyes says "seen". */
 export const acknowledgedReaction = "eyes";
 
-/** A `/bakery` request found by scanning a repository's comments, before the PR it is on is looked up. */
+/** A `/alice` request found by scanning a repository's comments, before the PR it is on is looked up. */
 export type RepoComment = { id: string; at: string; author: string; association: string; body: string; prNumber: number; path?: string; line?: number | null };
-/** A PR as a request on it needs to see it: Bakery can only push to a branch in the same repository. */
+/** A PR as a request on it needs to see it: Alice can only push to a branch in the same repository. */
 export type RequestTarget = { number: number; title: string; url: string; state: PullRequest["state"]; headRefName: string; headRefOid: string; isCrossRepository: boolean };
 
-/** The `/bakery` comments among `comments` from trusted authors, oldest first. */
-export function trustedBakeryComments<T extends { association: string; body: string; at: string }>(comments: T[]): T[] {
-  return comments.filter(item => trustedAssociations.includes(item.association) && mentionsBakery(item.body)).sort((a, b) => a.at.localeCompare(b.at));
+/** The `/alice` comments among `comments` from trusted authors, oldest first. */
+export function trustedAliceComments<T extends { association: string; body: string; at: string }>(comments: T[]): T[] {
+  return comments.filter(item => trustedAssociations.includes(item.association) && mentionsAlice(item.body)).sort((a, b) => a.at.localeCompare(b.at));
 }
 
 /** How gh reports a missing or rejected sign-in on any command. */
@@ -340,16 +342,16 @@ export class GitHub {
   }
 }
 
-// Bakery's repo is public, so GitHub can render the icons from main. Each comment gets a random one.
-const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/bakery/main/public/icons/${repoIcons[Math.floor(Math.random() * repoIcons.length)]}.png`;
+// Alice's repo is public, so GitHub can render the icons from main. Each comment gets a random one.
+const aliceIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/alice/main/public/icons/${repoIcons[Math.floor(Math.random() * repoIcons.length)]}.png`;
 
 /**
- * Bakery comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
+ * Alice comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
  * reviewers can see what the automation did. A comment that fails to post never blocks the work; it is logged.
  */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
+  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${aliceIconUrl()}" width="16" height="16" alt="" /> Posted by Alice`); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
@@ -388,7 +390,7 @@ export async function detectGithubIntegration(board: Board, boardId: string, git
   const after = board.recordGithubProtection(boardId, before.remoteUrl, true, `main on ${repo} only accepts pull requests (${rule}).`, switchMode);
   if (!after || after.remoteUrl !== before.remoteUrl) return after;
   const outcome = after.integration === "github-pr"
-    ? (before.integration === "local" ? " Bakery switched Integration to GitHub pull requests." : "")
+    ? (before.integration === "local" ? " Alice switched Integration to GitHub pull requests." : "")
     : after.integrationChosen ? " Integration stays Local merge because you chose it; Approve merges into local main only." : " Choose an Integration mode: Approve refuses to merge locally until you do.";
   return board.recordGithubProtection(boardId, after.remoteUrl, true, `main on ${repo} only accepts pull requests (${rule}).${outcome}`, false);
 }
@@ -398,15 +400,21 @@ function prRepo(card: Card, repo: string): string {
   return (card.prOverrideUrl && parsePullRequestUrl(card.prOverrideUrl)?.repo) || repo;
 }
 
-/** The PR linked to a card: its override URL if set, else the newest PR from `bakery/<id>`. */
+/** The PR linked to a card: its override URL if set, else the newest PR from its branch (`alice/<id>`, or `bakery/<id>`). */
 export async function linkedPullRequest(github: GitHub, repo: string, card: Card, recent?: PullRequest[]): Promise<PullRequest | undefined> {
   if (card.prOverrideUrl) {
     const link = parsePullRequestUrl(card.prOverrideUrl);
     if (!link) throw new Error(`Invalid pull request link ${card.prOverrideUrl}`);
     return recent?.find(pr => pr.number === link.number) ?? github.view(link.repo, link.number);
   }
-  const branch = `bakery/${card.id}`;
-  return recent?.find(pr => pr.headRefName === branch) ?? (recent && !card.prNumber ? undefined : github.findByBranch(repo, branch));
+  const branches = cardBranches(card.id);
+  const known = recent?.find(pr => branches.includes(pr.headRefName));
+  if (known || (recent && !card.prNumber)) return known;
+  for (const branch of branches) {
+    const found = await github.findByBranch(repo, branch);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /**
@@ -426,6 +434,8 @@ export class GitHubSync {
   /** When fetching first failed in the current run of failures, per board. */
   private fetchFailingSince = new Map<string, number>();
   fetchGraceMs = 5 * 60_000;
+  /** Called after a card's pull request merges and the card is Done; brings the cards that depend on it up to date. */
+  onMerged: (cardId: string) => Promise<unknown> = async () => {};
   /** `rework` starts a fix run on a card whose PR failed CI; without it failures are only shown. */
   constructor(private readonly board: Board, private readonly dataDir: string, private readonly github: GitHub, private readonly wtBin?: string, private readonly intervalMs = 60_000,
     private readonly rework?: (card: Card) => unknown, private readonly autoApprove?: (card: Card) => Promise<unknown>) {}
@@ -510,7 +520,7 @@ export class GitHubSync {
       this.board.recordPullRequest(card.id, { ...pr, checks, error: ci.error, ciPending: ci.pending || !!ci.rework });
       if (ci.rework) {
         try { await ci.rework(); }
-        catch (error) { this.board.recordPullRequestError(card.id, `Bakery could not start a fix run yet: ${error instanceof Error ? error.message : String(error)}. It retries on the next sync, and the failures go to whichever run starts next.`); }
+        catch (error) { this.board.recordPullRequestError(card.id, `Alice could not start a fix run yet: ${error instanceof Error ? error.message : String(error)}. It retries on the next sync, and the failures go to whichever run starts next.`); }
       }
       return;
     }
@@ -531,12 +541,14 @@ export class GitHubSync {
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} merged as ${merge.slice(0, 12)}`);
     this.board.recordPullRequestMerge(card.id, pr.headRefOid || merge, merge);
     await this.removeWorktree(repoBoard.repo, card);
+    try { await this.onMerged(card.id); }
+    catch (error) { console.error(`[sync ${repo}] could not update the cards that depend on ${card.id.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`); }
   }
   /**
-   * A comment on the PR that starts with `/bakery`, from someone with write-level access to the
+   * A comment on the PR that starts with `/alice`, from someone with write-level access to the
    * repository, goes back to the card's agent as requested changes. So does a submitted review whose summary starts
    * that way, with its inline comments. Each is sent once: `prCommentsSeen` is the time of the newest one handled, and
-   * a PR is first read from the moment Bakery first looks at it, so old comments are not replayed. Like CI, the work
+   * a PR is first read from the moment Alice first looks at it, so old comments are not replayed. Like CI, the work
    * is only sent when the card worktree is clean and holds the PR head; otherwise a person is already on it, and the
    * request waits (unmoved cursor) until that is so. Unlike a CI fix, the result waits for Approve. Returns undefined
    * when there is nothing to do, so conflict and CI handling carry on.
@@ -553,26 +565,26 @@ export class GitHubSync {
     try { comments = await this.github.prComments(repo, pr.number); }
     catch (error) { console.error(`[sync ${repo}] could not read comments on PR #${pr.number}: ${error instanceof Error ? error.message : String(error)}`); return undefined; }
     if (!card.prCommentsSeen) { this.board.markCommentsSeen(card.id, comments.reduce((max, item) => item.at > max ? item.at : max, new Date().toISOString())); return undefined; }
-    const { requests, latest, asked } = bakeryRequests(comments, card.prCommentsSeen);
+    const { requests, latest, asked } = aliceRequests(comments, card.prCommentsSeen);
     if (!latest) return undefined;
-    // The person is told Bakery read the request at once, even when the card can't take it yet.
+    // The person is told Alice read the request at once, even when the card can't take it yet.
     const fresh = new Set(this.board.firstTime(asked.map(item => `react:${item.id}`)));
     for (const item of asked) if (fresh.has(`react:${item.id}`)) await acknowledge(() => this.github.reactToNode(item.id), `${repo}#${pr.number} comment ${item.id}`);
     const worktree = join(this.dataDir, "worktrees", card.id);
     let blocked: string | undefined;
     try {
       if (!existsSync(worktree)) blocked = "the card has no worktree";
-      else if (await git(worktree, "rev-parse", "HEAD") !== head) blocked = `the card's worktree is at ${(await git(worktree, "rev-parse", "HEAD")).slice(0, 12)}, not the pull request head ${head.slice(0, 12)}. It holds work that has not been pushed, which waits for Approve in Bakery`;
+      else if (await git(worktree, "rev-parse", "HEAD") !== head) blocked = `the card's worktree is at ${(await git(worktree, "rev-parse", "HEAD")).slice(0, 12)}, not the pull request head ${head.slice(0, 12)}. It holds work that has not been pushed, which waits for Approve in Alice`;
       else if (await git(worktree, "status", "--porcelain")) blocked = "the card's worktree has uncommitted changes";
     } catch (error) { blocked = `the card's worktree could not be read (${error instanceof Error ? error.message : String(error)})`; }
     if (blocked) {
       console.debug(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number}: a request is waiting: ${blocked}`);
-      if (this.board.firstTime([`wait:${card.id}:${latest}`]).length) await commentOnPullRequest(this.github, repo, pr.number, `Bakery read the request above but can't hand it to the card's coding agent yet: ${blocked}. It will be sent on a later sync once the card is clean at the pull request head.`);
+      if (this.board.firstTime([`wait:${card.id}:${latest}`]).length) await commentOnPullRequest(this.github, repo, pr.number, `Alice read the request above but can't hand it to the card's coding agent yet: ${blocked}. It will be sent on a later sync once the card is clean at the pull request head.`);
       return undefined;
     }
     console.log(`[sync ${repo}] card ${card.id.slice(0, 8)} PR #${pr.number} has ${requests.length} requested change(s) from ${[...new Set(requests.map(item => item.author))].join(", ")}`);
     this.board.recordCommentRequests(card.id, head, JSON.stringify(requests, null, 1), latest);
-    await commentOnPullRequest(this.github, repo, pr.number, `Bakery sent this back to its coding agent with ${requests.length === 1 ? "the request" : `the ${requests.length} requested changes`} above. Its changes will wait for the operator's approval before they are pushed here.`);
+    await commentOnPullRequest(this.github, repo, pr.number, `Alice sent this back to its coding agent with ${requests.length === 1 ? "the request" : `the ${requests.length} requested changes`} above. Its changes will wait for the operator's approval before they are pushed here.`);
     return this.startRework(card);
   }
   /**
@@ -603,7 +615,7 @@ export class GitHubSync {
     if (handled === key) {
       // Sent back, but the run could not start (the board was at its run limit, say): try again.
       if (this.board.getCiFeedback(card.id)?.source === "conflict") return this.startRework(card);
-      return said(`The pull request still conflicts with main at ${short} and Bakery's automatic repair did not resolve it. Resolve it in the card worktree, or run the card again.`);
+      return said(`The pull request still conflicts with main at ${short} and Alice's automatic repair did not resolve it. Resolve it in the card worktree, or run the card again.`);
     }
     // Which files conflict, without touching the worktree. Only used to brief the agent and the PR.
     let files: string[] = [], details = "";
@@ -616,11 +628,11 @@ export class GitHubSync {
     if (card.conflictRepairs >= maxConflictRepairs) {
       this.board.markConflictHandled(card.id, `${key}!`);
       const reason = `${maxConflictRepairs} automatic repairs have already been tried`;
-      await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Bakery stopped repairing it automatically because ${reason}. A person needs to resolve it.`);
+      await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Alice stopped repairing it automatically because ${reason}. A person needs to resolve it.`);
       return said(`The pull request conflicts with main${files.length ? ` in ${files.join(", ")}` : ""}; ${reason}, so a person needs to resolve it.`);
     }
     this.board.recordConflictRepair(card.id, key, head, files, details || "GitHub reports a conflict with main");
-    await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Bakery sent it back to its coding agent to merge main in (automatic conflict repair ${card.conflictRepairs + 1} of ${maxConflictRepairs}). The resolution will be pushed here when it's ready.`);
+    await commentOnPullRequest(this.github, repo, pr.number, `This pull request conflicts with main at ${short}${files.length ? ` in ${files.map(file => `\`${file}\``).join(", ")}` : ""}. Alice sent it back to its coding agent to merge main in (automatic conflict repair ${card.conflictRepairs + 1} of ${maxConflictRepairs}). The resolution will be pushed here when it's ready.`);
     return this.startRework(card);
   }
   /**
@@ -659,7 +671,7 @@ export class GitHubSync {
     } catch { return {}; }
     if (card.ciReworks >= maxCiReworks) {
       this.board.markCiHandled(card.id, head);
-      await commentOnPullRequest(this.github, repo, pr.number, `CI is still failing at ${head.slice(0, 12)} (${failures.map(checkName).join(", ")}) after ${maxCiReworks} automatic fix runs. Bakery has stopped sending it back; a person needs to take it from here.`);
+      await commentOnPullRequest(this.github, repo, pr.number, `CI is still failing at ${head.slice(0, 12)} (${failures.map(checkName).join(", ")}) after ${maxCiReworks} automatic fix runs. Alice has stopped sending it back; a person needs to take it from here.`);
       return { error: limit };
     }
     const sections: string[] = [];
@@ -676,7 +688,7 @@ export class GitHubSync {
     const cancelled = latestChecks(pr).filter(check => outcome(check) === "CANCELLED").map(checkName).filter(Boolean);
     if (cancelled.length) sections.push(`### Not run\nThese checks were cancelled before they finished, so they may hide further failures: ${cancelled.slice(0, 12).join(", ")}. Run the repository's full local verification, not only the checks that failed above, so this round fixes everything.`);
     this.board.recordCiFailure(card.id, head, sections.join("\n\n"));
-    await commentOnPullRequest(this.github, repo, pr.number, `CI failed at ${head.slice(0, 12)}: ${failures.map(check => `\`${checkName(check) || "check"}\``).join(", ")}. Bakery sent this back to its coding agent with the failure logs (automatic fix run ${card.ciReworks + 1} of ${maxCiReworks}). The fix will be pushed here when it's ready.`);
+    await commentOnPullRequest(this.github, repo, pr.number, `CI failed at ${head.slice(0, 12)}: ${failures.map(check => `\`${checkName(check) || "check"}\``).join(", ")}. Alice sent this back to its coding agent with the failure logs (automatic fix run ${card.ciReworks + 1} of ${maxCiReworks}). The fix will be pushed here when it's ready.`);
     return this.startRework(card);
   }
   /**
@@ -706,7 +718,7 @@ export class GitHubSync {
       await this.autoApprove(card);
       return true;
     } catch (error) {
-      this.board.recordPullRequestError(card.id, `Bakery could not push the CI fix: ${error instanceof Error ? error.message : String(error)}. Review it and Approve to push it yourself.`);
+      this.board.recordPullRequestError(card.id, `Alice could not push the CI fix: ${error instanceof Error ? error.message : String(error)}. Review it and Approve to push it yourself.`);
       return true;
     }
   }
@@ -719,7 +731,7 @@ export class GitHubSync {
    * the branch is force-deleted, which is safe only because GitHub confirmed the PR merged. A dirty worktree is kept.
    */
   private async removeWorktree(repo: string, card: Card): Promise<void> {
-    const branch = `bakery/${card.id}`, worktree = join(this.dataDir, "worktrees", card.id);
+    const branch = cardBranch(repo, card.id), worktree = join(this.dataDir, "worktrees", card.id);
     try {
       if (this.wtBin && hasWorktrunk(this.wtBin)) await run(this.wtBin, ["-C", repo, "remove", branch, "--yes", "--foreground", "--force-delete"], repo, 120_000);
       else {

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isSentinelJob, reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
-import { acknowledge, boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, type RepoComment, trustedBakeryComments } from "./github.js";
+import { acknowledge, boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, type RepoComment, trustedAliceComments } from "./github.js";
 import { githubRepo } from "./github-url.js";
 import type { PrLocks } from "./pr-locks.js";
 import { prFindingKey, sentinelKinds, sentinelNames, type SentinelFinding, type SentinelKind, type SentinelRecord, type SentinelRun, type SentinelStore } from "./sentinel-store.js";
@@ -22,7 +22,7 @@ const isOpen = (card: Card) => card.status !== "done" && card.status !== "archiv
 /** The brief on a sentinel card. Rebasing onto the latest main comes first, before anything is investigated. */
 export function sentinelBrief(input: { repo: string; number: number; url: string; branch: string; head: string; mainTip: string; problems: string[] }): string {
   return [
-    `Pull request ${input.url} (branch \`${input.branch}\`) is not mergeable and no Bakery agent is working on it. Make it mergeable.`,
+    `Pull request ${input.url} (branch \`${input.branch}\`) is not mergeable and no Alice agent is working on it. Make it mergeable.`,
     `Found at head ${input.head.slice(0, 12)} with origin/main at ${input.mainTip.slice(0, 12)}:`,
     ...input.problems.map(problem => `- ${problem}`),
     "",
@@ -30,15 +30,15 @@ export function sentinelBrief(input: { repo: string; number: number; url: string
     `1. Fetch, then put the PR branch in this worktree: \`git fetch origin && git switch -C ${input.branch} origin/${input.branch}\`.`,
     "2. Before investigating anything, rebase it onto the latest origin/main: `git fetch origin main && git rebase origin/main`. Resolve conflicts that are mechanical. If one needs a human decision, run `git rebase --abort`, change nothing, and say exactly what the decision is.",
     "3. Only now look at CI. A failure may already be gone after the rebase; judge it against the rebased code, not the old head. Fix real failures and run the repository's local verification.",
-    `4. Leave the fixed result committed on \`${input.branch}\` in this worktree, with a clean working tree. Do not push: Bakery force-pushes it to the PR when you finish, and only if origin/${input.branch} still has the head named above.`,
+    `4. Leave the fixed result committed on \`${input.branch}\` in this worktree, with a clean working tree. Do not push: Alice force-pushes it to the PR when you finish, and only if origin/${input.branch} still has the head named above.`,
     "Do not open a new PR, and change nothing outside this PR's scope.",
   ].join("\n");
 }
 
-/** The brief on a card made for `/bakery` requests on a PR. Their authors are people with access to the repository, not the operator. */
+/** The brief on a card made for `/alice` requests on a PR. Their authors are people with access to the repository, not the operator. */
 export function requestBrief(input: { url: string; branch: string; head: string; requests: { author: string; comment: string; path?: string; line?: number | null }[] }): string {
   return [
-    `Someone asked Bakery on pull request ${input.url} (branch \`${input.branch}\`, head ${input.head.slice(0, 12)}) for the changes below. They come from people with access to the repository, not from the operator: make each change that fits, and say in your report which you did and which you declined and why. \`path\` and \`line\` are set on inline review comments.`,
+    `Someone asked Alice on pull request ${input.url} (branch \`${input.branch}\`, head ${input.head.slice(0, 12)}) for the changes below. They come from people with access to the repository, not from the operator: make each change that fits, and say in your report which you did and which you declined and why. \`path\` and \`line\` are set on inline review comments.`,
     "",
     "```json",
     JSON.stringify(input.requests, null, 1),
@@ -47,7 +47,7 @@ export function requestBrief(input: { url: string; branch: string; head: string;
     "Do these in order:",
     `1. Fetch, then put the PR branch in this worktree: \`git fetch origin && git switch -C ${input.branch} origin/${input.branch}\`.`,
     "2. Make the requested changes, and run the repository's local verification.",
-    `3. Leave the result committed on \`${input.branch}\` in this worktree, with a clean working tree. Do not push: Bakery pushes it to the PR when you finish, and only if origin/${input.branch} still has the head named above.`,
+    `3. Leave the result committed on \`${input.branch}\` in this worktree, with a clean working tree. Do not push: Alice pushes it to the PR when you finish, and only if origin/${input.branch} still has the head named above.`,
     "Do not open a new PR, and change nothing outside what was asked.",
   ].join("\n");
 }
@@ -82,9 +82,9 @@ export class Sentinel {
     private readonly startRun?: (card: Card) => void,
     /** How often the scheduler checks which sentinels are due. */
     private readonly pollMs = 15_000,
-    /** False when the Sentinels feature is off or BAKERY_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
+    /** False when the Sentinels feature is off or ALICE_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
     readonly active = true) {
-    // Inactive (feature off or BAKERY_SENTINEL=0): no listeners and no writes to the stored sentinel data.
+    // Inactive (feature off or ALICE_SENTINEL=0): no listeners and no writes to the stored sentinel data.
     if (!active) return;
     board.onRun((event, run) => {
       if (event !== "finished") return;
@@ -173,7 +173,7 @@ export class Sentinel {
 
   /**
    * Starts a sentinel job right away. Jobs skip auto-pickup, so a paused board, its limits or a card's failed run never
-   * hold them up. A start that throws (Bakery draining for a restart, say) leaves the card Ready for `startReadyJobs`.
+   * hold them up. A start that throws (Alice draining for a restart, say) leaves the card Ready for `startReadyJobs`.
    */
   private startJob(card: Card): void {
     if (!this.startRun || !this.active) return;
@@ -227,20 +227,20 @@ export class Sentinel {
   }
 
   /**
-   * A comment starting with `/bakery` from the repository's owner, a member or a collaborator, on any open PR of the
+   * A comment starting with `/alice` from the repository's owner, a member or a collaborator, on any open PR of the
    * board's repository, becomes a Ready card that checks out the PR branch and makes the change. The result is pushed
    * to that branch when the run finishes (`afterRun`). One card per PR per pass, however many comments; while a request
-   * card for a PR is open, newer comments on it wait. A repository is first read from the moment Bakery first sees it, so
-   * old comments are not replayed. PRs from forks are declined, as Bakery cannot push there. PRs with a card of their
+   * card for a PR is open, newer comments on it wait. A repository is first read from the moment Alice first sees it, so
+   * old comments are not replayed. PRs from forks are declined, as Alice cannot push there. PRs with a card of their
    * own are left to that card's sync, which sends the card back.
    */
   private async requestsOnce(repoBoard: RepoBoard, context: RunContext): Promise<void> {
     const repo = boardGithubRepo(repoBoard), tag = `[requests ${repo}]`;
     const since = this.store.requestCursor(repo);
     if (!since) { this.store.setRequestCursor(repo, new Date().toISOString()); return; }
-    const asked = trustedBakeryComments((await this.github.repoComments(repo, since)).filter(item => item.at > since));
+    const asked = trustedAliceComments((await this.github.repoComments(repo, since)).filter(item => item.at > since));
     if (!asked.length) return;
-    // Everyone who asked is told Bakery read it, whether it acts now or the request waits.
+    // Everyone who asked is told Alice read it, whether it acts now or the request waits.
     const fresh = new Set(this.board.firstTime(asked.map(item => `react:${item.id}`)));
     for (const item of asked) if (fresh.has(`react:${item.id}`)) await acknowledge(() => this.github.reactToRepoComment(repo, item.id), `${repo}#${item.prNumber} comment ${item.id}`);
     const cards = this.board.listCards(repoBoard.repo).filter(isOpen);
@@ -250,7 +250,7 @@ export class Sentinel {
     for (const item of asked) {
       if (requestCards.has(item.prNumber)) {
         stopAt = item.at; console.log(`${tag} #${item.prNumber}: a request card is still open; the request waits`);
-        if (this.board.firstTime([`wait:${item.id}`]).length) await commentOnPullRequest(this.github, repo, item.prNumber, "Bakery read this request, but an earlier request on this pull request is still being worked on. It will pick this one up when that card is finished.");
+        if (this.board.firstTime([`wait:${item.id}`]).length) await commentOnPullRequest(this.github, repo, item.prNumber, "Alice read this request, but an earlier request on this pull request is still being worked on. It will pick this one up when that card is finished.");
         break;
       }
       groups.set(item.prNumber, [...groups.get(item.prNumber) ?? [], item]);
@@ -271,20 +271,20 @@ export class Sentinel {
     catch { console.debug(`${tag} #${number}: not a pull request, ignoring`); return; }
     if (pr.state !== "OPEN") return;
     if (cards.some(card => card.prNumber === number)) { console.debug(`${tag} #${number}: has its own card, which handles requests`); return; }
-    if (pr.isCrossRepository) { await commentOnPullRequest(this.github, repo, number, "Bakery can't act on this request: the pull request comes from a fork, and Bakery only pushes to branches in this repository."); return; }
+    if (pr.isCrossRepository) { await commentOnPullRequest(this.github, repo, number, "Alice can't act on this request: the pull request comes from a fork, and Alice only pushes to branches in this repository."); return; }
     const mainTip = await git(repoBoard.repo, "rev-parse", "origin/main");
     const requests = items.map(item => ({ author: item.author, comment: item.body.trim().slice(0, 4000), ...(item.path ? { path: item.path, line: item.line } : {}) }));
     const findingKey = `request:${items[0].id}`;
     // One transaction: the attempt exists before the card is Ready, so its run locks the PR and its result is pushed.
-    const card = this.board.createCard({ title: `Requested on PR #${number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: findingKey, priority: 0,
+    const card = this.board.createCard({ title: `Requested on PR #${number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: findingKey, priority: 0, source: "pr-comment",
       provenance: { sentinelId: context.sentinel.id, sentinelRunId: context.runId, findingKey },
       body: withInstructions(requestBrief({ url: pr.url, branch: pr.headRefName, head: pr.headRefOid, requests }), context.sentinel),
-      ready: `Created by a /bakery comment on pull request #${number}`,
+      ready: `Created by a /alice comment on pull request #${number}`,
       inTransaction: made => { this.store.recordAttempt(repo, number, pr.headRefName, pr.headRefOid, mainTip, made.id, new Date().toISOString()); this.store.markRequestCard(made.id); } });
     context.findings.push({ key: findingKey, cardId: card.id, outcome: "created" });
     console.log(`${tag} #${number}: created card ${card.id.slice(0, 8)} for ${items.length} request(s) from ${[...new Set(items.map(item => item.author))].join(", ")}`);
     this.startJob(card);
-    await commentOnPullRequest(this.github, repo, number, `Bakery picked this up as a card and will push the change to \`${pr.headRefName}\` when its coding agent finishes.`);
+    await commentOnPullRequest(this.github, repo, number, `Alice picked this up as a card and will push the change to \`${pr.headRefName}\` when its coding agent finishes.`);
   }
 
   private async passOnce(repoBoard: RepoBoard, context: RunContext): Promise<void> {
@@ -336,7 +336,7 @@ export class Sentinel {
       if (this.store.attemptCount(repo, pr.number) >= maxSentinelAttempts) {
         console.log(`${tag} #${pr.number}: ${maxSentinelAttempts} attempts used; giving up`);
         if (this.store.markGivenUp(repo, pr.number, new Date().toISOString()))
-          await commentOnPullRequest(this.github, repo, pr.number, `Bakery's sentinel tried ${maxSentinelAttempts} times to get this pull request mergeable and stopped. A person needs to take it from here.`);
+          await commentOnPullRequest(this.github, repo, pr.number, `Alice's sentinel tried ${maxSentinelAttempts} times to get this pull request mergeable and stopped. A person needs to take it from here.`);
         continue;
       }
       if (openSentinel >= maxOpenSentinelCards) { console.log(`${tag} #${pr.number}: stopping, ${maxOpenSentinelCards} open sentinel cards is the cap`); break; }
@@ -356,10 +356,10 @@ export class Sentinel {
   private async createCard(repoBoard: RepoBoard, repo: string, pr: { number: number; title: string; url: string }, head: string, branch: string, mainTip: string, problems: string[], context: RunContext): Promise<boolean> {
     const findingKey = prFindingKey(pr.number);
     // The card, its attempt and its Ready status are one transaction, so a crash leaves no half-made finding that later runs would skip.
-    const ready = this.board.createCard({ title: `Fix PR #${pr.number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: `sentinel:${pr.number}:${head}:${mainTip}`, priority: 0,
+    const ready = this.board.createCard({ title: `Fix PR #${pr.number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: `sentinel:${pr.number}:${head}:${mainTip}`, priority: 0, source: "sentinel",
       provenance: { sentinelId: context.sentinel.id, sentinelRunId: context.runId, findingKey },
       body: withInstructions(sentinelBrief({ repo, number: pr.number, url: pr.url, branch, head, mainTip, problems }), context.sentinel),
-      ready: "Created by Bakery's sentinel: the pull request is not mergeable and nothing is working on it",
+      ready: "Created by Alice's sentinel: the pull request is not mergeable and nothing is working on it",
       inTransaction: made => this.store.recordAttempt(repo, pr.number, branch, head, mainTip, made.id, new Date().toISOString()) });
     const card = ready;
     context.findings.push({ key: findingKey, cardId: card.id, outcome: "created" });
@@ -382,10 +382,10 @@ export class Sentinel {
       if (!found) continue;
       const pr = prs.find(item => item.number === Number(found[1]));
       try {
-        if (!pr) { this.board.setStatus(card.id, "done", "Withdrawn by Bakery's sentinel: this job was left unfinished and its pull request is no longer open"); continue; }
+        if (!pr) { this.board.setStatus(card.id, "done", "Withdrawn by Alice's sentinel: this job was left unfinished and its pull request is no longer open"); continue; }
         this.store.recordAttempt(repo, pr.number, pr.headRefName, found[2], found[3], card.id, new Date().toISOString());
         sentinelCards.add(card.id);
-        this.board.setStatus(card.id, "ready", "Recovered by Bakery's sentinel: the job was left unfinished by a restart");
+        this.board.setStatus(card.id, "ready", "Recovered by Alice's sentinel: the job was left unfinished by a restart");
         console.log(`[sentinel ${repo}] #${pr.number}: recovered unfinished card ${card.id.slice(0, 8)}`);
       } catch (error) { console.error(`Sentinel could not recover card ${card.id}: ${error instanceof Error ? error.message : String(error)}`); }
     }
@@ -400,7 +400,7 @@ export class Sentinel {
       const why = open.has(number) ? "is mergeable again" : "was merged or closed";
       console.log(`[sentinel ${repo}] #${number}: withdrawing unstarted card ${card.id.slice(0, 8)}, the pull request ${why}`);
       try {
-        this.board.setStatus(card.id, "done", `Withdrawn by Bakery's sentinel: the pull request ${why}`);
+        this.board.setStatus(card.id, "done", `Withdrawn by Alice's sentinel: the pull request ${why}`);
         context?.findings.push({ key: card.findingKey ?? prFindingKey(number), cardId: card.id, outcome: "withdrawn" });
         await this.locks.release(repo, number, holderOf(card.id));
       } catch (error) { console.error(`Sentinel could not withdraw card ${card.id}: ${error instanceof Error ? error.message : String(error)}`); }
@@ -408,7 +408,7 @@ export class Sentinel {
   }
 
   /**
-   * A finished sentinel run leaves the fixed branch committed in its worktree. Bakery pushes it, because agents do not
+   * A finished sentinel run leaves the fixed branch committed in its worktree. Alice pushes it, because agents do not
    * push. The push is leased to the head the card was made from, so it fails rather than overwrite a newer push by a
    * person. With nothing to push, the agent's report goes on the PR for a person to read.
    */
@@ -426,8 +426,8 @@ export class Sentinel {
       if (!existsSync(worktree)) throw new Error("the card worktree is missing");
       await fetchOrigin(worktree);
       const dirty = await git(worktree, "status", "--porcelain");
-      if (dirty) { console.log(`${tag} not pushing: uncommitted changes`); await say(`${request ? "Bakery's change" : "Bakery's sentinel's fix"} was left with uncommitted changes in its worktree, so nothing was pushed. A person needs to take it from here.${quoted}`); return; }
-      if (await git(worktree, "rev-parse", "HEAD") === attempt.head) { console.log(`${tag} not pushing: head unchanged`); await say(`${request ? "Bakery tried to make the requested change" : "Bakery's sentinel tried to fix this pull request"} and left it unchanged, so nothing was pushed. A person needs to take it from here.${quoted}`); return; }
+      if (dirty) { console.log(`${tag} not pushing: uncommitted changes`); await say(`${request ? "Alice's change" : "Alice's sentinel's fix"} was left with uncommitted changes in its worktree, so nothing was pushed. A person needs to take it from here.${quoted}`); return; }
+      if (await git(worktree, "rev-parse", "HEAD") === attempt.head) { console.log(`${tag} not pushing: head unchanged`); await say(`${request ? "Alice tried to make the requested change" : "Alice's sentinel tried to fix this pull request"} and left it unchanged, so nothing was pushed. A person needs to take it from here.${quoted}`); return; }
       const onMain = () => git(worktree, "merge-base", "--is-ancestor", "origin/main", "HEAD").then(() => true, () => false);
       let rebased = false;
       // A request changes what was asked and nothing else, so it is not rebased.
@@ -438,7 +438,7 @@ export class Sentinel {
         catch (error) {
           await git(worktree, "rebase", "--abort").catch(() => undefined);
           console.log(`${tag} not pushing: rebasing onto the newer origin/main conflicts`);
-          await say(`Bakery's sentinel fixed this pull request, but main moved while it worked and rebasing onto the newer main conflicts: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}. Nothing was pushed. The next sentinel pass tries again against the new main.${quoted}`);
+          await say(`Alice's sentinel fixed this pull request, but main moved while it worked and rebasing onto the newer main conflicts: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}. Nothing was pushed. The next sentinel pass tries again against the new main.${quoted}`);
           return;
         }
       }
@@ -449,10 +449,10 @@ export class Sentinel {
       await git(worktree, "push", "--no-verify", `--force-with-lease=refs/heads/${attempt.branch}:${attempt.head}`, "origin", `HEAD:refs/heads/${attempt.branch}`);
       console.log(`${tag} pushed ${tip.slice(0, 12)} to ${attempt.branch}`);
       this.board.closeDelivered(run.cardId, `Pushed to ${attempt.branch} on the pull request`);
-      await say(request ? `Bakery pushed ${tip.slice(0, 12)} with the requested changes.${quoted}` : `Bakery's sentinel rebased this pull request onto the latest main and pushed ${tip.slice(0, 12)}. If CI fails again, it checks again on its next pass.${quoted}`);
+      await say(request ? `Alice pushed ${tip.slice(0, 12)} with the requested changes.${quoted}` : `Alice's sentinel rebased this pull request onto the latest main and pushed ${tip.slice(0, 12)}. If CI fails again, it checks again on its next pass.${quoted}`);
     } catch (error) {
       console.error(`${tag} push failed: ${error instanceof Error ? error.message : String(error)}`);
-      await say(`${request ? "Bakery" : "Bakery's sentinel"} could not push its ${request ? "change" : "fix"}: ${error instanceof Error ? error.message.slice(0, 500) : String(error)}. A person needs to take it from here.${quoted}`);
+      await say(`${request ? "Alice" : "Alice's sentinel"} could not push its ${request ? "change" : "fix"}: ${error instanceof Error ? error.message.slice(0, 500) : String(error)}. A person needs to take it from here.${quoted}`);
     }
   }
 }

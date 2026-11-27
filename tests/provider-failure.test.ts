@@ -33,7 +33,7 @@ test("other failures keep their own kinds and are not invalid histories", () => 
   assert.equal(classifyProviderFailure(null), "unknown");
 });
 
-// What reaches Bakery is an error Pi already retried and gave up on, often with no HTTP status at all.
+// What reaches Alice is an error Pi already retried and gave up on, often with no HTTP status at all.
 test("network and gateway errors Pi gives up on are transient even without a status", () => {
   for (const text of [
     "Provider request failed (HTTP 502): 502 {\"error\":\"acp-proxy failure: upstream-timeout ETIMEDOUT api.anthropic.com\"}",

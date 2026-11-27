@@ -1,4 +1,4 @@
-// Pi reports the provider and model on every assistant message. Bakery keeps only that label so the board
+// Pi reports the provider and model on every assistant message. Alice keeps only that label so the board
 // can show which agent ran each phase (for example anthropic/claude-… versus openai-codex/gpt-…).
 const part = (value: unknown) => typeof value === "string" ? value.replace(/[^\w.:@/+-]/g, "").slice(0, 80) : "";
 
@@ -30,7 +30,7 @@ export function agentsInStream(stream: string): string {
   return agents;
 }
 
-// Pi reports token usage and its provider-priced cost on each assistant message_end. Bakery sums them per
+// Pi reports token usage and its provider-priced cost on each assistant message_end. Alice sums them per
 // attempt. Missing or malformed fields count as 0 so one odd event never poisons the attempt total.
 export type Usage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number };
 const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;

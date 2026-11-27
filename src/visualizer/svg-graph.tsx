@@ -165,7 +165,7 @@ export function SvgGraph({
                 x={at.x}
                 y={at.y + r + 30}
                 textAnchor="middle"
-                fontSize={10.5}
+                fontSize={11}
                 fontFamily="ui-monospace, monospace"
                 fill={color}
               >

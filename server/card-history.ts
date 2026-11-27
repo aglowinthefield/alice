@@ -31,9 +31,9 @@ export function cardHistory(card: Card, events: CardEvent[], runs: Run[], review
     const attempt = attempts.get(review.runId), of = attempt ? ` of attempt ${attempt}` : "";
     if (review.state === "running") { entries.push({ at: review.startedAt, from: null, to: null, text: `Agent review${of} started`, detail: review.details || undefined }); continue; }
     const at = review.finishedAt ?? review.startedAt;
-    if (review.state === "merged") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery merged it`, detail: review.details || undefined }); continue; }
+    if (review.state === "merged") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Alice merged it`, detail: review.details || undefined }); continue; }
     if (review.state === "approved") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"}; merging is up to you`, detail: review.details || undefined }); continue; }
-    if (review.state === "pull_request") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery opened its pull request`, detail: review.details || undefined }); continue; }
+    if (review.state === "pull_request") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Alice opened its pull request`, detail: review.details || undefined }); continue; }
     const sentBack = review.details.startsWith("Sent back to the implementer: ");
     entries.push({
       at, from: null, to: null,

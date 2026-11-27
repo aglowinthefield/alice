@@ -69,8 +69,8 @@ test("Move to Ready in the card's details flags a physical-device ask and moves 
     const flags = check.getByTestId("ready-flags");
     assert.match(await flags.innerText(), /Needs a physical device, which the agent does not have\s+“Verify on a physical iPhone before review\.”/);
     assert.doesNotMatch(await flags.innerText(), /acceptance/i, "the card has acceptance criteria");
-    // Evidence for review: BAKERY_READY_CHECK_SHOT=path.png saves the dialog.
-    if (process.env.BAKERY_READY_CHECK_SHOT) await page.screenshot({ path: process.env.BAKERY_READY_CHECK_SHOT });
+    // Evidence for review: ALICE_READY_CHECK_SHOT=path.png saves the dialog.
+    if (process.env.ALICE_READY_CHECK_SHOT) await page.screenshot({ path: process.env.ALICE_READY_CHECK_SHOT });
     assert.equal(requests.length, 1, "nothing moves while the check is open");
     await check.getByRole("button", { name: "Ready anyway" }).click();
     await page.getByRole("button", { name: "Move to Ready" }).waitFor({ state: "detached" });

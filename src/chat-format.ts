@@ -6,7 +6,7 @@ export const chatGroupings: { value: ChatGrouping; label: string }[] = [
   { value: "none", label: "None" },
   { value: "date", label: "Date" },
 ];
-export const groupingKey = "bakery-chat-grouping";
+export const groupingKey = "alice-chat-grouping";
 /** The saved grouping; anything unknown reads as no grouping. */
 export const readGrouping = (stored: string | null): ChatGrouping =>
   stored === "date" ? "date" : "none";

@@ -1,4 +1,4 @@
-// Aggregates what Bakery already records per card (runs, agent reviews, usage) for the Statistics page.
+// Aggregates what Alice already records per card (runs, agent reviews, usage) for the Statistics page.
 export type StatsRun = { repo: string; cardId: string; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };
 export type StatsReview = { repo: string; state: string; agent: string; startedAt: string; finishedAt: string | null; cost: number | null };
 export type StatsCard = { repo: string; status: string; createdAt: string; updatedAt: string; attempts: number; reviewRounds: number; ciReworks: number };

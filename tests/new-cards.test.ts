@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 
 const withBoard = (run: (board: Board, dir: string) => void) => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-new-cards-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-new-cards-"));
   const board = new Board(join(dir, "board.sqlite"));
   try {
     run(board, dir);
@@ -80,7 +80,7 @@ test("acknowledging leaves cards the screen never loaded, UI cards and repeats a
 });
 
 test("cards that exist before the upgrade are not new", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-new-cards-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-new-cards-"));
   try {
     const file = join(dir, "board.sqlite");
     const first = new Board(file);

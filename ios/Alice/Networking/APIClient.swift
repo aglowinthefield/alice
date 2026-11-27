@@ -1,8 +1,8 @@
 import Foundation
 
-/// Talks to a Bakery server's JSON API (`/api/...`), the same endpoints the web board uses.
+/// Talks to an Alice server's JSON API (`/api/...`), the same endpoints the web board uses.
 ///
-/// The server only answers requests whose Host is loopback or listed in `BAKERY_ALLOWED_HOSTS`,
+/// The server only answers requests whose Host is loopback or listed in `ALICE_ALLOWED_HOSTS`,
 /// so the base URL must use one of those names (for example `http://mochi:4317`).
 /// URLSession sends no Origin header, which the server's mutation check accepts.
 struct APIError: LocalizedError {

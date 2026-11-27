@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keeps /Applications/Bakery.app built from origin/main on a Mac.
+# Keeps /Applications/Alice.app built from origin/main on a Mac.
 #   scripts/install-desktop.sh            build and install the app if desktop code changed since the last install
 #   scripts/install-desktop.sh --force    build and install even if nothing changed
 #   scripts/install-desktop.sh --launchd  install a launchd job that runs this every hour, then run it once
@@ -8,8 +8,15 @@
 set -euo pipefail
 [[ $(uname) == Darwin ]] || { echo "install-desktop.sh builds the macOS app; run it on a Mac." >&2; exit 2; }
 repo=$(cd "$(dirname "$0")/.." && pwd)
-app=${BAKERY_DESKTOP_APP:-/Applications/Bakery.app}
+# ALICE_DESKTOP_APP falls back to its old name, BAKERY_DESKTOP_APP.
+app=${ALICE_DESKTOP_APP:-${BAKERY_DESKTOP_APP:-/Applications/Alice.app}}
+# Before the rename the app was Bakery.app. It has the same bundle id, so the default install replaces it.
+legacy_app=""
+[[ -z ${ALICE_DESKTOP_APP:-}${BAKERY_DESKTOP_APP:-} ]] && legacy_app=/Applications/Bakery.app
+# An existing state directory keeps its old name, so its Cargo cache and install stamp carry over.
 state=${XDG_STATE_HOME:-$HOME/.local/state}/bakery
+[[ -d $state ]] || state=${XDG_STATE_HOME:-$HOME/.local/state}/alice
+# launchd keys an installed job on its label, so the label and log keep their old names.
 label=dev.bakery.desktop-update
 mkdir -p "$state"
 
@@ -62,22 +69,25 @@ commit=$(git -C "$repo" log -1 --format=%H origin/main -- src-tauri desktop)
 stamp=$state/desktop-commit
 if [[ ${1:-} != --force && -d $app && -f $stamp && $(cat "$stamp") == "$commit" ]]; then exit 0; fi
 
-echo "$(date '+%F %T') building Bakery.app at ${commit:0:7}"
-work=$(mktemp -d "${TMPDIR:-/tmp}/bakery-desktop.XXXXXX")
+echo "$(date '+%F %T') building Alice.app at ${commit:0:7}"
+work=$(mktemp -d "${TMPDIR:-/tmp}/alice-desktop.XXXXXX")
 git -C "$repo" worktree add -q --detach "$work" origin/main
 cd "$work"
 npm ci --no-audit --no-fund --silent
 # A shared target directory keeps Cargo's incremental build between runs.
 CARGO_TARGET_DIR=$state/desktop-target npm run desktop:build -- --bundles app
-built=$state/desktop-target/release/bundle/macos/Bakery.app
+# origin/main from before the rename still builds Bakery.app.
+built=$state/desktop-target/release/bundle/macos/Alice.app
+[[ -d $built ]] || built=$state/desktop-target/release/bundle/macos/Bakery.app
 
 # Swap the bundle in one rename, so a launch never sees a half-copied app.
-staged=$(dirname "$app")/.Bakery.app.new
+staged=$(dirname "$app")/.Alice.app.new
 rm -rf "$staged"
 ditto "$built" "$staged"
 old=""
-if [[ -d $app ]]; then old=$(mktemp -d "${TMPDIR:-/tmp}/bakery-old.XXXXXX"); mv "$app" "$old/"; fi
+if [[ -d $app ]]; then old=$(mktemp -d "${TMPDIR:-/tmp}/alice-old.XXXXXX"); mv "$app" "$old/"; fi
 mv "$staged" "$app"
 [[ -n $old ]] && rm -rf "$old"
+[[ -n $legacy_app && -d $legacy_app && $legacy_app != "$app" ]] && rm -rf "$legacy_app"
 echo "$commit" > "$stamp"
-echo "$(date '+%F %T') installed $app at ${commit:0:7}$(pgrep -qf "$app/Contents/MacOS" && echo "; quit and reopen Bakery to use it")"
+echo "$(date '+%F %T') installed $app at ${commit:0:7}$(pgrep -qf "$app/Contents/MacOS" && echo "; quit and reopen Alice to use it")"

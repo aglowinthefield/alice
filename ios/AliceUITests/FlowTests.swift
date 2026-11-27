@@ -1,26 +1,32 @@
 import XCTest
 
 /// Drives the app against a live server. Launch environment:
-///   BAKERY_URL    server address (default http://mochi:4317)
-///   BAKERY_BOARD  board id to open (use a scratch board; these tests create and move cards)
-/// Screenshots are written to /tmp/bakery-uitest-<name>.png.
+///   ALICE_URL    server address (default http://mochi:4317)
+///   ALICE_BOARD  board id to open (use a scratch board; these tests create and move cards)
+///   ALICE_CARD   a card in Review, for the review flows
+/// Each also reads its old BAKERY_ name. Screenshots are written to /tmp/alice-uitest-<name>.png.
 final class FlowTests: XCTestCase {
     var app: XCUIApplication!
+
+    /// The launch setting `ALICE_<key>`, else its old name `BAKERY_<key>`, else nil.
+    static func setting(_ key: String) -> String? {
+        let env = ProcessInfo.processInfo.environment
+        return env["ALICE_\(key)"] ?? env["SIMCTL_CHILD_ALICE_\(key)"] ?? env["BAKERY_\(key)"] ?? env["SIMCTL_CHILD_BAKERY_\(key)"]
+    }
 
     override func setUp() {
         continueAfterFailure = false
         app = XCUIApplication()
-        let env = ProcessInfo.processInfo.environment
-        let board = env["BAKERY_BOARD"] ?? env["SIMCTL_CHILD_BAKERY_BOARD"] ?? ""
-        let url = env["BAKERY_URL"] ?? "http://mochi:4317"
+        let board = Self.setting("BOARD") ?? ""
+        let url = Self.setting("URL") ?? "http://mochi:4317"
         app.launchArguments = ["-serverURL", url, "-startRoute", "board:\(board)"]
-        if name.contains("Review"), let card = env["BAKERY_CARD"], !card.isEmpty { app.launchArguments += ["-startCard", card] }
+        if name.contains("Review"), let card = Self.setting("CARD"), !card.isEmpty { app.launchArguments += ["-startCard", card] }
         app.launch()
     }
 
     func shot(_ name: String) {
         let data = XCUIScreen.main.screenshot().pngRepresentation
-        try? data.write(to: URL(fileURLWithPath: "/tmp/bakery-uitest-\(name).png"))
+        try? data.write(to: URL(fileURLWithPath: "/tmp/alice-uitest-\(name).png"))
     }
 
     func testCreateAndMoveCard() {
@@ -70,9 +76,9 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Write onboarding copy"].exists)
     }
 
-    /// Needs BAKERY_CARD: a card in Review whose diff adds a line containing "Hello from Bakery iOS".
+    /// Needs ALICE_CARD: a card in Review whose diff adds a line containing "Hello from Alice iOS".
     func testReviewCommentAndApprove() throws {
-        try XCTSkipIf((ProcessInfo.processInfo.environment["BAKERY_CARD"] ?? "").isEmpty, "BAKERY_CARD not set")
+        try XCTSkipIf((Self.setting("CARD") ?? "").isEmpty, "ALICE_CARD not set")
         let reviewTab = app.buttons["Review"]
         XCTAssertTrue(reviewTab.waitForExistence(timeout: 15))
         reviewTab.tap()
@@ -93,9 +99,9 @@ final class FlowTests: XCTestCase {
         shot("9-merged")
     }
 
-    /// Needs BAKERY_CARD: a card in Review. Requests changes with a comment; the card goes back to Running.
+    /// Needs ALICE_CARD: a card in Review. Requests changes with a comment; the card goes back to Running.
     func testReviewRequestChanges() throws {
-        try XCTSkipIf((ProcessInfo.processInfo.environment["BAKERY_CARD"] ?? "").isEmpty, "BAKERY_CARD not set")
+        try XCTSkipIf((Self.setting("CARD") ?? "").isEmpty, "ALICE_CARD not set")
         XCTAssertTrue(app.buttons["Review"].waitForExistence(timeout: 15))
         app.buttons["Review"].tap()
         let line = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Goodbye")).firstMatch

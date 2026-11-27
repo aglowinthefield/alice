@@ -120,7 +120,6 @@ test("a failing endpoint never throws or blocks, and the counts are dropped", as
 test("run outcomes, error types and doctor check names are reduced to the listed values", () => {
   assert.equal(runOutcome({ status: "review", error: null }), "alice.runs.finished");
   assert.equal(runOutcome({ status: "failed", error: "Pi exited (SIGTERM); Alice sent SIGTERM: manual stop; settled" }), "alice.runs.stopped");
-  assert.equal(runOutcome({ status: "failed", error: "Pi exited (SIGTERM); Bakery sent SIGTERM: manual stop; settled" }), "alice.runs.stopped", "a run stopped before the rename");
   assert.equal(runOutcome({ status: "failed", error: "Pi exited (1)" }), "alice.runs.failed");
   assert.equal(runOutcome({ status: "interrupted", error: null }), null);
   class Weird extends Error {}

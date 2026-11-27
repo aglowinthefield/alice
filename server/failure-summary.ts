@@ -11,8 +11,7 @@ const providerSummaries: Record<ProviderFailureKind, string> = {
   unknown: "Provider request failed",
 };
 
-// Runs that ended before the rename say Bakery.
-const RUN_TIMEOUT = /(?:Alice|Bakery) sent SIGTERM: (\d+)-minute run timeout/;
+const RUN_TIMEOUT = /Alice sent SIGTERM: (\d+)-minute run timeout/;
 
 /** True when Alice killed the run at its run timeout (see the worker's `finish` call), not for any other failure. */
 export function isRunTimeout(error: string | null): boolean {
@@ -31,8 +30,8 @@ export function summarizeFailure(input: { error: string | null; failureKind: str
   const stuck = error.match(/; stuck in ([\w-]+) for (\d+) min/);
   if (timeout && stuck && Number(stuck[2]) >= 1) return `Timed out: ${stuck[1]} ran ${stuck[2]} min`;
   if (timeout) return `Timed out after ${timeout[1]} min`;
-  if (/(?:Alice|Bakery) sent SIGTERM: manual stop/.test(error)) return "Stopped by hand";
-  if (/(?:Alice|Bakery) sent SIGTERM: server received SIGTERM|^Server restarted while this run was active/.test(error)) return "Server restarted mid-run";
+  if (/Alice sent SIGTERM: manual stop/.test(error)) return "Stopped by hand";
+  if (/Alice sent SIGTERM: server received SIGTERM|^Server restarted while this run was active/.test(error)) return "Server restarted mid-run";
   if (/termination source unknown/.test(error)) return "Killed by unknown signal";
   if (error.startsWith("Worktrunk pre-start hooks")) return "Worktree setup failed";
   if (error.startsWith("Pi could not start")) return "Pi could not start";

@@ -5,8 +5,7 @@ export const lockTtlMs = 30 * 60_000;
 export type PrLock = { holder: string; startedAt: string; releasedAt?: string };
 export type LockStatus = "active" | "released" | "expired";
 
-// Locks written before the rename say bakery-lock.
-const marker = /<!-- (?:alice|bakery)-lock (\{.*?\}) -->/;
+const marker = /<!-- alice-lock (\{.*?\}) -->/;
 
 /** The comment text for a lock. The JSON marker is what Alice reads back; the rest is for people. */
 export function lockBody(lock: PrLock): string {

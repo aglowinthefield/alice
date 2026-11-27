@@ -115,7 +115,7 @@ test("a card records where it came from, and older cards get the source their ke
     assert.equal(board.createCard({ title: "Agent", body: "", repo: dir, source: "hermes" }).source, "hermes");
     assert.equal(board.createCard({ title: "Old Hermes", body: "", repo: dir, idempotencyKey: "hermes:t_new" }).source, "hermes", "a key prefix stands in for a missing source");
     assert.equal(board.createCard({ title: "CLI", body: "", repo: dir, idempotencyKey: "plan:x:y", source: "cli" }).source, "cli", "an explicit source wins over the key");
-    const keys = ["hermes:t_1", "plan:card:a", "follow-up:run:0", "sentinel:4:abc:def", "request:issues/comments:9", "bakery-local-1234", "nightly-1", null];
+    const keys = ["hermes:t_1", "plan:card:a", "follow-up:run:0", "sentinel:4:abc:def", "request:issues/comments:9", "alice-local-1234", "nightly-1", null];
     const ids = keys.map((key, index) => board.createCard({ title: `Legacy ${index}`, body: "", repo: dir, idempotencyKey: key }).id);
     board.close();
     const raw = new DatabaseSync(path);

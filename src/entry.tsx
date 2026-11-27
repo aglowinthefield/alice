@@ -1,5 +1,3 @@
-// First, so settings saved under Bakery's old storage keys are copied to Alice's before anything reads them.
-import "./legacy-storage.js";
 import { createRoot } from "react-dom/client";
 import { App } from "./main.js";
 import { registerPushWorker } from "./web-push.js";

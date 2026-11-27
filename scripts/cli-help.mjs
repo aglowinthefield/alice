@@ -239,7 +239,7 @@ export function overview(version) {
     "", c.head("Options"),
     ...table([["--board ID|PATH", "pick the board (default: the one for the current directory, or the only one)"], ["--json", "print the full API data"], ["--yes", "confirm a paid run or a deletion"], ["-v, --version", "print the version"]]),
     "", c.head("Environment"), ...table(ENV),
-    "", `  alice help <command> for its options and examples. Installed with npm link, bakery-cli and bakery still run it for now.`,
+    "", `  alice help <command> for its options and examples.`,
   );
   return out.join("\n");
 }

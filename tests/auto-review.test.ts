@@ -16,7 +16,7 @@ const settle = (verdict: string) => [
   JSON.stringify({ type: "agent_settled", aborted: false }), "",
 ].join("\n");
 function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
@@ -30,7 +30,7 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
     const card = board.createCard({ repo, title: "Add a new line", body: "Include a regression test" });
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
-    git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);
     writeFileSync(join(worktree, "README.md"), `original\nnew ${card.id}\n`);
     board.finish(run.id, "review");
@@ -116,7 +116,7 @@ test("a failed card can be set back to Ready", () => {
   } finally { item.close(); }
 });
 
-test("the global tick reconciles a failed card merged outside Bakery without enabling auto-review", async () => {
+test("the global tick reconciles a failed card merged outside Alice without enabling auto-review", async () => {
   const item = fixture();
   try {
     const { card, run, worktree } = item.reviewedCard();
@@ -456,7 +456,7 @@ test("reviewer progress reports elapsed time, turns, tool counts and narration w
   assert.doesNotMatch(text, /SECRET/);
 });
 
-test("on a pull-request board an agent approval is advice when Bakery cannot push: the card stays in Review with the verdict recorded", async () => {
+test("on a pull-request board an agent approval is advice when Alice cannot push: the card stays in Review with the verdict recorded", async () => {
   const item = fixture();
   try {
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
@@ -526,7 +526,7 @@ test("on a pull-request board a failed or refused push leaves the agent-approved
 });
 
 test("an older auto-review table is rebuilt to accept the pull_request state without losing jobs", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-schema-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-review-schema-"));
   try {
     const path = join(dir, "board.sqlite");
     new Board(path).close();
@@ -657,7 +657,7 @@ test("the reviewer sees the implementer's report and the card's attachments, so 
     const card = item.board.createCard({ repo: item.repo, title: "Restyle the palette", body: "Attach dark and light screenshots" });
     item.board.setStatus(card.id, "ready");
     const run = item.board.claim(card.id), worktree = join(item.data, "worktrees", card.id);
-    git(item.repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    git(item.repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     item.board.attach(run.id, process.pid, worktree);
     writeFileSync(join(worktree, "README.md"), "restyled\n");
     item.board.recordReport(run.id, "Restyled the palette. Screenshots attached for both themes.");

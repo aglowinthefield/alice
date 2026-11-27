@@ -11,7 +11,7 @@ import { AutoPullRequest } from "../server/auto-pull-request.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 function fixture(mode: "github-pr" | "local" = "github-pr") {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-pr-")), repo = join(dir, "repo"), data = join(dir, "data");
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-pr-")), repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
@@ -142,7 +142,7 @@ test("shutdown waits for a pending push, and a hook refusal after stopStarts can
     item.board.setAutoPullRequest(item.repoBoard.id, true);
     await later();
     const card = item.reviewedCard();
-    const worker = new Worker(item.board, join(tmpdir(), "bakery-unused-data"), "pi", "");
+    const worker = new Worker(item.board, join(tmpdir(), "alice-unused-data"), "pi", "");
     let release!: () => void, reached!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; }), inPush = new Promise<void>(resolve => { reached = resolve; });
     let startedFixRun: boolean | undefined;

@@ -1,4 +1,4 @@
-// Terminal styling for bakery-cli. Layout and colour only on a terminal, so scripts and agents that pipe the output
+// Terminal styling for the alice CLI. Layout and colour only on a terminal, so scripts and agents that pipe the output
 // keep the plain tab-separated lines. NO_COLOR drops the colour but keeps the layout; FORCE_COLOR wins over both.
 
 const forced = () => process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== "";

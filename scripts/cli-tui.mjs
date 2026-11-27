@@ -1,4 +1,4 @@
-// `bakery-cli tui`: the web app in the terminal, driven by keys. A sidebar lists the boards, a board's lanes sit side
+// `alice tui`: the web app in the terminal, driven by keys. A sidebar lists the boards, a board's lanes sit side
 // by side with a tile per card, Today gathers what needs you on every board, and Enter opens a card as a dialog.
 // `createTui` holds the state and answers keys without touching the terminal, so tests drive it with a fake API;
 // `runTui` wires it to a raw-mode TTY.
@@ -42,7 +42,7 @@ export function cardActions(card, board) {
   return out;
 }
 
-// SGR styles: the terminal's 16 colours, so the person's theme picks the shades. Yellow is Bakery's accent.
+// SGR styles: the terminal's 16 colours, so the person's theme picks the shades. Yellow is Alice's accent.
 const DIM = "2", ACCENT = "1;33";
 // Pills with a background, as on the web: a failure reason, and Needs you.
 const PILL_BAD = "41;97", PILL_YOU = "42;30";
@@ -179,7 +179,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
   // The card text check behind the web board's Ready dialog. A server without it answers 404, so nothing is flagged.
   async function readyFlags(base) {
     try { return (await api("GET", `${base}/ready-check`)).flags ?? []; }
-    catch (error) { if (/^Bakery 404: Not found$/.test(error.message)) return []; throw error; }
+    catch (error) { if (/^Alice 404: Not found$/.test(error.message)) return []; throw error; }
   }
   async function act(action, card) {
     const home = boardOf(card), base = `${pathOf(home)}/cards/${card.id}`;
@@ -212,7 +212,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
       else if (isPullRequestBoard(home))
         ask(`Approve ${review.files.length} changed file(s) and push them to PR #${card.prNumber}? The card is Done once the PR merges.`, async () => { await api("POST", `${base}/approve`, { fingerprint }); await done(`Pushed ${quoted} to PR #${card.prNumber}`)(); });
       else
-        ask(`Approve ${review.files.length} changed file(s) and merge ${quoted} into local main? Bakery does not run tests or push.`, async () => { await api("POST", `${base}/approve`, { fingerprint }); await done(`Merged ${quoted} into local main`)(); });
+        ask(`Approve ${review.files.length} changed file(s) and merge ${quoted} into local main? Alice does not run tests or push.`, async () => { await api("POST", `${base}/approve`, { fingerprint }); await done(`Merged ${quoted} into local main`)(); });
     }
   }
 
@@ -349,7 +349,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
   /** The boards, numbered for their keys, with Today above them. Counts come from `/api/boards`, as on the web. */
   function drawSidebar(screen, w, rows) {
     for (let y = 0; y < rows - 2; y++) screen.put(w, y, "│", DIM);
-    screen.put(1, 0, "bakery.", ACCENT);
+    screen.put(1, 0, "alice.", ACCENT);
     const needsYou = state.boards.reduce((sum, item) => sum + needsYouStatuses.reduce((n, status) => n + (item.cardCounts?.[status] ?? 0), 0), 0);
     const today = state.view === "today";
     screen.parts(1, 2, [["0 ", DIM], ["Today", today ? ACCENT : ""]]);

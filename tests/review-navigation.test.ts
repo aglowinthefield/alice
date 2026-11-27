@@ -169,11 +169,11 @@ test("the diff theme picker repaints the patch and the choice persists", async (
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     const picker = page.getByRole("combobox", { name: "Diff theme" });
     assert.equal(await picker.inputValue(), "bakery");
-    const bakery = await background();
+    const alice = await background();
     await picker.selectOption({ label: "Solarized" });
-    // solarized-dark's editor background, since Default is a dark Bakery palette.
+    // solarized-dark's editor background, since Default is a dark Alice palette.
     await solarized();
-    assert.notEqual(bakery, "rgb(0, 43, 54)");
+    assert.notEqual(alice, "rgb(0, 43, 54)");
     await page.reload();
     // The reload reopens the card this tab had open.
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();

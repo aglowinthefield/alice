@@ -8,16 +8,16 @@ export type LockStatus = "active" | "released" | "expired";
 // Locks written before the rename say bakery-lock.
 const marker = /<!-- (?:alice|bakery)-lock (\{.*?\}) -->/;
 
-/** The comment text for a lock. The JSON marker is what Bakery reads back; the rest is for people. */
+/** The comment text for a lock. The JSON marker is what Alice reads back; the rest is for people. */
 export function lockBody(lock: PrLock): string {
   const json = JSON.stringify(lock.releasedAt ? lock : { holder: lock.holder, startedAt: lock.startedAt });
   const text = lock.releasedAt
-    ? `Bakery lock released by \`${lock.holder}\` at ${lock.releasedAt} (UTC).`
-    : `Bakery lock: \`${lock.holder}\` is working on this pull request since ${lock.startedAt} (UTC). The lock lasts ${lockTtlMs / 60_000} minutes unless released earlier.`;
-  return `${text}\n\n<!-- bakery-lock ${json} -->`;
+    ? `Alice lock released by \`${lock.holder}\` at ${lock.releasedAt} (UTC).`
+    : `Alice lock: \`${lock.holder}\` is working on this pull request since ${lock.startedAt} (UTC). The lock lasts ${lockTtlMs / 60_000} minutes unless released earlier.`;
+  return `${text}\n\n<!-- alice-lock ${json} -->`;
 }
 
-/** The lock in a comment body, or undefined when the comment is not a Bakery lock. */
+/** The lock in a comment body, or undefined when the comment is not an Alice lock. */
 export function parseLock(body: string): PrLock | undefined {
   const raw = marker.exec(body)?.[1];
   if (!raw) return undefined;

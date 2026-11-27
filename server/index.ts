@@ -1,5 +1,5 @@
 // First, so every module below sees ALICE_* settings filled from BAKERY_* ones.
-import { dataDir as defaultDataDir } from "./legacy-names.js";
+import { databaseFile, dataDir as defaultDataDir } from "./legacy-names.js";
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { featureOffMessage, type Feature } from "../src/features.js";
 import { readyFlags } from "../src/card-lint.js";
@@ -48,7 +48,7 @@ const logs = new LogBuffer();
 logs.captureConsole();
 
 const dataDir = defaultDataDir();
-logs.persist(join(dataDir, "logs", "bakery.log"));
+logs.persist(join(dataDir, "logs", "alice.log"));
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 chmodSync(dataDir, 0o700);
 // Exclusive ownership of the local board; a lock left by a dead server is taken over.
@@ -56,25 +56,25 @@ const lockPath = join(dataDir, "server.lock");
 const lock = acquireLock(lockPath);
 if (promoteStagedUi(process.cwd())) console.log("Serving the UI built by the last update.");
 let board: Board;
-try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
+try { board = new Board(databaseFile(dataDir)); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
-const piBin = process.env.BAKERY_PI_BIN ?? "pi";
+const piBin = process.env.ALICE_PI_BIN ?? "pi";
 /** Cards whose discussion reply is being written; one at a time per card. */
 const discussing = new Set<string>();
-// Worktrunk hooks run in new card worktrees when `wt` is installed. Set BAKERY_WT_BIN="" to turn them off.
-const port = Number(process.env.BAKERY_PORT ?? 4317);
-const bindHost = process.env.BAKERY_HOST || "127.0.0.1";
-// The chat agent drives the board through bakery-cli, so it needs an address this server answers on.
+// Worktrunk hooks run in new card worktrees when `wt` is installed. Set ALICE_WT_BIN="" to turn them off.
+const port = Number(process.env.ALICE_PORT ?? 4317);
+const bindHost = process.env.ALICE_HOST || "127.0.0.1";
+// The chat agent drives the board through alice, so it needs an address this server answers on.
 const cliHost = bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bindHost;
 const chats = new Chats(board, {
-  piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs")}`,
-  env: { ...process.env, BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
+  piBin, sessionDir: join(dataDir, "chat-sessions"), cli: `node ${join(import.meta.dirname, "..", "scripts", "alice.mjs")}`,
+  env: { ...process.env, ALICE_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, ALICE_ALLOW_REMOTE: "1" },
   topic: (repoBoard, message) => writeTopic(piBin, repoBoard.repo, piModelArgs(board.agentModelFor(repoBoard.repo, "draft")), message),
 });
 // Work agents save screenshots and other evidence as card attachments through the CLI, which finds this server through its environment.
-const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "wt", {
-  cli: join(import.meta.dirname, "..", "scripts", "bakery-cli.mjs"),
-  env: { BAKERY_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, BAKERY_ALLOW_REMOTE: "1" },
+const worker = new Worker(board, dataDir, piBin, process.env.ALICE_WT_BIN ?? "wt", {
+  cli: join(import.meta.dirname, "..", "scripts", "alice.mjs"),
+  env: { ALICE_URL: `http://${cliHost.includes(":") ? `[${cliHost}]` : cliHost}:${port}`, ALICE_ALLOW_REMOTE: "1" },
 });
 const integration = new Integration(board, dataDir);
 // github-pr boards: the PR draft and the repository's hooks run when a run reaches Review, so Approve only pushes.
@@ -98,7 +98,7 @@ board.onRun((event, run) => {
   if (card) integration.recordChangedFiles(card);
   if (card) setImmediate(() => readiness.prepare(board.getCard(card.id) ?? card));
 });
-// Review cards whose readiness a restart interrupted, or that reached Review before Bakery prepared it.
+// Review cards whose readiness a restart interrupted, or that reached Review before Alice prepared it.
 setImmediate(() => { for (const card of board.listCards().filter(item => item.status === "review")) readiness.prepare(card); });
 // Runs that reached Review before the count was kept; one at a time so a big backlog does not hold the server up.
 void (async () => {
@@ -145,24 +145,24 @@ const version = (() => {
   try { [commit, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
   return { version: packageVersion, commit, date };
 })();
-// Usage telemetry is off unless BAKERY_TELEMETRY_ENDPOINT is set and the operator turns it on in Settings. See docs/telemetry.md.
-const telemetry = new Telemetry({ endpoint: process.env.BAKERY_TELEMETRY_ENDPOINT, enabled: () => board.getSettings().telemetryEnabled, dataDir, version: version.version });
+// Usage telemetry is off unless ALICE_TELEMETRY_ENDPOINT is set and the operator turns it on in Settings. See docs/telemetry.md.
+const telemetry = new Telemetry({ endpoint: process.env.ALICE_TELEMETRY_ENDPOINT, enabled: () => board.getSettings().telemetryEnabled, dataDir, version: version.version });
 board.onRun((event, run) => {
-  if (event === "started") { telemetry.count("bakery.runs.started"); return; }
+  if (event === "started") { telemetry.count("alice.runs.started"); return; }
   const outcome = runOutcome(run);
   if (outcome) telemetry.count(outcome);
 });
-integration.onDelivered = kind => telemetry.count(kind === "merge" ? "bakery.merges" : "bakery.pull_requests.opened");
+integration.onDelivered = kind => telemetry.count(kind === "merge" ? "alice.merges" : "alice.pull_requests.opened");
 const updates = process.send ? null : new Updates(process.cwd(), installScript(process.cwd()), () => startDrain(() => shutdown("SIGTERM")));
 let updateTimer: NodeJS.Timeout | undefined;
 // Browser notifications through Web Push, for browsers that turned them on in Settings. See server/push.ts.
 const push = new PushNotifications(board, board.sqlite, dataDir);
-// github-pr boards: `gh` resolves from PATH unless BAKERY_GH_BIN names it. BAKERY_GITHUB_SYNC_MS sets the per-board interval.
-const github = new GitHub(process.env.BAKERY_GH_BIN || "gh");
+// github-pr boards: `gh` resolves from PATH unless ALICE_GH_BIN names it. ALICE_GITHUB_SYNC_MS sets the per-board interval.
+const github = new GitHub(process.env.ALICE_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
 const sentinelStore = new SentinelStore(board.sqlite);
 const prLocks = new PrLocks(sentinelStore, github);
-const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
+const githubSync = new GitHubSync(board, dataDir, github, process.env.ALICE_WT_BIN ?? "wt", Number(process.env.ALICE_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
 githubSync.onMerged = cardId => integration.updateDependents(cardId);
@@ -170,14 +170,14 @@ githubSync.onMerged = cardId => integration.updateDependents(cardId);
 const features = board.features;
 /** The machine-wide agent limit in force and how many agents run now, for Settings and the CLI. */
 const agentSlots = () => { const { limit, active } = board.machineCapacity(); return { activeAgentsLimit: limit, activeAgents: active }; };
-// Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. BAKERY_SENTINEL=0 turns it off;
-// BAKERY_OWNER names the PR author it acts for (default: the signed-in `gh` user).
-const sentinelsOn = board.features.sentinels && process.env.BAKERY_SENTINEL !== "0";
+// Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. ALICE_SENTINEL=0 turns it off;
+// ALICE_OWNER names the PR author it acts for (default: the signed-in `gh` user).
+const sentinelsOn = board.features.sentinels && process.env.ALICE_SENTINEL !== "0";
 const runLocks = new RunLocks(board, prLocks, sentinelStore, sentinelsOn);
-// Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or BAKERY_DISCORD_WEBHOOK_URL when Settings has none.
-new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.BAKERY_DISCORD_WEBHOOK_URL);
-const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.BAKERY_OWNER, Number(process.env.BAKERY_SENTINEL_MS) || 5 * 60_000, 60_000,
-  card => worker.start(card, "manual", "by Bakery's sentinel"), 15_000, sentinelsOn);
+// Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or ALICE_DISCORD_WEBHOOK_URL when Settings has none.
+new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.ALICE_DISCORD_WEBHOOK_URL);
+const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.ALICE_OWNER, Number(process.env.ALICE_SENTINEL_MS) || 5 * 60_000, 60_000,
+  card => worker.start(card, "manual", "by Alice's sentinel"), 15_000, sentinelsOn);
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -196,11 +196,11 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
     let started: boolean;
     try { started = sendBackHookFailure(card, error); }
     catch (startError) {
-      throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
+      throw new Error(`${error.message}\n\nAlice could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
     }
     if (!started) {
-      board.noteCard(card.id, "The pre-push hook refused the push. Its output goes to the agent once a run can start (the repository is at its run limit, or Bakery is restarting)");
-      throw new Error(`${error.message}\n\nBakery cannot start a run yet (the repository is at its run limit, or Bakery is restarting), so it sends this to the agent as soon as one can start.`);
+      board.noteCard(card.id, "The pre-push hook refused the push. Its output goes to the agent once a run can start (the repository is at its run limit, or Alice is restarting)");
+      throw new Error(`${error.message}\n\nAlice cannot start a run yet (the repository is at its run limit, or Alice is restarting), so it sends this to the agent as soon as one can start.`);
     }
     return board.getCard(card.id)!;
   }
@@ -209,8 +209,8 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
 function sendBackHookFailure(card: Card, error: PushHookError | CommitHookError): boolean {
   return error instanceof PushHookError ? worker.sendBackHookFailure(card, "push", error.sha, error.output) : worker.sendBackHookFailure(card, "commit", "", error.output);
 }
-// Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
-const extraHosts = (process.env.BAKERY_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+// Remote hosting: ALICE_HOST sets the bind address; ALICE_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
+const extraHosts = (process.env.ALICE_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
 // Listing models can take seconds (Pi may refresh provider catalogs), so successes are cached
 // and concurrent requests share one child. Failures are not cached; the UI just offers no suggestions.
 let modelCache: { models: string[]; at: number } | undefined, modelRequest: Promise<{ models: string[]; error?: string }> | undefined;
@@ -227,7 +227,7 @@ function listModels(): Promise<{ models: string[]; error?: string }> {
 }
 /** Every error response is counted here, once: a caught exception by its class name, an explicit one by its status. */
 function send(res: ServerResponse, status: number, payload: unknown, errorClass?: string) {
-  if (status >= 400) telemetry.count("bakery.server.errors", { "error.type": errorClass ?? `Http${status}` });
+  if (status >= 400) telemetry.count("alice.server.errors", { "error.type": errorClass ?? `Http${status}` });
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.end(JSON.stringify(payload));
 }
@@ -272,12 +272,12 @@ function extraOrigin(origin: string): boolean {
 const server = createServer(async (req, res) => {
   try {
     const host = req.headers.host?.split(":")[0];
-    if (host !== "127.0.0.1" && host !== "localhost" && host !== "bakery.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "alice.localhost" && host !== "bakery.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (req.method !== "GET") {
       const origin = req.headers.origin;
       // The dev proxy preserves the public Host, which can differ from the internal listening port.
-      if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
+      if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://alice.localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
     // Match gated paths before checking methods, then reuse these captures in the handlers.
     const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);
@@ -293,9 +293,9 @@ const server = createServer(async (req, res) => {
       !features.pullRequests && (pullMergeRoute || pullsRoute || syncRoute || localMergesRoute || mainResetRoute || cardRoute?.groups?.pullRequestAction) ? "pullRequests" :
       undefined;
     if (disabled) { send(res, 404, { code: "feature_off", feature: disabled, error: featureOffMessage(disabled) }); return; }
-    // Prometheus metrics for the operator's own monitoring; off unless BAKERY_METRICS=1. See docs/metrics.md.
+    // Prometheus metrics for the operator's own monitoring; off unless ALICE_METRICS=1. See docs/metrics.md.
     if (path === "/metrics" && req.method === "GET") {
-      if (process.env.BAKERY_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set BAKERY_METRICS=1 to serve them." }); return; }
+      if (process.env.ALICE_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set ALICE_METRICS=1 to serve them." }); return; }
       res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store" });
       res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount }, version.version));
       return;
@@ -326,10 +326,10 @@ const server = createServer(async (req, res) => {
     }
     // telemetryAvailable is false without an endpoint, and then the UI hides the toggle.
     if (path === "/api/settings" && req.method === "GET") { send(res, 200, { ...board.getSettings(), telemetryAvailable: telemetry.available, ...agentSlots() }); return; }
-    // `bakery-cli doctor` runs in another process, so it reports its failed check names here. Unknown names are ignored.
+    // `alice doctor` runs in another process, so it reports its failed check names here. Unknown names are ignored.
     if (path === "/api/telemetry/doctor" && req.method === "POST") {
       const { checks } = await body(req);
-      if (Array.isArray(checks)) for (const name of checks.slice(0, 50)) { const check = doctorCheck(name); if (check) telemetry.count("bakery.doctor.failures", { "doctor.check": check }); }
+      if (Array.isArray(checks)) for (const name of checks.slice(0, 50)) { const check = doctorCheck(name); if (check) telemetry.count("alice.doctor.failures", { "doctor.check": check }); }
       send(res, 202, { ok: true }); return;
     }
     if (path === "/api/settings" && req.method === "PATCH") {
@@ -346,7 +346,7 @@ const server = createServer(async (req, res) => {
       if ("maxActiveAgents" in input && !Number.isSafeInteger(input.maxActiveAgents)) throw new Error("maxActiveAgents must be an integer, 0 for automatic");
       // Turning it off forgets what was gathered, so turning it on again starts from zero.
       if (input.telemetryEnabled === false) telemetry.discard();
-      if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs BAKERY_TELEMETRY_ENDPOINT to be set");
+      if (input.telemetryEnabled === true && !telemetry.available) throw new Error("Telemetry needs ALICE_TELEMETRY_ENDPOINT to be set");
       send(res, 200, { ...board.updateSettings({
         telemetryEnabled: "telemetryEnabled" in input ? input.telemetryEnabled as boolean : undefined,
         confirmRunStart: "confirmRunStart" in input ? input.confirmRunStart as boolean : undefined,
@@ -526,7 +526,7 @@ const server = createServer(async (req, res) => {
       if (typeof input.autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
       send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;
     }
-    // Done cards Bakery merged into local main whose work is not on origin/main, offered as "Publish as PR".
+    // Done cards Alice merged into local main whose work is not on origin/main, offered as "Publish as PR".
     if (localMergesRoute && req.method === "GET") {
       const repoBoard = board.getBoard(localMergesRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -694,7 +694,7 @@ const server = createServer(async (req, res) => {
       if (!record) { send(res, 404, { error: "Sentinel not found" }); return; }
       if (req.method === "GET" && action === "runs") { send(res, 200, sentinelStore.listRuns(record.id, 50)); return; }
       if (req.method === "POST" && action === "run") {
-        if (!sentinel.active) { send(res, 409, { error: "Sentinels are turned off (BAKERY_SENTINEL=0)" }); return; }
+        if (!sentinel.active) { send(res, 409, { error: "Sentinels are turned off (ALICE_SENTINEL=0)" }); return; }
         sentinelStore.runSoon(record.id); void sentinel.dispatchDue(); send(res, 202, sentinelStore.getSentinel(record.id)); return;
       }
       if (req.method === "PATCH" && !action) {
@@ -788,7 +788,7 @@ const server = createServer(async (req, res) => {
             try { worker.start(board.getCard(id)!, "manual", "", undefined, true); }
             catch (error) {
               const message = error instanceof Error ? error.message : String(error);
-              board.noteCard(id, `Changes are requested, but Bakery could not start the new attempt: ${message}. Run it again to send Pi your feedback.`);
+              board.noteCard(id, `Changes are requested, but Alice could not start the new attempt: ${message}. Run it again to send Pi your feedback.`);
             }
           }
           send(res, 200, comments); return;
@@ -803,7 +803,7 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "POST" && action === "recover") {
           // Same gates as /start, since a recovery is a paid run.
-          if (draining.on) throw new Error("Bakery is restarting to load code changes; recover this card after the restart");
+          if (draining.on) throw new Error("Alice is restarting to load code changes; recover this card after the restart");
           send(res, 202, worker.recover(id)); return;
         }
         if (req.method === "DELETE" && action === "start") { send(res, 200, { cancelled: board.cancelQueuedStart(id) }); return; }
@@ -840,7 +840,7 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "PUT" && action === "pull-request") {
           const { url } = await body(req);
-          if (typeof url !== "string") throw new Error("url must be a pull request link, or empty to use the bakery/<card> branch");
+          if (typeof url !== "string") throw new Error("url must be a pull request link, or empty to use the alice/<card> branch");
           const card = board.setPullRequestOverride(id, url);
           if (repoBoard.integration === "github-pr") void githubSync.syncBoard(repoBoard.id);
           send(res, 200, card); return;
@@ -868,7 +868,7 @@ const server = createServer(async (req, res) => {
     if (path.startsWith("/api/")) { send(res, 404, { error: "Not found" }); return; }
     if (req.method !== "GET") { send(res, 405, { error: "Method not allowed" }); return; }
     // Dev runs the UI on Vite (5173); a built dist here goes stale and looks like the app. Serve it only on request.
-    if (process.env.BAKERY_SERVE_UI !== "1") { send(res, 404, { error: "This is the Bakery API. Open the UI on http://127.0.0.1:5173, or set BAKERY_SERVE_UI=1 to serve the built dist here." }); return; }
+    if (process.env.ALICE_SERVE_UI !== "1") { send(res, 404, { error: "This is the Alice API. Open the UI on http://127.0.0.1:5173, or set ALICE_SERVE_UI=1 to serve the built dist here." }); return; }
     const dist = resolve("dist");
     const file = resolve(dist, `.${path === "/" ? "/index.html" : path}`);
     const target = file.startsWith(dist + sep) && existsSync(file) ? file : join(dist, "index.html");
@@ -889,7 +889,7 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start(); push.start();
+server.listen(port, bindHost, () => { console.log(`Alice listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start(); push.start();
   if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
   if (updates) {
     void updates.poll();

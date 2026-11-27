@@ -6,12 +6,13 @@ import { command } from "./platform.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { chmodSync, closeSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
+import { git, Shared } from "./git-async.js";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
 import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
-import { renderMetrics } from "./metrics.js";
+import { EventLoopDelay, renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
 import { PoisonedSessionError, Worker } from "./worker.js";
 import { CommitHookError, Integration, IntegrationConflictError, PushHookError } from "./integration.js";
@@ -77,8 +78,8 @@ const worker = new Worker(board, dataDir, piBin, process.env.BAKERY_WT_BIN ?? "w
 const integration = new Integration(board, dataDir);
 // github-pr boards: the PR draft and the repository's hooks run when a run reaches Review, so Approve only pushes.
 const readiness = new Readiness(board, integration, {
-  draft: (card, run, onProgress) => {
-    const patch = integration.review(card).files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
+  draft: async (card, run, onProgress) => {
+    const patch = (await integration.review(card)).files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
     return draftPullRequest({ card, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")), onProgress });
   },
   sendBack: (card, error) => sendBackHookFailure(card, error),
@@ -93,7 +94,7 @@ board.onRun((event, run) => {
     if (usage) board.recordCacheUsage(run.id, usage);
   }
   const card = event === "finished" && run.status === "review" ? board.getCard(run.cardId) : undefined;
-  if (card) integration.recordChangedFiles(card);
+  if (card) void integration.recordChangedFiles(card);
   if (card) setImmediate(() => readiness.prepare(board.getCard(card.id) ?? card));
 });
 // Review cards whose readiness a restart interrupted, or that reached Review before Bakery prepared it.
@@ -101,14 +102,13 @@ setImmediate(() => { for (const card of board.listCards().filter(item => item.st
 // Runs that reached Review before the count was kept; one at a time so a big backlog does not hold the server up.
 void (async () => {
   for (const card of board.listCards().filter(item => item.status === "review" && board.listRuns(item.id)[0]?.changedFiles === null)) {
-    integration.recordChangedFiles(card);
-    await new Promise(resolve => setImmediate(resolve));
+    await integration.recordChangedFiles(card);
   }
 })();
 /** Drafts a pull request title and body like the Approve dialog does. Takes minutes; callers recheck the card afterwards. */
 async function draftForPullRequest(card: Card, fingerprint: string, lead: string): Promise<{ title: string; body: string }> {
   const run = board.listRuns(card.id)[0];
-  if (!run?.worktree || integration.reviewFingerprint(card) !== fingerprint) throw new Error("Work changed before the pull request could be drafted");
+  if (!run?.worktree || await integration.reviewFingerprint(card) !== fingerprint) throw new Error("Work changed before the pull request could be drafted");
   const draft = await readiness.draft(card);
   if (draft.problem) throw new Error(`${lead}: ${draft.problem}. Use Approve and open PR`);
   return draft;
@@ -140,10 +140,13 @@ const autoPickup = new AutoPickup(board, worker);
 const version = (() => {
   let packageVersion = "unknown", commit: string | null = null, date: string | null = null;
   try { packageVersion = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version ?? packageVersion; } catch { /* keep unknown */ }
+  // Once at startup, before the server listens, so synchronous Git blocks no request.
   try { [commit, date] = execFileSync("git", ["-C", process.cwd(), "log", "-1", "--format=%h%x09%cI"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\t"); } catch { /* not a checkout */ }
   return { version: packageVersion, commit, date };
 })();
 // Usage telemetry is off unless BAKERY_TELEMETRY_ENDPOINT is set and the operator turns it on in Settings. See docs/telemetry.md.
+// Event-loop delay for /metrics, measured only when metrics are on. See docs/metrics.md.
+const loopDelay = process.env.BAKERY_METRICS === "1" ? new EventLoopDelay() : null;
 const telemetry = new Telemetry({ endpoint: process.env.BAKERY_TELEMETRY_ENDPOINT, enabled: () => board.getSettings().telemetryEnabled, dataDir, version: version.version });
 board.onRun((event, run) => {
   if (event === "started") { telemetry.count("bakery.runs.started"); return; }
@@ -162,7 +165,7 @@ const sentinelStore = new SentinelStore(board.sqlite);
 const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.BAKERY_WT_BIN ?? "wt", Number(process.env.BAKERY_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
-  card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
+  card => sendBackRefusedPush(card, async () => openPullRequest(card, await integration.reviewFingerprint(card), undefined, "ci-fix")));
 // Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
 const features = board.features;
 /** The machine-wide agent limit in force and how many agents run now, for Settings and the CLI. */
@@ -196,7 +199,7 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
   catch (error) {
     if (!(error instanceof PushHookError)) throw error;
     let started: boolean;
-    try { started = sendBackHookFailure(card, error); }
+    try { started = await sendBackHookFailure(card, error); }
     catch (startError) {
       throw new Error(`${error.message}\n\nBakery could not send it back to the agent: ${startError instanceof Error ? startError.message : String(startError)}`);
     }
@@ -208,7 +211,7 @@ async function sendBackRefusedPush(card: Card, push: () => Promise<Card>): Promi
   }
 }
 /** Keeps a refused hook's output for the card's next run and starts it; false when no run can start yet. */
-function sendBackHookFailure(card: Card, error: PushHookError | CommitHookError): boolean {
+function sendBackHookFailure(card: Card, error: PushHookError | CommitHookError): Promise<boolean> {
   return error instanceof PushHookError ? worker.sendBackHookFailure(card, "push", error.sha, error.output) : worker.sendBackHookFailure(card, "commit", "", error.output);
 }
 // Remote hosting: BAKERY_HOST sets the bind address; BAKERY_ALLOWED_HOSTS lists extra hostnames (no port) accepted in Host and Origin.
@@ -255,7 +258,9 @@ function dependencyIds(value: unknown) {
   if (!Array.isArray(value) || value.length > 50 || !value.every(id => typeof id === "string" && /^[\w-]+$/.test(id))) throw new Error("dependsOn must be an array of card IDs");
   return value as string[];
 }
-function repoRoot(value: unknown) {
+// The add-board form asks on every keystroke; overlapping asks for one directory share a single `git rev-parse`.
+const rootProbes = new Shared();
+async function repoRoot(value: unknown): Promise<string> {
   if (typeof value !== "string" || !value.trim()) throw new Error("Repository path is required");
   const input = value.trim();
   const path = input === "~" ? homedir() : /^~[\\/]/.test(input) ? join(homedir(), input.slice(2)) : input;
@@ -263,7 +268,8 @@ function repoRoot(value: unknown) {
   let root: string;
   try {
     root = realpathSync(path);
-    const gitRoot = execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    const canonical = root;
+    const gitRoot = await rootProbes.run(canonical, () => git(canonical, ["rev-parse", "--show-toplevel"]));
     if (realpathSync(gitRoot) !== root) throw new Error("Not a Git repository root");
   } catch { throw new Error(`Repository path is not an existing Git repository root: ${input}`); }
   return root;
@@ -287,7 +293,7 @@ const server = createServer(async (req, res) => {
     if (path === "/metrics" && req.method === "GET") {
       if (process.env.BAKERY_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set BAKERY_METRICS=1 to serve them." }); return; }
       res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount }, version.version));
+      res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount }, version.version, loopDelay?.read()));
       return;
     }
     if (path === "/api/status" && req.method === "GET") {
@@ -306,7 +312,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/push/subscriptions" && req.method === "DELETE") { push.unsubscribe((await body(req)).endpoint); send(res, 200, { ok: true }); return; }
     if (path === "/api/update" && req.method === "POST") {
       if (!updates) throw new Error("Only a server started with npm start installs updates");
-      void updates.apply();
+      void (await updates.begin()).done;
       send(res, 202, updates.state); return;
     }
     if (path === "/api/logs" && req.method === "GET") {
@@ -376,7 +382,7 @@ const server = createServer(async (req, res) => {
       send(res, 200, suggestions); return;
     }
     if (path === "/api/repository-root" && req.method === "GET") {
-      send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
+      send(res, 200, { root: await repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
     if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), sentinels = board.sentinelInProgressCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0, sentinelsInProgress: sentinels[item.repo] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
@@ -397,7 +403,7 @@ const server = createServer(async (req, res) => {
       send(res, 200, buildStats({ runs: input.runs.filter(item => visible.has(item.repo)), reviews: input.reviews.filter(item => visible.has(item.repo)), cards: input.cards.filter(item => visible.has(item.repo)) }, { days, repo })); return;
     }
     if (path === "/api/boards" && req.method === "POST") {
-      const root = repoRoot((await body(req)).repo);
+      const root = await repoRoot((await body(req)).repo);
       if (board.listBoards().some(item => item.repo === root)) throw new Error("Repository already has a board");
       const added = board.addRepo(root);
       send(res, 201, (await detectGithubIntegration(board, added.id, github, true)) ?? added); return;
@@ -406,7 +412,7 @@ const server = createServer(async (req, res) => {
     if (boardRoute) {
       const item = board.getBoard(boardRoute[1]);
       if (!item) { send(res, 404, { error: "Board not found" }); return; }
-      if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, repoRoot((await body(req)).repo))); return; }
+      if (req.method === "PATCH") { send(res, 200, board.renameBoard(item.id, await repoRoot((await body(req)).repo))); return; }
       if (req.method === "DELETE") { board.archiveBoard(item.id); send(res, 200, { ok: true }); return; }
     }
     const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
@@ -710,7 +716,7 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(route[1]), id = route[2], action = route[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       if (!id) {
-        if (req.method === "GET") { send(res, 200, worker.withLive(originMain.annotate(repoBoard, board.listCards(repoBoard.repo)))); return; }
+        if (req.method === "GET") { send(res, 200, worker.withLive(await originMain.annotate(repoBoard, board.listCards(repoBoard.repo)))); return; }
         if (req.method === "POST") {
           const input = await body(req), card = fields(input), key = idempotencyKey(input.idempotencyKey);
           // A repeated key returns the board's existing card unchanged, whatever its status.
@@ -730,10 +736,10 @@ const server = createServer(async (req, res) => {
         if (req.method === "GET" && action === "push-progress") { send(res, 200, integration.pushProgress(id)); return; }
         if (req.method === "GET" && action === "approval") { send(res, 200, { pending: !!board.getApproval(id) }); return; }
         if (req.method === "GET" && action === "review") {
-          if (new URL(req.url ?? "/", "http://localhost").searchParams.has("fingerprint")) { send(res, 200, { fingerprint: integration.reviewFingerprint(item) }); return; }
-          const reviewed = integration.review(item);
-          const reviewedRun = board.listRuns(id)[0];
-          if (reviewedRun) board.recordChangedFiles(reviewedRun.id, reviewed.files.length);
+          if (new URL(req.url ?? "/", "http://localhost").searchParams.has("fingerprint")) { send(res, 200, { fingerprint: await integration.reviewFingerprint(item) }); return; }
+          // Git ran meanwhile, so write to the run the diff was read from, not whichever run is latest now.
+          const { runId, ...reviewed } = await integration.review(item);
+          board.recordChangedFiles(runId, reviewed.files.length);
           send(res, 200, reviewed); return;
         }
         // What the UI shows before a Triage card moves to Ready, for the CLI to print. Advice only: /status never checks it.
@@ -765,25 +771,26 @@ const server = createServer(async (req, res) => {
           if (typeof input.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(input.fingerprint) ||
             typeof input.path !== "string" || !Number.isSafeInteger(input.line) || typeof input.body !== "string" ||
             !input.body.trim() || input.body.length > 1000) throw new Error("Invalid review comment");
-          const diff = integration.review(item);
+          const diff = await integration.review(item);
           if (diff.fingerprint !== input.fingerprint) throw new Error("Work changed since review; refresh the diff before commenting");
-          if (input.path === "") { send(res, 201, board.addReviewComment(id, board.listRuns(id)[0].id, diff.fingerprint, "", 0, "context", "", input.body)); return; }
+          // The comment goes on the run the diff came from; the board refuses it if a newer attempt started meanwhile.
+          if (input.path === "") { send(res, 201, board.addReviewComment(id, diff.runId, diff.fingerprint, "", 0, "context", "", input.body)); return; }
           const line = parseDiff(diff.files.find(file => file.path === input.path)?.patch ?? "")[Number(input.line) - 1];
           if (!line || line.kind === "meta") throw new Error("Comment on a code line in the current diff");
-          const run = board.listRuns(id)[0];
-          send(res, 201, board.addReviewComment(id, run.id, diff.fingerprint, input.path, Number(input.line), line.kind, line.code, input.body, line.newLine ?? line.oldLine ?? null)); return;
+          send(res, 201, board.addReviewComment(id, diff.runId, diff.fingerprint, input.path, Number(input.line), line.kind, line.code, input.body, line.newLine ?? line.oldLine ?? null)); return;
         }
         if (req.method === "POST" && action === "request-changes") {
           const { fingerprint } = await body(req);
           if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review diff before requesting changes");
-          if (integration.reviewFingerprint(item) !== fingerprint) throw new Error("Work changed since review; refresh the diff before requesting changes");
-          const comments = board.requestChanges(id, board.listRuns(id)[0].id, fingerprint);
+          const current = await integration.reviewState(item);
+          if (current.fingerprint !== fingerprint) throw new Error("Work changed since review; refresh the diff before requesting changes");
+          const comments = board.requestChanges(id, current.runId, fingerprint);
           // Start the next attempt now so the feedback reaches Pi without a separate Run again.
           // Same guard as /start: while the pushed PR waits on GitHub, a revision must not run beside it. The comments stay requested for the next run.
           if (item.reviewWait === "github") board.noteCard(id, "Changes are requested, but the pushed pull request is waiting on GitHub, so no new attempt started. Run it again once the checks finish to send Pi your feedback.");
           else if (draining.on) board.queueStart(id);
           else {
-            try { worker.start(board.getCard(id)!, "manual", "", undefined, true); }
+            try { await worker.start(board.getCard(id)!, "manual", "", undefined, true); }
             catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               board.noteCard(id, `Changes are requested, but Bakery could not start the new attempt: ${message}. Run it again to send Pi your feedback.`);
@@ -797,19 +804,19 @@ const server = createServer(async (req, res) => {
           if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
           // During a restart drain, remember the start and replay it once the new server is up.
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
-          send(res, 202, worker.start(item, "manual", "", undefined, true)); return;
+          send(res, 202, await worker.start(item, "manual", "", undefined, true)); return;
         }
         if (req.method === "POST" && action === "recover") {
           // Same gates as /start, since a recovery is a paid run.
           if (draining.on) throw new Error("Bakery is restarting to load code changes; recover this card after the restart");
-          send(res, 202, worker.recover(id)); return;
+          send(res, 202, await worker.recover(id)); return;
         }
         if (req.method === "DELETE" && action === "start") { send(res, 200, { cancelled: board.cancelQueuedStart(id) }); return; }
         if (req.method === "GET" && action === "pr-draft") { const { progress, hooks } = readiness.status(id); send(res, 200, { ...progress, hooks }); return; }
         if (req.method === "POST" && action === "pr-draft") {
           const { fingerprint } = await body(req);
           if (repoBoard.integration !== "github-pr") throw new Error("This board merges locally; it opens no pull request");
-          if (typeof fingerprint !== "string" || integration.reviewFingerprint(item) !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
+          if (typeof fingerprint !== "string" || await integration.reviewFingerprint(item) !== fingerprint) throw new Error("Work changed since review; refresh the diff before approving");
           const draft = await readiness.draft(item);
           send(res, 200, { ...draft, hooks: readiness.status(id).hooks }); return;
         }
@@ -823,13 +830,13 @@ const server = createServer(async (req, res) => {
             void githubSync.syncBoard(repoBoard.id);
             send(res, 200, card); return;
           }
-          send(res, 200, integration.approve(item, fingerprint)); return;
+          send(res, 200, await integration.approve(item, fingerprint)); return;
         }
         if (req.method === "POST" && action === "create-plan") { send(res, 201, board.createPlanCards(id)); return; }
         if (req.method === "POST" && action === "accept-findings") {
           const { fingerprint } = await body(req);
           if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("Open the review before accepting findings");
-          send(res, 200, integration.acceptFindings(item, fingerprint)); return;
+          send(res, 200, await integration.acceptFindings(item, fingerprint)); return;
         }
         if (req.method === "POST" && action === "publish") {
           const result = await integration.publishLocalMerge(item, github);
@@ -843,7 +850,7 @@ const server = createServer(async (req, res) => {
           if (repoBoard.integration === "github-pr") void githubSync.syncBoard(repoBoard.id);
           send(res, 200, card); return;
         }
-        if (req.method === "POST" && action === "withdraw") { send(res, 200, integration.withdraw(item)); return; }
+        if (req.method === "POST" && action === "withdraw") { send(res, 200, await integration.withdraw(item)); return; }
         if (req.method === "POST" && action === "resolve") {
           if ((await body(req)).acknowledged !== true) throw new Error("Confirm that you inspected the interrupted worktree");
           send(res, 200, board.resolveInterrupted(id)); return;
@@ -890,21 +897,25 @@ server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockP
 server.listen(port, bindHost, () => { console.log(`Bakery listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start(); push.start();
   if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
   if (updates) {
-    void updates.poll();
+    // A timer has no caller to reject to, so a failed check is logged here instead of becoming an unhandled rejection.
+    const poll = () => void updates.poll().catch(error => console.error(`Update check failed: ${error instanceof Error ? error.message : String(error)}`));
+    poll();
     // UI-only updates install on their own; ones that restart the server wait for the button.
-    updateTimer = setInterval(() => void updates.poll(), 30_000);
+    updateTimer = setInterval(poll, 30_000);
   }
   // Starts queued while the previous server drained for a restart.
-  for (const cardId of board.takeQueuedStarts()) {
-    const card = board.getCard(cardId);
-    if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
-    try { worker.start(card, "manual", "from a start queued during the last restart", undefined, true); }
-    catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      board.noteCard(cardId, `A start queued during the last restart could not run: ${message}`);
-      console.error(`Queued start for card ${cardId} failed: ${message}`);
+  void (async () => {
+    for (const cardId of board.takeQueuedStarts()) {
+      const card = board.getCard(cardId);
+      if (!card || ["triage", "running", "done", "archived"].includes(card.status)) continue;
+      try { await worker.start(card, "manual", "from a start queued during the last restart", undefined, true); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        board.noteCard(cardId, `A start queued during the last restart could not run: ${message}`);
+        console.error(`Queued start for card ${cardId} failed: ${message}`);
+      }
     }
-  }
+  })();
   // Boards whose GitHub main was never checked (added before this check existed, or gh was unavailable) are checked
   // once per start. This only records protection, which stops local Approve; it never changes a board's mode.
   for (const item of board.listBoards().filter(item => item.githubMainProtected === null && item.remoteUrl))
@@ -920,7 +931,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
   server.close(); server.closeAllConnections(); clearInterval(updateTimer); push.stop(); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
-  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
+  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => integration.idle()).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {

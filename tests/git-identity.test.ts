@@ -12,7 +12,7 @@ function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 }
 
-test("Bakery's approval commits and merge are the operator's: their identity, signed with their key", () => {
+test("Bakery's approval commits and merge are the operator's: their identity, signed with their key", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-identity-"));
   const repo = join(dir, "repo"), data = join(dir, "data"), key = join(dir, "signing");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
@@ -34,7 +34,7 @@ test("Bakery's approval commits and merge are the operator's: their identity, si
     board.finish(run.id, "review");
     writeFileSync(join(worktree, "README.md"), "original\nreviewed\n");
     const card = board.getCard(created.id)!, integration = new Integration(board, data);
-    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+    assert.equal((await integration.approve(card, (await integration.review(card)).fingerprint)).status, "done");
     const format = "--format=%an <%ae>|%cn <%ce>|%G?|%GS|%s";
     assert.deepEqual([git(repo, "log", "-1", format, "main"), git(repo, "log", "-1", format, "main^2")], [
       "Operator <operator@example.invalid>|Operator <operator@example.invalid>|G|operator@example.invalid|Merge card: Operator work",
@@ -43,7 +43,7 @@ test("Bakery's approval commits and merge are the operator's: their identity, si
   } finally { board.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("Bakery fills in its own name and email only where the repository has none", () => {
+test("Bakery fills in its own name and email only where the repository has none", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-identity-"));
   const saved = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_NOSYSTEM };
   try {
@@ -51,11 +51,11 @@ test("Bakery fills in its own name and email only where the repository has none"
     process.env.GIT_CONFIG_GLOBAL = join(dir, "empty-gitconfig");
     process.env.GIT_CONFIG_NOSYSTEM = "1";
     git(dir, "init", "-q");
-    assert.deepEqual(commitIdentityArgs(dir), ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost"]);
+    assert.deepEqual(await commitIdentityArgs(dir), ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost"]);
     git(dir, "config", "user.email", "operator@example.invalid");
-    assert.deepEqual(commitIdentityArgs(dir), ["-c", "user.name=Bakery"]);
+    assert.deepEqual(await commitIdentityArgs(dir), ["-c", "user.name=Bakery"]);
     git(dir, "config", "user.name", "Operator");
-    assert.deepEqual(commitIdentityArgs(dir), []);
+    assert.deepEqual(await commitIdentityArgs(dir), []);
   } finally {
     for (const [name, value] of [["GIT_CONFIG_GLOBAL", saved.global], ["GIT_CONFIG_NOSYSTEM", saved.system]] as const)
       if (value === undefined) delete process.env[name]; else process.env[name] = value;

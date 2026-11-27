@@ -38,18 +38,18 @@ test("auto-pickup skips a blocked card without spending a slot, and picks it up 
     assert.equal(item.board.getCard(free.id)!.blocked, false);
     item.board.setAutoPickup(item.repoBoard.id, true, 1, 2);
     assert.deepEqual(item.board.listAutoPickupCandidates().map(candidate => candidate.card.id), [free.id]);
-    item.pickup.tick();
+    await item.pickup.tick();
     assert.equal(item.board.listRuns(child.id).length, 0, "blocked card did not start");
     assert.equal(item.board.listRuns(free.id)[0]?.status, "running");
     assert.equal(item.board.getBoard(item.repoBoard.id)!.autoPickupEnabled, true, "a blocked card does not pause pickup");
     item.release();
     await waitFor(() => item.board.getCard(free.id)?.status === "review");
-    item.pickup.tick();
+    await item.pickup.tick();
     assert.equal(item.board.listRuns(child.id).length, 0, "still blocked with a free slot");
     assert.equal(item.board.getBoard(item.repoBoard.id)!.autoPickupStarts, 1, "the blocked card used no daily start");
     item.board.setStatus(parent.id, "done");
     assert.equal(item.board.getCard(child.id)!.blocked, false);
-    item.pickup.tick();
+    await item.pickup.tick();
     assert.equal(item.board.listRuns(child.id)[0]?.startedBy, "auto");
     await waitFor(() => item.board.getCard(child.id)?.status === "review");
   } finally { await item.close(); }
@@ -61,14 +61,14 @@ test("manual start of a blocked card is refused naming the unfinished cards; arc
     const done = item.board.setStatus(item.board.createCard({ title: "Finished parent", body: "", repo: item.repo }).id, "done");
     const open = item.card("Open parent");
     const child = item.card("Child", [done.id, open.id]);
-    assert.throws(() => item.worker.start(item.board.getCard(child.id)!), (error: Error) =>
+    await assert.rejects(async () => item.worker.start(item.board.getCard(child.id)!), (error: Error) =>
       /Waiting on 1 unfinished card: Open parent \(/.test(error.message) && error.message.includes(open.id) && !error.message.includes(done.id));
     assert.throws(() => item.board.claim(child.id), /Waiting on 1 unfinished card/);
     assert.equal(item.board.listRuns(child.id).length, 0, "a refused start consumes no attempt");
     item.board.setStatus(open.id, "done");
     item.board.setArchived(item.repo, [open.id], true);
     assert.equal(item.board.getCard(child.id)!.blocked, false, "archived counts as finished");
-    item.worker.start(item.board.getCard(child.id)!);
+    await item.worker.start(item.board.getCard(child.id)!);
     assert.equal(item.board.listRuns(child.id)[0]?.status, "running");
     item.release();
     await waitFor(() => item.board.getCard(child.id)?.status === "review");

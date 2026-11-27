@@ -1,3 +1,4 @@
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { parseTime, type StatsInput } from "./stats.js";
 
 /**
@@ -8,6 +9,30 @@ import { parseTime, type StatsInput } from "./stats.js";
  */
 
 export type LiveCounts = { runs: number; reviews: number; pullRequests: number };
+/** Event-loop delay in seconds since the previous scrape. */
+export type LoopDelay = { p50: number; p99: number; max: number };
+
+/**
+ * How late the event loop ran timers, from `perf_hooks.monitorEventLoopDelay`. Anything synchronous (Git called with
+ * execFileSync, a heavy query) shows up here as delay, and requests such as /api/status wait that long. Each `read`
+ * returns the delay since the previous one and starts a new window, as prom-client's event-loop metrics do.
+ */
+const loopResolutionMs = 20;
+export class EventLoopDelay {
+  private histogram = monitorEventLoopDelay({ resolution: loopResolutionMs });
+  constructor() { this.histogram.enable(); }
+  /**
+   * The histogram holds each sampling interval's full length, so an idle loop reads about 20 ms; the sampling interval
+   * is taken off to leave the delay alone. `reset: false` peeks without starting a new window.
+   */
+  read(reset = true): LoopDelay {
+    const h = this.histogram, seconds = (nanoseconds: number) => Number.isFinite(nanoseconds) ? Math.max(0, nanoseconds / 1e6 - loopResolutionMs) / 1000 : 0;
+    const delay = h.count ? { p50: seconds(h.percentile(50)), p99: seconds(h.percentile(99)), max: seconds(h.max) } : { p50: 0, p99: 0, max: 0 };
+    if (reset) h.reset();
+    return delay;
+  }
+  stop() { this.histogram.disable(); }
+}
 
 /** Run duration buckets, in seconds: 1, 2, 5, 10, 15, 30 and 60 minutes, then 2 and 4 hours. */
 const durationBuckets = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400];
@@ -34,7 +59,7 @@ class Sums {
   get samples() { return [...this.rows.values()]; }
 }
 
-export function renderMetrics(input: StatsInput, live: LiveCounts, version: string): string {
+export function renderMetrics(input: StatsInput, live: LiveCounts, version: string, loop?: LoopDelay): string {
   const runs = new Sums(), cost = new Sums(), tokens = new Sums(), cacheTasks = new Sums(), cacheHits = new Sums(), cacheSaved = new Sums();
   const durations = new Map<string, { labels: Labels; counts: number[]; count: number; sum: number }>();
   for (const run of input.runs) {
@@ -87,6 +112,8 @@ export function renderMetrics(input: StatsInput, live: LiveCounts, version: stri
     { name: "bakery_active_agent_reviews", help: "Agent reviews going now.", type: "gauge", samples: [{ labels: {}, value: live.reviews }] },
     { name: "bakery_active_pull_request_drafts", help: "Pull request drafts going now.", type: "gauge", samples: [{ labels: {}, value: live.pullRequests }] },
   ];
+  if (loop) families.push({ name: "bakery_event_loop_delay_seconds", help: "How late the server's event loop ran since the previous scrape: median, 99th percentile and maximum.", type: "gauge",
+    samples: (["p50", "p99", "max"] as const).map(stat => ({ labels: { stat }, value: loop[stat] })) });
   return families.map(family => {
     const sampleName = family.type === "histogram" ? `${family.name}_bucket` : family.name;
     const lines = [`# HELP ${family.name} ${family.help}`, `# TYPE ${family.name} ${family.type}`, ...family.samples.map(sample => `${sampleName}${labelText(sample.labels)} ${number(sample.value)}`)];

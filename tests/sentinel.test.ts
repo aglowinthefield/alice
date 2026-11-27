@@ -360,7 +360,7 @@ test("the sentinel starts its own jobs, from the timer or a /bakery comment, and
   try {
     const started: string[] = [];
     let refuse = true;
-    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { if (refuse) throw new Error("draining"); started.push(card.title); });
+    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, async card => { if (refuse) throw new Error("draining"); started.push(card.title); });
     const pr = f.addPr();
     await sentinel.pass(f.repoBoard.id);
     assert.deepEqual(started, [], "a refused start leaves the job Ready");
@@ -421,7 +421,7 @@ test("a paused sentinel starts no run and holds its unstarted jobs; resuming run
   const f = fixture();
   try {
     const started: string[] = [];
-    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); });
+    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, async card => { started.push(card.id); });
     f.addPr();
     await sentinel.pass(f.repoBoard.id);
     const record = sentinelOf(f);
@@ -511,7 +511,7 @@ test("existing jobs are linked to their sentinels once, keeping ids, status and 
     assert.equal(f.store.listRuns(h.sentinelId!).length, 1);
     // A restart with the same data builds a new Sentinel, which neither duplicates records nor starts the job.
     const started: string[] = [];
-    const restarted = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); });
+    const restarted = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, async card => { started.push(card.id); });
     assert.equal(f.store.listSentinels(f.repoBoard.id).length, 2);
     assert.equal(restarted.describe(f.repoBoard.id).length, 2);
     assert.equal(f.store.listRuns(h.sentinelId!).length, 1);
@@ -580,7 +580,7 @@ test("a queued job whose PR was fixed while the sentinel was paused is withdrawn
   const f = fixture();
   try {
     const started: string[] = [];
-    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); });
+    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, async card => { started.push(card.id); });
     const pr = f.addPr();
     await sentinel.pass(f.repoBoard.id);
     const record = sentinelOf(f);
@@ -618,7 +618,7 @@ test("with sentinels turned off nothing dispatches, even when asked", async () =
   const f = fixture();
   try {
     const started: string[] = [];
-    const off = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); }, 15_000, false);
+    const off = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, async card => { started.push(card.id); }, 15_000, false);
     f.addPr();
     const record = f.store.ensureSentinel(f.repoBoard.id, "pr-health");
     assert.equal(await off.runSentinel(record.id), undefined);

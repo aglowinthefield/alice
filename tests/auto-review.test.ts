@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
 import { AutoReview, promptDiff, reviewerPrompt, reviewerVerdict } from "../server/auto-review.js";
+import { fakeGit, waitFor as waitUntil, withPath } from "./fake-git.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
@@ -100,7 +101,7 @@ test("on a local board an agent approval is advice: the card waits in Review for
     assert.equal(item.board.listAutoReviewJobs(current.card.id).length, 1, "the same run is not reviewed twice");
     // Your Approve merges the agent-approved card.
     const integration = new Integration(item.board, item.data);
-    assert.equal(integration.approve(item.board.getCard(current.card.id)!, integration.review(item.board.getCard(current.card.id)!).fingerprint).status, "done");
+    assert.equal((await integration.approve(item.board.getCard(current.card.id)!, (await integration.review(item.board.getCard(current.card.id)!)).fingerprint)).status, "done");
     assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
   } finally { item.close(); }
 });
@@ -658,5 +659,34 @@ test("auto-review is not stopped by the diff viewer's 200-file cap, but still re
     await item.auto.tick();
     assert.equal(item.board.listAutoReviewJobs(many.card.id)[0].details, "Agent requested human review: Stop here", "reached the reviewer");
     assert.match(item.board.listAutoReviewJobs(binary.card.id)[0].details, /Binary, symlink, or submodule/);
+  } finally { item.close(); }
+});
+
+test("a shutdown that begins while a review prepares its Git launches no reviewer", { skip: process.platform === "win32" && "the fake git is a shell script" }, async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true);
+    const optedIn = item.board.getBoard(item.repoBoard.id)!.autoReviewEnabledAt ?? "";
+    // Only runs that reach Review after the opt-in are reviewed.
+    while (new Date().toISOString() <= optedIn) await new Promise(resolve => setImmediate(resolve));
+    const { card, run, worktree } = item.reviewedCard();
+    const ran = join(item.dir, "reviewer-ran");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\n: > '${ran}'\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"fine"}')}EVENTS\n`);
+    const fake = fakeGit(item.dir, [{ name: "base", match: `${worktree} merge-base main HEAD` }]);
+    try {
+      await withPath(fake.bin, async () => {
+        const ticking = item.auto.tick();
+        await waitUntil(() => fake.waiting("base"), "the review's merge-base to be held");
+        const stopping = item.auto.shutdown();
+        fake.release("base");
+        await ticking;
+        await stopping;
+      });
+    } finally { fake.releaseAll(); }
+    assert.equal(existsSync(ran), false, "no reviewer started after shutdown began");
+    const job = item.board.getAutoReviewJob(run.id)!;
+    assert.equal(job.state, "needs_human");
+    assert.match(job.details, /shut down during the agent review/);
+    assert.equal(item.board.getCard(card.id)!.status, "review");
   } finally { item.close(); }
 });

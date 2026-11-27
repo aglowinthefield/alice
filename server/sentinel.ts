@@ -79,7 +79,7 @@ export class Sentinel {
   constructor(private readonly board: Board, private readonly github: GitHub, private readonly store: SentinelStore, private readonly locks: PrLocks,
     private readonly dataDir: string, private readonly ownerLogin?: string, private readonly intervalMs = 5 * 60_000, private readonly requestMs = 60_000,
     /** Starts a job's run. Without it (tests) jobs stay Ready. */
-    private readonly startRun?: (card: Card) => void,
+    private readonly startRun?: (card: Card) => Promise<unknown>,
     /** How often the scheduler checks which sentinels are due. */
     private readonly pollMs = 15_000,
     /** False when the Sentinels feature is off or BAKERY_SENTINEL=0: nothing dispatches, whoever asks (timer, run-now or resume). */
@@ -179,8 +179,8 @@ export class Sentinel {
     if (!this.startRun || !this.active) return;
     // A paused sentinel starts nothing, its waiting jobs included; resuming lets the next poll start them.
     if (card.sentinelId && this.store.getSentinel(card.sentinelId)?.enabled === false) return;
-    try { this.startRun(card); }
-    catch (error) { console.error(`[sentinel] could not start job ${card.id.slice(0, 8)} "${card.title.slice(0, 60)}": ${error instanceof Error ? error.message : String(error)}`); }
+    // Not awaited: a start runs Git first, and the poll that made the job should not wait on it.
+    void this.startRun(card).catch(error => { console.error(`[sentinel] could not start job ${card.id.slice(0, 8)} "${card.title.slice(0, 60)}": ${error instanceof Error ? error.message : String(error)}`); });
   }
   /** Ready jobs that could not start when they were made. `hold` names boards whose queued health jobs could not be checked, which wait. */
   startReadyJobs(hold: ReadonlySet<string> = new Set()): void {

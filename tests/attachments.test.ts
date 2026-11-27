@@ -131,7 +131,7 @@ test("a work run's prompt lists the card's attachment paths", async () => {
     const card = board.createCard({ title: "Test", body: "", repo });
     const file = board.addAttachment({ id: "att-1", cardId: card.id, name: "error log.txt", type: "text/plain", size: 5 });
     board.setStatus(card.id, "ready");
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status === "review");
     const prompt = readFileSync(promptFile, "utf8");
     assert.ok(prompt.includes(attachmentPath(data, file)));

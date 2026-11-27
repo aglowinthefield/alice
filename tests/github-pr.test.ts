@@ -137,7 +137,7 @@ async function waitFor(predicate: () => boolean) {
 async function reviewedCard(f: Fixture, title = "Add feature") {
   const card = f.board.createCard({ title, body: "Card body text.", repo: f.repo });
   f.board.setStatus(card.id, "ready");
-  const run = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+  const run = await new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
   await waitFor(() => f.board.getRun(run.id)?.status !== "running");
   assert.equal(f.board.getRun(run.id)?.status, "review", f.board.getRun(run.id)?.error ?? "");
   return f.board.getCard(card.id)!;
@@ -146,7 +146,7 @@ async function reviewedCard(f: Fixture, title = "Add feature") {
 async function approve(f: Fixture, cardId: string) {
   const card = f.board.getCard(cardId)!;
   const integration = new Integration(f.board, f.data);
-  return integration.openPullRequest(card, integration.review(card).fingerprint, f.github);
+  return integration.openPullRequest(card, (await integration.review(card)).fingerprint, f.github);
 }
 
 const externalRow = (f: Fixture, cardId: string) => {
@@ -215,9 +215,9 @@ test("github-pr: a PR is counted for telemetry when it is created, not when an o
     const integration = new Integration(f.board, f.data);
     const delivered: string[] = [];
     integration.onDelivered = kind => { delivered.push(kind); };
-    await integration.openPullRequest(card, integration.review(card).fingerprint, f.github);
+    await integration.openPullRequest(card, (await integration.review(card)).fingerprint, f.github);
     assert.deepEqual(delivered, ["pr"]);
-    await integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
+    await integration.openPullRequest(f.board.getCard(card.id)!, (await integration.review(f.board.getCard(card.id)!)).fingerprint, f.github);
     assert.deepEqual(delivered, ["pr"], "the second push reuses the open PR");
   } finally { f.cleanup(); }
 });
@@ -274,7 +274,7 @@ test("github-pr: a card starts from origin/main, Approve pushes and opens a PR, 
     // Local-merge approval is refused on this board; Approve opens a PR instead.
     const integration = new Integration(f.board, f.data);
     assert.equal(card.reviewWait, null, "an unpushed run needs your Approve");
-    assert.throws(() => integration.approve(card, integration.review(card).fingerprint), /GitHub pull requests/);
+    await assert.rejects(async () => integration.approve(card, (await integration.review(card)).fingerprint), /GitHub pull requests/);
     const approved = await approve(f, card.id);
     assert.equal(approved.status, "review");
     assert.equal(approved.prNumber, 100);
@@ -379,7 +379,7 @@ function fakeDrafter(f: Fixture, reply: string) {
 
 async function draftFor(f: Fixture, cardId: string, piBin: string) {
   const card = f.board.getCard(cardId)!, run = f.board.listRuns(cardId)[0];
-  const patch = new Integration(f.board, f.data).review(card).files.map(file => file.patch).join("\n");
+  const patch = (await new Integration(f.board, f.data).review(card)).files.map(file => file.patch).join("\n");
   return draftPullRequest({ card, run, worktree: run.worktree!, patch, piBin, models: [] });
 }
 
@@ -430,7 +430,7 @@ test("github-pr: with a PR template and a semantic-PR check, Approve drafts from
 
     // A title that fails the check, from the card or the dialog, is refused before anything is committed or pushed.
     const integration = new Integration(f.board, f.data);
-    const fingerprint = integration.review(f.board.getCard(card.id)!).fingerprint;
+    const fingerprint = (await integration.review(f.board.getCard(card.id)!)).fingerprint;
     await assert.rejects(integration.openPullRequest(f.board.getCard(card.id)!, fingerprint, f.github), /title "Add feature" would fail \.github\/workflows\/semantic-pr\.yml: Title must look like/);
     await assert.rejects(integration.openPullRequest(f.board.getCard(card.id)!, fingerprint, f.github, { title: "feat(mobile): x", body: "b" }), /Unknown scope "mobile"/);
     assert.throws(() => git(f.origin, "rev-parse", "--verify", "-q", `refs/heads/bakery/${card.id}`));
@@ -468,7 +468,7 @@ test("github-pr: with neither a PR template nor a semantic-PR check, the draft i
     const draft = await draftFor(f, card.id, join(f.dir, "no-such-pi"));
     assert.deepEqual({ ...draft }, { title: "Add feature", body: "Card body text.", source: "card", problem: "", templatePath: null, semantic: null });
     const integration = new Integration(f.board, f.data);
-    await integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github, { title: "Any title at all", body: draft.body });
+    await integration.openPullRequest(f.board.getCard(card.id)!, (await integration.review(f.board.getCard(card.id)!)).fingerprint, f.github, { title: "Any title at all", body: draft.body });
     const [pr] = f.prs();
     assert.equal(pr.title, "Any title at all");
     assert.match(pr.body, /^Card body text\.\n\n---\n\nOpened by Bakery for card /);
@@ -554,7 +554,7 @@ test("github-pr: a refused push's hook output goes to the card's next run, which
     f.board.dropCiFeedback(card.id);
     assert.ok(f.board.getCiFeedback(card.id), "a CI sync does not drop hook output");
     const worker = new Worker(f.board, f.data, fixPi);
-    worker.start(f.board.getCard(card.id)!);
+    await worker.start(f.board.getCard(card.id)!);
     await waitFor(() => f.board.getCard(card.id)!.status === "review");
     const prompt = readFileSync(promptFile, "utf8");
     assert.match(prompt, /pre-push hook refused it/);
@@ -574,7 +574,7 @@ test("github-pr: a failing pre-push hook's stdout and stderr both reach the erro
     writeFileSync(join(f.repo, ".git", "hooks", "pre-push"), "#!/bin/sh\necho 'Missing API environment target' >&2\necho 'Unused exports (1)'\necho 'SETTINGS_TAB_IDS  settingsTabs.ts:9:14'\necho 'Failing command: npm run knip:ci' >&2\nexit 1\n");
     chmodSync(join(f.repo, ".git", "hooks", "pre-push"), 0o755);
     const integration = new Integration(f.board, f.data);
-    const pending = integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
+    const pending = integration.openPullRequest(f.board.getCard(card.id)!, (await integration.review(f.board.getCard(card.id)!)).fingerprint, f.github);
     assert.equal(integration.pushProgress(card.id)?.finishedAt, null, "progress exists while the push runs");
     await assert.rejects(pending, (error: Error) => error instanceof PushHookError && error.message.startsWith("push failed: the repository's pre-push hook refused it.\n\n") && /Unused exports \(1\)\nSETTINGS_TAB_IDS/.test(error.message) && /Missing API environment target/.test(error.message) && /npm run knip:ci/.test(error.message));
     const progress = integration.pushProgress(card.id)!;
@@ -585,7 +585,7 @@ test("github-pr: a failing pre-push hook's stdout and stderr both reach the erro
     assert.equal(f.prs().length, 0, "no PR without a pushed branch");
 
     rmSync(join(f.repo, ".git", "hooks", "pre-push"));
-    await integration.openPullRequest(f.board.getCard(card.id)!, integration.review(f.board.getCard(card.id)!).fingerprint, f.github);
+    await integration.openPullRequest(f.board.getCard(card.id)!, (await integration.review(f.board.getCard(card.id)!)).fingerprint, f.github);
     assert.equal(integration.pushProgress(card.id)?.step, "Done");
     assert.equal(integration.pushProgress(card.id)?.error, null);
   } finally { f.cleanup(); }
@@ -681,7 +681,7 @@ test("github-pr: a retry of an unpushed card whose base is behind is rebased ont
     git(worktree, "add", "-A"); git(worktree, ...commitArgs, "attempt one");
     const tip = f.landUpstream("moved.txt");
     f.board.setStatus(card.id, "ready");
-    const run = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    const run = await new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
     await waitFor(() => f.board.getRun(run.id)?.status !== "running");
     assert.equal(f.board.getRun(run.id)?.status, "review");
     assert.match(f.board.getRun(run.id)!.output, /Rebasing the card branch onto origin\/main/);
@@ -693,7 +693,7 @@ test("github-pr: a retry of an unpushed card whose base is behind is rebased ont
     git(f.upstream, "pull", "-q", "--ff-only", "origin", "main");
     writeFileSync(join(f.upstream, "feature.txt"), "conflicting\n"); git(f.upstream, "add", "feature.txt"); git(f.upstream, ...commitArgs, "conflict"); git(f.upstream, "push", "-q", "origin", "main");
     f.board.setStatus(card.id, "ready");
-    const conflicted = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    const conflicted = await new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
     assert.equal(conflicted.status, "failed");
     assert.match(conflicted.error ?? "", /Rebase onto origin\/main conflicted in feature\.txt; the card branch is unchanged/);
     assert.equal(git(worktree, "rev-parse", "HEAD"), before);
@@ -706,7 +706,7 @@ test("github-pr: a retry of an unpushed card whose base is behind is rebased ont
     chmodSync(argsPi, 0o755);
     // A refused push is still waiting: the hook-fix run failed on the conflict before Pi saw it, so the repair gets it.
     f.board.recordPushFailure(card.id, before, "Unused files (1)\nscripts/unused.ts");
-    const repair = new Worker(f.board, f.data, argsPi).start(f.board.getCard(card.id)!);
+    const repair = await new Worker(f.board, f.data, argsPi).start(f.board.getCard(card.id)!);
     await waitFor(() => f.board.getRun(repair.id)?.status !== "running");
     assert.equal(f.board.getRun(repair.id)?.status, "review", f.board.getRun(repair.id)?.error ?? "");
     const prompt = readFileSync(argsFile, "utf8");
@@ -731,7 +731,7 @@ test("github-pr: a retry after a merge-based conflict repair merges the newer or
     git(f.upstream, "pull", "-q", "--ff-only", "origin", "main");
     writeFileSync(join(f.upstream, "feature.txt"), "conflicting\n"); git(f.upstream, "add", "feature.txt"); git(f.upstream, ...commitArgs, "conflict"); git(f.upstream, "push", "-q", "origin", "main");
     f.board.setStatus(card.id, "ready");
-    const conflicted = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    const conflicted = await new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
     assert.equal(conflicted.status, "failed");
 
     // The repair resolves it the way the repair prompt allows: merge origin/main into the card branch and commit.
@@ -744,7 +744,7 @@ test("github-pr: a retry after a merge-based conflict repair merges the newer or
     // conflicting commit again, so the retry merges the new tip instead and keeps the resolution.
     const tip = f.landUpstream("later.txt");
     f.board.setStatus(card.id, "ready");
-    const retry = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    const retry = await new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
     await waitFor(() => f.board.getRun(retry.id)?.status !== "running");
     assert.equal(f.board.getRun(retry.id)?.status, "review", f.board.getRun(retry.id)?.error ?? "");
     assert.match(f.board.getRun(retry.id)!.output, /Merging origin\/main into the card branch/);
@@ -755,7 +755,7 @@ test("github-pr: a retry after a merge-based conflict repair merges the newer or
 });
 
 // Worktrunk itself, when installed: `wt remove` cleans up a squash-merged card and `wt step rebase` rebases a retry.
-test("github-pr with Worktrunk: wt removes a squash-merged Done card and rebases an unpushed retry", { skip: !hasWorktrunk("wt") && "wt is not installed" }, async () => {
+test("github-pr with Worktrunk: wt removes a squash-merged Done card and rebases an unpushed retry", { skip: !await hasWorktrunk("wt") && "wt is not installed" }, async () => {
   const f = fixture("wt");
   try {
     const retried = await reviewedCard(f, "Retry");
@@ -763,7 +763,7 @@ test("github-pr with Worktrunk: wt removes a squash-merged Done card and rebases
     git(retryTree, "add", "-A"); git(retryTree, ...commitArgs, "attempt one");
     const tip = f.landUpstream("moved.txt");
     f.board.setStatus(retried.id, "ready");
-    const run = new Worker(f.board, f.data, f.fakePi, "wt").start(f.board.getCard(retried.id)!);
+    const run = await new Worker(f.board, f.data, f.fakePi, "wt").start(f.board.getCard(retried.id)!);
     await waitFor(() => f.board.getRun(run.id)?.status !== "running");
     assert.equal(f.board.getRun(run.id)?.status, "review", f.board.getRun(run.id)?.error ?? "");
     assert.equal(git(retryTree, "rev-parse", "HEAD~1"), tip, "wt step rebase put the attempt on origin/main");
@@ -997,7 +997,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
   const worker = new Worker(f.board, f.data, fixPi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "ci-fix"));
+    async card => integration.openPullRequest(card, (await integration.review(card)).fingerprint, f.github, undefined, "ci-fix"));
   try {
     const card = await reviewedCard(f);
     await approve(f, card.id);
@@ -1025,7 +1025,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
 
     // A run the operator started is not a CI fix: it waits for Approve.
     f.board.setStatus(card.id, "ready");
-    const run = worker.start(f.board.getCard(card.id)!);
+    const run = await worker.start(f.board.getCard(card.id)!);
     await waitFor(() => f.board.getRun(run.id)?.status !== "running");
     assert.equal(f.board.getRun(run.id)?.ciFix, 0);
     await sync.syncBoard(f.repoBoard.id);
@@ -1041,7 +1041,7 @@ test("github-pr: a CI fix run that changes nothing says so on the PR and the car
   const worker = new Worker(f.board, f.data, idlePi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "ci-fix"));
+    async card => integration.openPullRequest(card, (await integration.review(card)).fingerprint, f.github, undefined, "ci-fix"));
   try {
     const card = await reviewedCard(f);
     await approve(f, card.id);
@@ -1087,7 +1087,7 @@ test("github-pr: a small documentation conflict with main is repaired and pushed
   const worker = new Worker(f.board, f.data, repairPi);
   const integration = new Integration(f.board, f.data);
   const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card),
-    card => integration.openPullRequest(card, integration.review(card).fingerprint, f.github, undefined, "ci-fix"));
+    async card => integration.openPullRequest(card, (await integration.review(card)).fingerprint, f.github, undefined, "ci-fix"));
   try {
     const { card, pr, pushed } = await conflictingPr(f, "docs/notes.md", "main\n");
     await sync.syncBoard(f.repoBoard.id);
@@ -1189,7 +1189,7 @@ test("GitHub remote: a main that accepts direct pushes stays local", async () =>
     // Local Approve works as before.
     const card = await reviewedCard(f);
     const integration = new Integration(f.board, f.data);
-    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+    assert.equal((await integration.approve(card, (await integration.review(card)).fingerprint)).status, "done");
   } finally { f.cleanup(); }
 });
 
@@ -1205,7 +1205,7 @@ test("GitHub remote: local Approve on a protected main refuses until the operato
     const card = await reviewedCard(f);
     const integration = new Integration(f.board, f.data);
     const before = git(f.repo, "rev-parse", "main");
-    assert.throws(() => integration.approve(card, integration.review(card).fingerprint), /acme\/widgets only accepts pull requests.*Integration.*board's settings/s);
+    await assert.rejects(async () => integration.approve(card, (await integration.review(card)).fingerprint), /acme\/widgets only accepts pull requests.*Integration.*board's settings/s);
     assert.equal(git(f.repo, "rev-parse", "main"), before, "local main was not touched");
 
     f.board.setIntegration(f.repoBoard.id, "local");
@@ -1213,7 +1213,7 @@ test("GitHub remote: local Approve on a protected main refuses until the operato
     detected = await detectGithubIntegration(f.board, f.repoBoard.id, f.github, true);
     assert.equal(detected?.integration, "local", "an explicit local choice is never overridden");
     assert.match(detected!.integrationNote, /stays Local merge because you chose it/);
-    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+    assert.equal((await integration.approve(card, (await integration.review(card)).fingerprint)).status, "done");
   } finally { f.cleanup(); }
 });
 
@@ -1243,7 +1243,7 @@ test("GitHub remote: when gh is missing, signed out, or GitHub cannot say, the m
     // Unknown protection does not block local Approve: behavior is as before the check existed.
     const card = await reviewedCard(f);
     const integration = new Integration(f.board, f.data);
-    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+    assert.equal((await integration.approve(card, (await integration.review(card)).fingerprint)).status, "done");
   } finally { f.cleanup(); }
 });
 
@@ -1270,7 +1270,7 @@ test("publish as PR: a card merged into local main goes back to Review, opens a 
     const integration = new Integration(f.board, f.data);
     const delivered: string[] = [];
     integration.onDelivered = kind => { delivered.push(kind); };
-    assert.equal(integration.approve(card, integration.review(card).fingerprint).status, "done");
+    assert.equal((await integration.approve(card, (await integration.review(card)).fingerprint)).status, "done");
     const candidate = git(worktree, "rev-parse", "HEAD");
     const mergedTip = git(f.repo, "rev-parse", "main");
     assert.equal(f.board.getCard(card.id)?.locallyMerged, true);
@@ -1334,10 +1334,10 @@ test("publish as PR: refused on a local board and for a branch carrying other lo
     f.board.setIntegration(f.repoBoard.id, "local");
     const integration = new Integration(f.board, f.data);
     const first = await reviewedCard(f, "First");
-    integration.approve(first, integration.review(first).fingerprint);
+    await integration.approve(first, (await integration.review(first)).fingerprint);
     // Started from local main after the first merge, so its branch contains that merge.
     const second = await reviewedCard(f, "Second");
-    integration.approve(second, integration.review(second).fingerprint);
+    await integration.approve(second, (await integration.review(second)).fingerprint);
     await assert.rejects(integration.publishLocalMerge(f.board.getCard(first.id)!, f.github), /Switch this board to GitHub pull requests/);
 
     f.board.setIntegration(f.repoBoard.id, "github-pr");
@@ -1657,7 +1657,7 @@ async function locallyMergedCard(f: Fixture, remoteFile: string, remoteContent: 
   f.board.setIntegration(f.repoBoard.id, "local");
   const card = await reviewedCard(f);
   const integration = new Integration(f.board, f.data);
-  integration.approve(card, integration.review(card).fingerprint);
+  await integration.approve(card, (await integration.review(card)).fingerprint);
   const candidate = git(join(f.data, "worktrees", card.id), "rev-parse", "HEAD");
   f.board.setIntegration(f.repoBoard.id, "github-pr");
   const branch = `bakery/${card.id}`;
@@ -1699,7 +1699,7 @@ function readinessFor(f: Fixture, integration = new Integration(f.board, f.data)
   const drafts: string[] = [], sentBack: (PushHookError | CommitHookError)[] = [];
   const readiness = new Readiness(f.board, integration, {
     draft: async (card) => { drafts.push(card.id); return { title: "feat: add feature", body: "Drafted at Review", source: "agent", problem: "", templatePath: null, semantic: null }; },
-    sendBack: (_card, error) => { sentBack.push(error); return true; },
+    sendBack: async (_card, error) => { sentBack.push(error); return true; },
   });
   return { integration, readiness, drafts, sentBack };
 }
@@ -1718,7 +1718,7 @@ test("github-pr readiness: at Review Bakery drafts the PR and runs the hooks, so
     prePushHook(f, log);
     const card = await reviewedCard(f);
     const { integration, readiness, drafts } = readinessFor(f);
-    const before = integration.reviewFingerprint(card);
+    const before = await integration.reviewFingerprint(card);
     readiness.prepare(card);
     readiness.prepare(card);
     const worktree = f.board.listRuns(card.id)[0].worktree!;
@@ -1729,7 +1729,7 @@ test("github-pr readiness: at Review Bakery drafts the PR and runs the hooks, so
     assert.equal(hookRuns(log).length, 1, "the hook ran once, for both prepare calls");
     assert.match(hookRuns(log)[0], new RegExp(`refs/heads/bakery/${card.id}`), "the dry run hands the hook the real push's refs");
     assert.throws(() => git(f.repo, "ls-remote", "--exit-code", "origin", `refs/heads/bakery/${card.id}`), "the dry run pushed nothing");
-    assert.equal(integration.reviewFingerprint(card), before, "committing does not make the diff under review stale");
+    assert.equal(await integration.reviewFingerprint(card), before, "committing does not make the diff under review stale");
     assert.equal(drafts.length, 1);
     assert.equal((await readiness.draft(card)).body, "Drafted at Review");
     assert.equal(drafts.length, 1, "the dialog gets the stored draft");
@@ -1752,7 +1752,7 @@ test("github-pr readiness: work that changed after the check runs the hook again
     readiness.prepare(card);
     await waitFor(() => readiness.status(card.id).hooks?.state === "passed");
     writeFileSync(join(f.board.listRuns(card.id)[0].worktree!, "later.txt"), "edited by hand\n");
-    await integration.openPullRequest(f.board.getCard(card.id)!, integration.reviewFingerprint(card), f.github, undefined, "operator", () => readiness.passedCommit(card.id));
+    await integration.openPullRequest(f.board.getCard(card.id)!, await integration.reviewFingerprint(card), f.github, undefined, "operator", () => readiness.passedCommit(card.id));
     assert.equal(hookRuns(log).length, 2, "a new commit goes through the hook");
   } finally { f.cleanup(); }
 });
@@ -1767,7 +1767,7 @@ test("github-pr readiness: a hook refused at Review is sent back, two attempts i
     // Each refusal is checked on its own attempt; the stand-in records the send-back, so the next attempt starts here.
     for (let attempt = 1; attempt <= 3; attempt++) {
       if (attempt > 1) {
-        const run = worker.start(f.board.getCard(card.id)!);
+        const run = await worker.start(f.board.getCard(card.id)!);
         await waitFor(() => f.board.getRun(run.id)?.status !== "running");
       }
       readiness.prepare(f.board.getCard(card.id)!);

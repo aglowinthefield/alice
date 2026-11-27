@@ -31,12 +31,12 @@ function fixture() {
   return { board, integration, reviewed, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test("a Review card you can act on is labeled PR ready when the run changed files and Accept findings when it changed none", () => {
+test("a Review card you can act on is labeled PR ready when the run changed files and Accept findings when it changed none", async () => {
   const f = fixture();
   try {
     const code = f.reviewed(true), findings = f.reviewed(false);
     assert.equal(f.board.getCard(code.id)!.reviewAction, null, "the next step is unknown until the changed files are counted");
-    for (const id of [code.id, findings.id]) f.integration.recordChangedFiles(f.board.getCard(id)!);
+    for (const id of [code.id, findings.id]) await f.integration.recordChangedFiles(f.board.getCard(id)!);
     const a = f.board.getCard(code.id)!, b = f.board.getCard(findings.id)!;
     assert.equal(a.reviewAction, "pr_ready");
     assert.equal(reviewActionText(a as unknown as Card), "PR ready");
@@ -45,11 +45,11 @@ test("a Review card you can act on is labeled PR ready when the run changed file
   } finally { f.close(); }
 });
 
-test("a Review card that is not your turn, or has an approval in progress, gets no next-step label", () => {
+test("a Review card that is not your turn, or has an approval in progress, gets no next-step label", async () => {
   const f = fixture();
   try {
     const code = f.reviewed(true);
-    f.integration.recordChangedFiles(f.board.getCard(code.id)!);
+    await f.integration.recordChangedFiles(f.board.getCard(code.id)!);
     assert.equal(f.board.getCard(code.id)!.reviewAction, "pr_ready");
     f.board.recordApproval(code.id, code.run.id, "candidate");
     assert.equal(f.board.getCard(code.id)!.reviewAction, null, "an approval is already underway");

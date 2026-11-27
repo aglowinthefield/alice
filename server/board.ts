@@ -1260,6 +1260,7 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   setStatus(id: string, status: "triage" | "ready" | "done", reason?: string): Card {
+    this.refuseWhileApproving(id);
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (card.status === "running" || card.status === "interrupted") throw new Error("Resolve the active or interrupted run first");
@@ -1279,6 +1280,7 @@ export class Board {
   }
   // Drops a Triage, Ready, Failed or Review card to Done without merging. Runs, worktree and branch stay, so Reopen can bring it back.
   closeReview(id: string): Card {
+    this.refuseWhileApproving(id);
     const card = this.getCard(id);
     if (!card) throw new Error("Card not found");
     if (!["triage", "ready", "failed", "review"].includes(card.status)) throw new Error("Only Triage, Ready, Failed and Review cards can be closed without merging");
@@ -1429,6 +1431,7 @@ export class Board {
   /** A comment with an empty `path` is general: it belongs to the review, not to a line (line 0, no code). */
   addReviewComment(cardId: string, runId: string, fingerprint: string, path: string, line: number, kind: ReviewComment["kind"], code: string, body: string, fileLine: number | null = null): ReviewComment {
     if (!body.trim() || body.length > 1000 || path.length > 1000 || code.length > 10000 || !Number.isSafeInteger(line) || line < (path ? 1 : 0) || (!path && (line !== 0 || code || fileLine !== null)) || (fileLine !== null && (!Number.isSafeInteger(fileLine) || fileLine < 1))) throw new Error("Invalid review comment");
+    this.refuseWhileApproving(cardId);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
@@ -1447,6 +1450,24 @@ export class Board {
     const result = this.db.prepare("DELETE FROM review_comments WHERE id=? AND cardId=? AND state='draft'").run(id, cardId);
     if (!result.changes) throw new Error("Only draft comments can be removed");
   }
+  /**
+   * Cards whose reviewed run Bakery is approving right now, by card id. Approval runs Git between its checks and its
+   * first database record, so this in-memory hold is what keeps a new attempt, a review comment or a change request
+   * from landing on the card meanwhile. `reserveApproval` makes its checks and the hold in one synchronous step.
+   */
+  private approving = new Map<string, string>();
+  reserveApproval(cardId: string, runId: string): void {
+    const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
+    if (this.approving.has(cardId)) throw new Error("This card is already being approved");
+    if (card?.status !== "review" || run?.id !== runId || run.status !== "review") throw new Error("A newer attempt started; review it before approving");
+    if (this.hasRequestedChanges(cardId, runId)) throw new Error("Changes requested; review a new attempt before approving");
+    if (this.hasDraftReviewComments(cardId, runId)) throw new Error("Submit or remove draft review comments before approving");
+    this.approving.set(cardId, runId);
+  }
+  releaseApproval(cardId: string): void { this.approving.delete(cardId); }
+  private refuseWhileApproving(cardId: string) {
+    if (this.approving.has(cardId)) throw new Error("This card is being approved; wait for that to finish");
+  }
   hasRequestedChanges(cardId: string, runId: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM review_comments WHERE cardId=? AND runId=? AND state='requested' LIMIT 1").get(cardId, runId);
   }
@@ -1454,6 +1475,7 @@ export class Board {
     return !!this.db.prepare("SELECT 1 FROM review_comments WHERE cardId=? AND runId=? AND state='draft' LIMIT 1").get(cardId, runId);
   }
   requestChanges(cardId: string, runId: string, fingerprint: string): ReviewComment[] {
+    this.refuseWhileApproving(cardId);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
@@ -1562,6 +1584,7 @@ export class Board {
    */
   /** `byPerson` marks a run the operator asked for, which the machine's agent limit counts but never refuses. */
   claim(cardId: string, startedBy: "manual" | "auto" = "manual", why = "", freshSession = false, recoveryOf: string | null = null, byPerson = false): Run {
+    this.refuseWhileApproving(cardId);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId);
@@ -1651,10 +1674,11 @@ export class Board {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   completeTurn(id: string) { this.db.prepare("UPDATE runs SET turns=turns+1 WHERE id=? AND status='running'").run(id); }
-  append(id: string, chunk: string) {
+  /** `finished` also appends to a run that has ended, for a note about that run that arrives late (the worktree hint). */
+  append(id: string, chunk: string, finished = false) {
     // Keep a bounded tail. Store only human-readable text; never raw tool arguments or credentials.
     const run = this.getRun(id);
-    if (run?.status !== "running") return;
+    if (!run || (run.status !== "running" && !finished)) return;
     this.db.prepare("UPDATE runs SET output=? WHERE id=?").run((run.output + chunk).slice(-60000), id);
   }
   /** `retryable` is false for a run Bakery or the operator ended (stop, timeout, protocol failure), whatever provider error came before. */

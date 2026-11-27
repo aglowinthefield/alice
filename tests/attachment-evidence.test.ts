@@ -126,7 +126,7 @@ test("a work run's prompt tells the agent to attach evidence with the CLI, and o
       chmodSync(fakePi, 0o755);
       const card = board.createCard({ title: "Test", body: "", repo });
       board.setStatus(card.id, "ready");
-      const run = new Worker(board, data, fakePi, undefined, attach).start(board.getCard(card.id)!);
+      const run = await new Worker(board, data, fakePi, undefined, attach).start(board.getCard(card.id)!);
       const deadline = Date.now() + 10_000;
       while (board.getRun(run.id)?.status !== "review") {
         if (Date.now() > deadline) throw new Error("Run did not finish");

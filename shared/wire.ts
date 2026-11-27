@@ -12,7 +12,7 @@ export type CardStatus =
   | "archived";
 /** A whole number from -100 to 100 (default 0); higher is picked up first. */
 export type CardPriority = number;
-/** Token and cost columns are null for attempts recorded before Bakery tracked usage; new attempts start at 0. */
+/** Token and cost columns are null for attempts recorded before Alice tracked usage; new attempts start at 0. */
 export type UsageFields = {
   inputTokens: number | null;
   outputTokens: number | null;
@@ -36,7 +36,7 @@ export type RunKind = "first" | "send_back" | "ci_fix" | "retry" | "rerun";
 export type LiveActivity = { tool: string; turn: number; since: string };
 
 /**
- * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
+ * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Alice is about to send
  * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
  */
 export type ReviewWait = "agent_review" | "ci_fix" | "github";
@@ -55,7 +55,7 @@ export type ReviewAction =
 /**
  * The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup.
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
- * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
+ * `prCiPending` is set while Alice holds a CI failure to send back to Pi (waiting for the other checks to settle).
  */
 export type CardPullRequest = {
   prOverrideUrl: string | null;
@@ -73,13 +73,19 @@ export type CardPullRequest = {
   prCommentsSeen: string | null;
 };
 
+/**
+ * Where a card came from: `ui`, `cli`, `plan`, `follow-up`, `sentinel`, `pr-comment`, `api` (an API caller that named
+ * none) or the agent name an API caller supplied (Hermes sends `hermes`). `manual` marks older cards whose source is unknown.
+ */
+export type CardSource = string;
+
 export type Card = {
   id: string;
   title: string;
   body: string;
   repo: string;
   status: CardStatus;
-  source: "manual";
+  source: CardSource;
   priority: CardPriority;
   idempotencyKey: string | null;
   /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
@@ -104,9 +110,9 @@ export type Card = {
   dependsOn: string[];
   /** True while any card in dependsOn is not Done or archived. */
   blocked: boolean;
-  /** Bakery merged this card into local main (local integration), not through a PR. */
+  /** Alice merged this card into local main (local integration), not through a PR. */
   locallyMerged: boolean;
-  /** The latest run ended with a `bakery-plan` block: this card produced a plan, not code. */
+  /** The latest run ended with a `alice-plan` block: this card produced a plan, not code. */
   planOnly: boolean;
   /** Last time the latest run's agent reported anything; null before the first run. */
   lastActivityAt: string | null;
@@ -120,8 +126,10 @@ export type Card = {
   reviewQueue: { position: number; of: number } | null;
   /** See `ReviewAction`. */
   reviewAction: ReviewAction | null;
-  /** A start was asked for during a restart drain and runs after the restart. */
+  /** A start is queued: asked for during a restart drain, or refused by the run limit (see `startQueuedForSlot`). */
   startQueued: boolean;
+  /** The queued start waits for a free run slot on the card's board, not for a restart. */
+  startQueuedForSlot: boolean;
   /** Files attached to the card, including those sent with discussion messages. */
   attachmentCount: number;
   /** A Failed card's reason in a few words (see `summarizeFailure`); null on other cards. */
@@ -157,9 +165,11 @@ export type Run = {
   failureKind: ProviderFailureKind | null;
   /** Id of the failed run whose rejected session this run replaced with a fresh one; null for ordinary runs. */
   recoveryOf: string | null;
+  /** Pi's session file for this run, as Pi itself reported it at startup; null when unknown (older runs, or Pi never got that far). */
+  sessionFile: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
-  /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
+  /** Files the run's work changes against main, as of the last time Alice looked; null until it has. */
   changedFiles: number | null;
   /** Why the run happened; only a card's run list carries it (see src/run-kinds.ts). */
   kind?: RunKind;

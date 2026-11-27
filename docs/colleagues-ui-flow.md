@@ -8,11 +8,11 @@ Can an operator move from a familiar specialist to a group discussion and execut
 
 The proposed answer is a global colleague directory and room list, with project shortcuts inside existing boards. Teams are not required.
 
-## Fit with Bakery today
+## Fit with Alice today
 
 `src/main.tsx` owns navigation and Today; `src/chat.tsx` owns board chat, its conversation sidebar, model controls, and transcript; `src/chat-sidebar.ts` owns sizing helpers. Extend those familiar navigation patterns rather than opening a separate collaboration application.
 
-The sketches describe information layout, not final styling. Preserve Bakery's existing theme, density, typography, and resizable navigation. Existing card detail and review surfaces remain the execution destination.
+The sketches describe information layout, not final styling. Preserve Alice's existing theme, density, typography, and resizable navigation. Existing card detail and review surfaces remain the execution destination.
 
 ## 1. Find or create a colleague
 
@@ -27,7 +27,7 @@ Projects
   Silk
     Board
     Rooms
-  Bakery
+  Alice
   Coda
 ```
 
@@ -38,7 +38,7 @@ Colleagues                           [New colleague]
 
 Ingest    Silk AI ingestion specialist    Silk
 Scout     Search and discovery           Silk
-Relay     Reliability                    Bakery, Coda
+Relay     Reliability                    Alice, Coda
 ```
 
 Creating a colleague asks for name and specialty first. Instructions, default model/thinking, and project associations are editable in the same form, with optional configuration behind a disclosure. No team, room, or repository is mandatory for identity creation.

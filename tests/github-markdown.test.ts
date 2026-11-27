@@ -5,16 +5,16 @@ import { pullRequestBody } from "../server/pr-draft.js";
 
 const shot = "![before.png](/api/boards/b1/cards/c1/attachments/a1)";
 
-test("githubMarkdown replaces Bakery-relative image and file links with text that names the file", () => {
+test("githubMarkdown replaces Alice-relative image and file links with text that names the file", () => {
   const out = githubMarkdown(
     `Before:\n${shot}\n[run.log](/api/boards/b1/cards/c1/attachments/a2)`,
   );
   assert.doesNotMatch(out, /\/api\//);
   assert.match(
     out,
-    /Screenshot before\.png: kept in Bakery.*not published to GitHub/,
+    /Screenshot before\.png: kept in Alice.*not published to GitHub/,
   );
-  assert.match(out, /run\.log \(kept in Bakery as a card attachment/);
+  assert.match(out, /run\.log \(kept in Alice as a card attachment/);
 });
 
 test("githubMarkdown leaves external links, code and plain text alone", () => {
@@ -31,7 +31,7 @@ test("a pull request body built from a report carries no relative attachment URL
   );
   assert.doesNotMatch(body, /\(\/api\//);
   assert.match(body, /before\.png/);
-  assert.match(body, /Opened by Bakery for card `c1`/);
+  assert.match(body, /Opened by Alice for card `c1`/);
 });
 
 test("githubMarkdown leaves unrelated /api links alone and rewrites chat images", () => {

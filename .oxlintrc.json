@@ -30,8 +30,7 @@
   "overrides": [
     {
       "files": [
-        "src/**",
-        "scripts/**"
+        "src/**"
       ],
       "rules": {
         "no-restricted-imports": [
@@ -43,7 +42,29 @@
                   "**/server/*",
                   "**/server"
                 ],
-                "message": "The browser bundle and the CLI must not pull in server code. Move what both sides need into shared/."
+                "message": "The browser bundle must not pull in server code. Move what both sides need into shared/."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "scripts/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/server/*",
+                  "**/server",
+                  "!**/server/legacy-names.ts"
+                ],
+                "message": "The CLI must not pull in server code. Move what both sides need into shared/. Only server/legacy-names.ts, which maps Bakery's old env names and data dir to Alice's, is allowed."
               }
             ]
           }

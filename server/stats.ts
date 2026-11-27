@@ -1,4 +1,4 @@
-// Aggregates what Bakery already records per card (runs, agent reviews, usage) for the Statistics page.
+// Aggregates what Alice already records per card (runs, agent reviews, usage) for the Statistics page.
 import type { DayPoint, GroupRow, Stats } from "../shared/wire.js";
 export type { DayPoint, GroupRow, Stats };
 export type StatsRun = { repo: string; cardId: string; status: string; startedBy: string; agent: string; ciFix: number; startedAt: string; finishedAt: string | null; cost: number | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null; cacheTasks: number; cacheHits: number; cacheSavedMs: number };

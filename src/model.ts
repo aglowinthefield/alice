@@ -13,12 +13,17 @@ export type { Card, ReviewAction, ReviewWait, Run } from "../shared/wire.js";
 export {
   agentApproved,
   cardActivity,
+  needsYouLabels,
+  needsYouStatuses,
   needsYourReview,
   quietAfterMs,
   reviewActionLabels,
   reviewActionText,
+  reviewOrder,
   reviewWaitLabels,
   reviewWaitText,
+  searchRank,
+  todaySections,
   waitingOn,
 } from "../shared/card-state.js";
 export type Status = CardStatus;
@@ -34,13 +39,13 @@ export type Board = {
   integrationConfigured?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
-  /** A sync problem Bakery is retrying (a failed fetch); pickup is not paused. */
+  /** A sync problem Alice is retrying (a failed fetch); pickup is not paused. */
   integrationWarning?: string;
   /** When GitHub sync last completed. */
   integrationSyncedAt?: string | null;
   /** The operator picked the integration mode; detection leaves it alone. */
   integrationChosen?: boolean;
-  /** Whether GitHub main only accepts pull requests; null until Bakery could check. */
+  /** Whether GitHub main only accepts pull requests; null until Alice could check. */
   githubMainProtected?: boolean | null;
   /** What the GitHub main check found, or why it could not run. */
   integrationNote?: string;
@@ -92,7 +97,7 @@ export type AutoReviewJob = {
   /** JSON list of `{ path, line?, comment }` the agent reviewer sent the card back with; empty when none. */
   changes: string;
 } & UsageFields;
-export type BakerySettings = {
+export type AliceSettings = {
   confirmRunStart: boolean;
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
@@ -107,7 +112,7 @@ export type BakerySettings = {
   /** The limit in force (automatic resolved) and the agents running now. */
   activeAgentsLimit?: number;
   activeAgents?: number;
-  /** False when the server has no BAKERY_TELEMETRY_ENDPOINT; the toggle is then hidden. */
+  /** False when the server has no ALICE_TELEMETRY_ENDPOINT; the toggle is then hidden. */
   telemetryAvailable?: boolean;
 };
 export type ReviewComment = {

@@ -45,7 +45,7 @@ test("a repository's Card retries model is saved with its other models and is no
     await retry.fill(" anthropic/claude-opus-4-1 ");
     await page.getByRole("combobox", { name: "Card retries thinking" }).selectOption("high");
     await retry.scrollIntoViewIfNeeded();
-    if (process.env.BAKERY_SCREENSHOT) await retry.locator("xpath=ancestor::form").screenshot({ path: process.env.BAKERY_SCREENSHOT });
+    if (process.env.ALICE_SCREENSHOT) await retry.locator("xpath=ancestor::form").screenshot({ path: process.env.ALICE_SCREENSHOT });
     await save.click();
     await page.waitForFunction(() => (document.querySelector("button[type=submit]:disabled")));
     assert.deepEqual(patches, [{ agentModels: { ...emptyAgentModels(), work: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, retry: { model: "anthropic/claude-opus-4-1", thinking: "high" } } }]);

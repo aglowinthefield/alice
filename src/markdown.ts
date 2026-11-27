@@ -307,7 +307,7 @@ function parseBlocks(lines: string[], depth: number): Block[] {
 
 const SAFE_URL = /^(?:https?:\/\/|mailto:)/i;
 /**
- * Images render only from Bakery's own stored files: chat images and card attachments. Any other source, a local path
+ * Images render only from Alice's own stored files: chat images and card attachments. Any other source, a local path
  * such as /tmp/shot.png or a remote URL, stays text, so markdown never makes the browser fetch outside these routes.
  */
 const IMAGE_URL =

@@ -548,7 +548,7 @@ export class GraphScene {
     title.style.textShadow = shadow;
     const activity = document.createElement("div");
     activity.className =
-      "mt-px font-mono text-[10.5px] leading-[1.3] whitespace-nowrap";
+      "mt-px font-mono text-[11px] leading-[1.3] whitespace-nowrap";
     activity.style.textShadow = shadow;
     label.append(title, activity);
     this.labels.appendChild(label);

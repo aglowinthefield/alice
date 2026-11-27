@@ -46,7 +46,7 @@ export const quietAfterMs = 5 * 60_000;
 
 /**
  * Whether work is happening on the card right now: an agent is `working`, the card is `waiting` on something
- * outside Bakery, or a running agent has gone `quiet`. Null when nothing is in flight.
+ * outside Alice, or a running agent has gone `quiet`. Null when nothing is in flight.
  */
 export function cardActivity(
   card: Pick<Card, "status" | "lastActivityAt" | "reviewWait" | "reviewQueue">,
@@ -82,3 +82,69 @@ export const waitingOn = <T extends Pick<Card, "id" | "status">>(
         .map((id) => cards.find((item) => item.id === id))
         .filter((item): item is T => !!item && !isFinished(item.status))
     : [];
+
+/**
+ * The search behind the command palette and the TUI's /: an item matches when its label and keywords hold every
+ * word of the query. Labels that start with the first word come first; the rest keep their order.
+ */
+export const searchRank = <T extends { label: string; keywords?: string }>(
+  items: T[],
+  query: string,
+) => {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return items;
+  const found = items.filter((item) => {
+    const text = `${item.label} ${item.keywords ?? ""}`.toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+  const lead = (item: T) =>
+    item.label.toLowerCase().startsWith(terms[0]) ? 0 : 1;
+  return found.sort((a, b) => lead(a) - lead(b));
+};
+
+// What each status asks of you on Today. Statuses not listed (Triage, Ready, Archived) stay on their boards.
+export const needsYouLabels: Partial<Record<CardStatus, string>> = {
+  review: "Review",
+  failed: "Failed",
+  interrupted: "Interrupted",
+};
+export const needsYouStatuses = Object.keys(needsYouLabels) as CardStatus[];
+const oldestFirst = (a: Pick<Card, "updatedAt">, b: Pick<Card, "updatedAt">) =>
+  a.updatedAt.localeCompare(b.updatedAt);
+
+/**
+ * Review cards in the order the queue walks them: the longest-waiting first. Cards an agent, CI or GitHub
+ * still has are left out until they need you.
+ */
+export const reviewOrder = (cards: Card[]) =>
+  cards.filter(needsYourReview).sort(oldestFirst);
+
+/**
+ * Today's lists across every board, for the web page and the terminal alike. `attention` needs you (Review, then
+ * Failed and Interrupted, oldest first); `approved` waits only for your Approve, so it stays out of attention;
+ * `running` is in flight, an agent's review included; `finished` is Done since `since`, newest first.
+ */
+export function todaySections(cards: Card[], since: string) {
+  const attention = cards
+    .filter(
+      (card) =>
+        card.status in needsYouLabels &&
+        (card.status !== "review" ||
+          (needsYourReview(card) && !agentApproved(card))),
+    )
+    .sort(
+      (a, b) =>
+        needsYouStatuses.indexOf(a.status) -
+          needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
+    );
+  const approved = cards.filter(agentApproved).sort(oldestFirst);
+  const running = cards.filter(
+    (card) =>
+      card.status === "running" ||
+      (card.status === "review" && card.reviewWait),
+  );
+  const finished = cards
+    .filter((card) => card.status === "done" && card.updatedAt > since)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { attention, approved, running, finished };
+}

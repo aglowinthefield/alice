@@ -11,4 +11,5 @@ src-tauri/target/
 src-tauri/gen/
 
 ios/build/
+ios/Alice.xcodeproj/
 ios/Bakery.xcodeproj/

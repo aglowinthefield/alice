@@ -1,5 +1,6 @@
-// The board as a terminal sees it: the web board's lanes and card badges, as text. The badge rules come from the web
-// app's src/model.ts (Node 24 strips its types), so the terminal and the browser cannot disagree on "Your turn".
+// The board as a terminal sees it: the web board's lanes and card badges, as text. The badge rules come from
+// shared/card-state.ts, which the web app uses too (Node 24 strips its types), so the terminal and the browser
+// cannot disagree on "Your turn".
 import { cardActivity, needsYourReview, reviewActionText, reviewWaitText, waitingOn } from "../shared/card-state.ts";
 import { c, paint } from "./cli-style.mjs";
 

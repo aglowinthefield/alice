@@ -1992,7 +1992,6 @@ export function App() {
                       className="flex w-full min-w-0 items-start gap-2.5 px-3 pb-0 pt-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
                     >
-                      <RepoBadge board={item} />
                       <span className="truncate text-[14px] font-medium leading-4 text-foreground">
                         {repoName(item.repo)}
                       </span>
@@ -2005,7 +2004,7 @@ export function App() {
                     </button>
                     <ul
                       aria-label="Card counts"
-                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-13.5 pr-3"
+                      className="mt-1 flex h-4 items-center gap-3 pb-0 pl-3 pr-3"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;

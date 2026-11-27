@@ -664,10 +664,12 @@ export function MergeConflictPanel({
           ))}
         </ul>
         <p className="mt-4 text-muted-foreground">
-          Choose Fix conflict with Pi to ask the agent to reconcile the card
-          branch with current main. It can commit the resolution on that branch,
-          but cannot merge into main. Review its changes before approving again.
-          You can also resolve the branch yourself in its worktree.
+          Bakery already tried what it repairs on its own (up to three automatic
+          repairs per card), so this one is left to you. Choose Fix conflict
+          with Pi to ask the agent to reconcile the card branch with current
+          main. It can commit the resolution on that branch, but cannot merge
+          into main. Review its changes before approving again. You can also
+          resolve the branch yourself in its worktree.
         </p>
         <details className="mt-3 text-xs">
           <summary className="cursor-pointer text-muted-foreground">

@@ -141,9 +141,10 @@ export class Worker {
     const recoveryPrompt = recoverFrom ? `\n\n${RECOVERY.trim()}${earlierReport ? ` The last report an earlier attempt on this card wrote (it may be out of date):\n\n${earlierReport.slice(0, 4000)}` : ""}` : "";
     const prompt = `Task from Bakery card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Bakery turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged bakery-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Bakery turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
     // Handed to this run; a later run should not see the same failures again.
-    if (ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
+    const conflictRepair = !!conflict && (ciFeedback?.source === "conflict" || ciFeedback?.source === "merge");
+    if (ciPrompt || pushPrompt || commitPrompt || commentPrompt || conflictRepair) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
     const phase = conflict ? "conflict" : "work";
-    const handedOff = ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
+    const handedOff = ciPrompt || pushPrompt || commitPrompt || commentPrompt || conflictRepair ? ciFeedback : undefined;
     const launch = () => this.launchPi(card, run, worktree, prompt, phase, handedOff);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
@@ -169,6 +170,43 @@ export class Worker {
     if (this.draining) return false;
     const hook = this.board.getCiFeedback(card.id)?.source === "commit" ? "commit hook" : "pre-push hook";
     try { this.start(card, "manual", `to fix the failing ${hook}`); return true; }
+    catch (error) {
+      if (error instanceof RunLimitError) return false;
+      this.board.clearCiFeedback(card.id);
+      throw error;
+    }
+  }
+  /**
+   * Approve found that main moved and now conflicts with the card. Under `loopGuards.conflictRepairs` (shared with PR
+   * conflict repairs) it counts a repair and sends the conflict to the card's agent, now or once a run slot frees up.
+   * The repair returns to Review and needs a fresh Approve. "capped" and "failed" leave the conflict for a person.
+   */
+  repairApproveConflict(card: Card, files: string[], details: string): "started" | "waiting" | "capped" | "failed" {
+    const used = this.board.getCard(card.id)?.conflictRepairs ?? 0, cap = loopGuards.conflictRepairs;
+    const where = files.length ? ` in ${files.join(", ")}` : "";
+    if (used >= cap) {
+      this.board.noteCard(card.id, `Approve found that main conflicts with this card${where}. Bakery stopped repairing it automatically because ${cap} automatic repairs have already been tried; a person needs to resolve it`);
+      return "capped";
+    }
+    this.board.recordApproveConflictRepair(card.id, files, details);
+    this.board.noteCard(card.id, `Approve found that main moved and conflicts with this card${where}. Nothing was merged; Bakery sent it to the agent to reconcile the card branch with main (automatic conflict repair ${used + 1} of ${cap})`);
+    try {
+      if (this.startConflictRepair(this.board.getCard(card.id)!)) return "started";
+      this.board.noteCard(card.id, "The conflict repair waits for a free agent slot (the repository or machine is at its run limit, or Bakery is restarting)");
+      return "waiting";
+    } catch (error) {
+      this.board.noteCard(card.id, `Could not start the automatic conflict repair: ${error instanceof Error ? error.message : String(error)}`);
+      return "failed";
+    }
+  }
+  /**
+   * Starts the repair run for an Approve conflict recorded by `repairApproveConflict`. False when no run can start yet
+   * (run limit, or draining): the conflict stays waiting and `AutoPickup` retries it. Any other failure drops the
+   * waiting repair, so the conflict shows for a person, and throws.
+   */
+  startConflictRepair(card: Card): boolean {
+    if (this.draining) return false;
+    try { this.start(card, "manual", "to repair the conflict with main that Approve found"); return true; }
     catch (error) {
       if (error instanceof RunLimitError) return false;
       this.board.clearCiFeedback(card.id);
@@ -388,10 +426,19 @@ export class Worker {
       this.board.finish(run.id, ok ? "review" : "failed", ok ? null : `${failure}${protocolError ? `; ${protocolError}` : ""}${stderr.trim() ? `; stderr: ${stderr.trim().slice(-1500)}` : ""}`, ok ? null : failureKind, !reason && !signal && !protocolError && code === 0);
       if (!ok) console.error(`Pi exit for run ${run.id}: pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"} source=${reason ?? "unknown"} elapsedMs=${Date.now() - startedAt}`);
       if (stderr) console.error(`Pi diagnostics for run ${run.id}:`, stderr);
+      if (ok && phase === "conflict" && this.board.integrationFor(card.repo) !== "github-pr") this.noteLocalRepair(card, run, worktree);
       if (retryPlain) this.retryWithoutNarration(card, run, worktree, prompt.replace(NARRATION, PLAIN_RETRY), phase, handedOff);
       else if (!ok && failureKind === "invalid-history") this.recoverAfterRejection(card, run, handedOff);
     });
     return this.board.getRun(run.id)!;
+  }
+  /** Says on the card whether a local conflict repair brought main into the branch; either way it waits for a fresh Approve. */
+  private noteLocalRepair(card: Card, run: Run, worktree: string) {
+    let reconciled = false;
+    try { reconciled = isAncestor(worktree, "main", "HEAD"); } catch { /* Report it as not reconciled. */ }
+    this.board.noteCard(card.id, reconciled
+      ? `Main moved since this card was reviewed; attempt ${run.attempt} reconciled the card branch with main. Nothing was merged: review the new head and approve again`
+      : `Attempt ${run.attempt} finished the conflict repair without merging main into the card branch, so Approve will conflict again. Read its report, then resolve it in the card worktree`);
   }
   /**
    * A rejected session history fails identically on every resume. Hand back the feedback the run took, then start one

@@ -58,7 +58,8 @@ export function parsePriority(value: unknown): CardPriority {
 }
 /** The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup. */
 /** Why a card has feedback waiting for its next run: failed CI, a refused push, a merge conflict, or a request made on the PR. */
-export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment";
+/** "conflict" is a PR conflict whose repair is pushed without Approve; "merge" is a local Approve conflict whose repair goes back to Review. */
+export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment" | "merge";
 /**
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
  * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
@@ -68,7 +69,8 @@ export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number |
  * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
  * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
  */
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
+/** `conflict_repair`: Approve hit a conflict with main and its automatic repair waits for a run slot. */
+export type ReviewWait = "agent_review" | "ci_fix" | "github" | "conflict_repair";
 /**
  * What a person does next with a Review card that is their turn: approve changed files (`pr_ready`) or close a run
  * that changed none (`accept_findings`). Null while it is not their turn, while the change count is unknown, or while
@@ -622,6 +624,26 @@ export class Board {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  /**
+   * Approve could not merge the card into local main because main moved and conflicts with it. Counts a repair round
+   * against the same `conflictRepairs` cap as PR conflicts, keeps the conflict for the repair run, and leaves it
+   * waiting (source "merge") until a run slot frees up. Unlike a PR repair, the result waits for a fresh Approve.
+   */
+  recordApproveConflictRepair(cardId: string, files: string[], details: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE cards SET conflictRepairs=conflictRepairs+1 WHERE id=?").run(cardId);
+      this.recordMergeFailure(cardId, files, details);
+      this.db.prepare("INSERT INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, '', ?, ?, 'merge') ON CONFLICT(cardId) DO UPDATE SET headSha=excluded.headSha, failures=excluded.failures, createdAt=excluded.createdAt, source='merge'")
+        .run(cardId, details.slice(0, 20_000), now());
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  /** Review cards whose Approve conflict waits for a run slot to go to the agent (see `Worker.startConflictRepair`). */
+  listWaitingConflictRepairs(): Card[] {
+    const ids = (this.db.prepare("SELECT cardId FROM ci_feedback WHERE source='merge' ORDER BY createdAt").all() as { cardId: string }[]).map(row => row.cardId);
+    return ids.map(id => this.getCard(id)).filter((card): card is Card => card?.status === "review");
+  }
   /** Marks a conflict as seen without repairing it (too big, or out of rounds). */
   markConflictHandled(cardId: string, key: string): void {
     this.db.prepare("UPDATE cards SET conflictRepairKey=? WHERE id=?").run(key, cardId);
@@ -976,6 +998,7 @@ export class Board {
       return card.prCiPending || this.getCiFeedback(card.id)?.source === "ci" ? "ci_fix" : null;
     }
     if (this.getAutoReviewJob(run.id)?.state === "running" || this.awaitsAutoReview(repoBoard, card.id, run)) return "agent_review";
+    if (this.getCiFeedback(card.id)?.source === "merge") return "conflict_repair";
     return null;
   }
   /** See `ReviewAction`. Mirrors when card details offer Approve or Accept findings. */
@@ -1477,14 +1500,19 @@ export class Board {
     return row && { cardId: row.cardId, files: JSON.parse(row.files) as string[], details: row.details };
   }
   listMergeFailures(repo: string): MergeFailure[] {
-    return (this.db.prepare("SELECT merge_failures.* FROM merge_failures JOIN cards ON cards.id=merge_failures.cardId WHERE cards.repo=? AND cards.status IN ('review', 'failed')").all(repo) as { cardId: string; files: string; details: string }[])
+    // A conflict waiting for its automatic repair run is Bakery's turn, not the person's.
+    return (this.db.prepare("SELECT merge_failures.* FROM merge_failures JOIN cards ON cards.id=merge_failures.cardId WHERE cards.repo=? AND cards.status IN ('review', 'failed') AND NOT EXISTS (SELECT 1 FROM ci_feedback WHERE ci_feedback.cardId=cards.id AND ci_feedback.source='merge')").all(repo) as { cardId: string; files: string; details: string }[])
       .map(row => ({ cardId: row.cardId, files: JSON.parse(row.files) as string[], details: row.details }));
   }
   recordMergeFailure(cardId: string, files: string[], details: string): void {
     this.db.prepare("INSERT INTO merge_failures(cardId, files, details) VALUES (?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET files=excluded.files, details=excluded.details")
       .run(cardId, JSON.stringify(files), details);
   }
-  clearMergeFailure(cardId: string): void { this.db.prepare("DELETE FROM merge_failures WHERE cardId=?").run(cardId); }
+  /** Also drops a repair still waiting for a slot: with the conflict gone there is nothing for it to repair. */
+  clearMergeFailure(cardId: string): void {
+    this.db.prepare("DELETE FROM merge_failures WHERE cardId=?").run(cardId);
+    this.db.prepare("DELETE FROM ci_feedback WHERE cardId=? AND source='merge'").run(cardId);
+  }
   getApproval(cardId: string): Approval | undefined {
     return this.db.prepare("SELECT * FROM approvals WHERE cardId=? AND merged=0").get(cardId) as Approval | undefined;
   }

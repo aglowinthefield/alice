@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker } from "../server/worker.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
+import { AutoPickup } from "../server/auto-pickup.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
   const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
@@ -327,6 +328,103 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
     assert.equal(retry.attempt, 3);
     assert.deepEqual(board.listMergeFailures(repo), []);
     assert.equal(git("rev-parse", "main"), main);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** A reviewed card whose README edit conflicts with a newer commit on main, so Approve throws IntegrationConflictError. */
+async function approveConflict(dir: string, fakePiScript: string) {
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake");
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  writeFileSync(join(repo, "README.md"), "initial\n");
+  git("add", "README.md");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
+  writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fakePi, 0o755);
+  const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi), integration = new Integration(board, data);
+  const repoBoard = board.addRepo(repo);
+  const card = board.createCard({ title: "Conflicting change", body: "Update README", repo });
+  board.setStatus(card.id, "ready");
+  const first = worker.start(board.getCard(card.id)!);
+  await waitFor(() => board.getRun(first.id)?.status === "review");
+  writeFileSync(join(first.worktree!, "README.md"), "card change\n");
+  writeFileSync(join(repo, "README.md"), "main change\n");
+  git("add", "README.md");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "main change");
+  const reviewed = integration.review(board.getCard(card.id)!).fingerprint;
+  let conflict: IntegrationConflictError | undefined;
+  try { integration.approve(board.getCard(card.id)!, reviewed); } catch (error) { if (error instanceof IntegrationConflictError) conflict = error; else throw error; }
+  assert.ok(conflict, "Approve should hit the conflict");
+  writeFileSync(fakePi, fakePiScript);
+  return { repo, board, worker, integration, repoBoard, card: board.getCard(card.id)!, conflict, reviewed, git, worktree: first.worktree! };
+}
+
+test("a conflict on Approve starts a counted repair once a slot frees up, and the repair returns the card to Review for a fresh approval", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  try {
+    // The repair agent takes main's side of the conflict and commits the merge on the card branch.
+    const resolve = `#!/bin/sh\ngit -c user.name=Test -c user.email=test@example.invalid merge -q -X theirs --no-edit main >/dev/null 2>&1\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`;
+    const { repo, board, worker, integration, repoBoard, card, conflict, reviewed, git } = await approveConflict(dir, resolve);
+    const main = git("rev-parse", "main");
+    board.setAutoReview(repoBoard.id, true);
+    // Every agent slot is taken, so the repair waits like other automatic work.
+    board.updateSettings({ maxActiveAgents: 1 });
+    const other = board.createCard({ title: "Holds the slot", body: "", repo });
+    board.setStatus(other.id, "ready");
+    const holder = board.claim(other.id, "manual");
+    assert.equal(worker.repairApproveConflict(card, conflict.files, conflict.details), "waiting");
+    assert.equal(board.getCard(card.id)?.conflictRepairs, 1);
+    assert.equal(board.getCard(card.id)?.status, "review");
+    assert.equal(board.getCard(card.id)?.reviewWait, "conflict_repair");
+    assert.deepEqual(board.listMergeFailures(repo), [], "no banner while the repair waits");
+    assert.equal(board.listRuns(card.id).length, 1);
+    // The slot frees up: the next pickup tick starts the repair without a click.
+    board.finish(holder.id, "failed", "done holding");
+    new AutoPickup(board, worker).tick();
+    const repair = board.listRuns(card.id)[0];
+    assert.equal(repair.attempt, 2);
+    assert.equal(repair.ciFix, 0, "a local repair is never pushed or merged without Approve");
+    await waitFor(() => board.getRun(repair.id)?.status === "review");
+    const back = board.getCard(card.id)!;
+    assert.equal(back.status, "review");
+    assert.deepEqual(board.listMergeFailures(repo), []);
+    assert.equal(git("rev-parse", "main"), main, "nothing merged into main");
+    assert.ok(board.listCardEvents(card.id).some(event => /Main moved since this card was reviewed; attempt 2 reconciled the card branch with main/.test(event.reason)));
+    assert.ok(board.listCardEvents(card.id).some(event => /automatic conflict repair 1 of 3/.test(event.reason)));
+    // Auto-review is on, so the new head goes to the agent reviewer before the person.
+    assert.equal(back.reviewWait, "agent_review");
+    // The earlier approval does not carry over: Approve needs a review of the new head.
+    board.setAutoReview(repoBoard.id, false);
+    assert.throws(() => integration.approve(board.getCard(card.id)!, reviewed), /changed since review/);
+    assert.equal(integration.approve(board.getCard(card.id)!, integration.review(board.getCard(card.id)!).fingerprint).status, "done");
+    assert.equal(readFileSync(join(repo, "README.md"), "utf8"), "main change\n");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a conflict on Approve past the shared conflict-repair cap shows the banner and leaves the manual repair to a person", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-worker-"));
+  try {
+    const { repo, board, worker, card, conflict } = await approveConflict(dir, `#!/bin/sh\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    // Three repairs used, by PR conflicts or earlier Approves: they share one counter.
+    const db = new DatabaseSync(join(dir, "board.sqlite"));
+    db.prepare("UPDATE cards SET conflictRepairs=3 WHERE id=?").run(card.id);
+    db.close();
+    assert.equal(worker.repairApproveConflict(board.getCard(card.id)!, conflict.files, conflict.details), "capped");
+    assert.equal(board.getCard(card.id)?.conflictRepairs, 3);
+    assert.equal(board.listRuns(card.id).length, 1, "no automatic run");
+    assert.equal(board.getCard(card.id)?.reviewWait, null);
+    assert.deepEqual(board.listMergeFailures(repo).map(item => item.files), [["README.md"]]);
+    assert.ok(board.listCardEvents(card.id).some(event => /3 automatic repairs have already been tried/.test(event.reason)));
+    new AutoPickup(board, worker).tick();
+    assert.equal(board.listRuns(card.id).length, 1, "pickup does not start it either");
+    // Fix conflict with Pi still starts a conflict repair over the cap.
+    const manual = worker.start(board.getCard(card.id)!, "manual", "", undefined, true);
+    await waitFor(() => board.getRun(manual.id)?.status === "review");
+    assert.deepEqual(board.listMergeFailures(repo), []);
+    // This fake agent merged nothing, and the card says so rather than claiming a reconciled branch.
+    assert.ok(board.listCardEvents(card.id).some(event => /without merging main into the card branch/.test(event.reason)));
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

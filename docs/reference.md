@@ -160,7 +160,11 @@ flowchart TD
   B -->|no| C[Commit all unignored changes<br/>on the card branch]
   C --> D[Merge with current main<br/>in a temporary worktree]
   D --> E{Conflicts or<br/>whitespace errors?}
-  E -->|yes| F[Card stays in Review<br/>and shows the conflicting files]
+  E -->|yes| K{Fewer than 3 conflict<br/>repairs on this card?}
+  K -->|yes| L[Pi repairs it on the card branch,<br/>once an agent slot is free]
+  L --> M[Back to Review:<br/>agent review if on, then you]
+  M --> A
+  K -->|no, or the repair failed| F[Card stays in Review<br/>and shows the conflicting files]
   F --> G[Fix conflict with Pi,<br/>or resolve it yourself]
   G --> A
   E -->|no| H[Fast-forward main]
@@ -172,7 +176,8 @@ In the repository's settings, **Push main to origin after merging** (local-merge
 - Manual approval doesn't run tests or CI, and doesn't push.
 - Bakery commits and merges as you: your Git `user.name` and `user.email`, signed if your config signs commits (`commit.gpgsign`). Only a repository with no name or email configured gets `Bakery <bakery@localhost>` in its place.
 - Your own uncommitted edits on `main` stay in place. Git refuses a merge that would overwrite them.
-- **Fix conflict with Pi** starts a new attempt in the card's worktree. Pi may merge `main` into the card branch and commit there, but must not touch `main`.
+- A conflict sends the card to Pi on its own: Bakery starts a conflict-repair attempt as soon as an agent slot is free. These repairs share the card's limit of 3 with pull-request conflict repairs. The conflicting files show only once that limit is used up or the repair run fails.
+- **Fix conflict with Pi** starts a new attempt in the card's worktree, past the limit too. Pi may merge `main` into the card branch and commit there, but must not touch `main`.
 - After a conflict fix, you review the result again before it merges.
 - If approval fails in another way, **Withdraw approval** unlocks the card for revision. It never removes commits or worktrees. If `main` has already moved, Bakery refuses and asks you to inspect.
 - Diffs over 200 files or 2 MB can't be approved in Bakery. Binary files need checking in the worktree.

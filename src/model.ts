@@ -288,7 +288,11 @@ export type CountKey = Status | "reviewWaiting";
 /** The `cardCounts` bucket a card falls in. */
 export const countKey = (card: Card): CountKey =>
   card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
+export type ReviewWait =
+  | "agent_review"
+  | "ci_fix"
+  | "github"
+  | "conflict_repair";
 /**
  * `agent_approved`: the agent reviewer approved the latest attempt and only your Approve is left.
  * `needs_you`: the agent reviewer handed the attempt to you with a finding or a failed check.
@@ -316,6 +320,7 @@ export const reviewWaitLabels: Record<ReviewWait, string> = {
   agent_review: "Agent reviewing",
   ci_fix: "CI fix queued",
   github: "Waiting on GitHub",
+  conflict_repair: "Conflict repair queued",
 };
 /** The label for a Review card's wait; a queued agent review says where it stands. */
 export const reviewWaitText = (card: Card): string =>

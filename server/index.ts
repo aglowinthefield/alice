@@ -823,7 +823,16 @@ const server = createServer(async (req, res) => {
             void githubSync.syncBoard(repoBoard.id);
             send(res, 200, card); return;
           }
-          send(res, 200, integration.approve(item, fingerprint)); return;
+          try { send(res, 200, integration.approve(item, fingerprint)); }
+          catch (error) {
+            // Main moved and conflicts: like a PR conflict, the agent repairs it unattended until the shared cap is
+            // used up. Only a capped or failed repair answers 409, which shows the conflict to the person.
+            if (!(error instanceof IntegrationConflictError)) throw error;
+            const outcome = worker.repairApproveConflict(item, error.files, error.details);
+            if (outcome === "capped" || outcome === "failed") throw error;
+            send(res, 202, board.getCard(id));
+          }
+          return;
         }
         if (req.method === "POST" && action === "create-plan") { send(res, 201, board.createPlanCards(id)); return; }
         if (req.method === "POST" && action === "accept-findings") {

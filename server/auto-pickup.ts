@@ -2,7 +2,7 @@ import type { Board } from "./board.js";
 import type { Worker } from "./worker.js";
 
 // The database claim is the final concurrency/cap guard. This timer only chooses eligible Ready cards, and Review
-// cards whose refused push waits for a slot; it never resumes interrupted runs or restarts failed ones, which wait in their lanes without holding up other cards. Like the start
+// cards whose refused push or Approve conflict waits for a slot; it never resumes interrupted runs or restarts failed ones, which wait in their lanes without holding up other cards. Like the start
 // limit, a reached cost budget only makes pickup wait; spend already running is never stopped.
 export class AutoPickup {
   private timer?: ReturnType<typeof setInterval>;
@@ -21,6 +21,14 @@ export class AutoPickup {
         this.worker.startHookFix(card);
       } catch (error) {
         this.board.noteCard(card.id, `Could not send the refused push's hook output to the agent: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    // So does a conflict Approve found: the operator approved, and main moved under it.
+    for (const card of this.board.listWaitingConflictRepairs()) {
+      try {
+        this.worker.startConflictRepair(card);
+      } catch (error) {
+        this.board.noteCard(card.id, `Could not start the automatic conflict repair: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {

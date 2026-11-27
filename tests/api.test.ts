@@ -537,6 +537,86 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
   }
 });
 
+test("Approve that conflicts with main starts a repair without a click until the cap, then answers 409 with the conflict", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bakery-approve-conflict-"));
+  const repo = join(home, "code", "alpha");
+  mkdirSync(repo, { recursive: true });
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { encoding: "utf8" }).trim();
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  writeFileSync(join(repo, "README.md"), "initial\n");
+  git("add", "README.md");
+  git("commit", "-qm", "initial");
+  // The first attempt edits README; a repair run changes nothing, so the conflict stays and Approve hits it again.
+  const fakePi = join(home, "fake-pi");
+  writeFileSync(fakePi, `#!/bin/sh
+case "$*" in *merge-conflict*) ;; *) printf 'card change\\n' > README.md ;; esac
+echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
+`);
+  chmodSync(fakePi, 0o755);
+  const port = await freePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stderr?.on("data", chunk => { output += chunk.toString(); });
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    async function request(path: string, method = "GET", input?: unknown) {
+      const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
+      return { status: response.status, data: await response.json() };
+    }
+    const deadline = Date.now() + 5000;
+    while (true) {
+      try { await fetch(`${url}/api/boards`); break; }
+      catch {
+        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    const board = (await request("/boards", "POST", { repo })).data;
+    const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Conflicting change", body: "" })).data;
+    const base = `/boards/${board.id}/cards/${card.id}`;
+    await request(`${base}/status`, "POST", { status: "ready" });
+    assert.equal((await request(`${base}/start`, "POST")).status, 202);
+    const wait = async (attempts: number) => {
+      const until = Date.now() + 15_000;
+      while (Date.now() < until) {
+        const runs = (await request(`${base}/runs`)).data as { status: string }[];
+        if (runs.length === attempts && runs[0].status === "review") return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error(`Expected ${attempts} attempts in review: ${output}`);
+    };
+    await wait(1);
+    writeFileSync(join(repo, "README.md"), "main change\n");
+    git("commit", "-qam", "main change");
+    const main = git("rev-parse", "main");
+    const approve = async () => request(`${base}/approve`, "POST", { fingerprint: (await request(`${base}/review?fingerprint=1`)).data.fingerprint });
+    for (let repair = 1; repair <= 3; repair++) {
+      const approved = await approve();
+      assert.equal(approved.status, 202, JSON.stringify(approved.data));
+      assert.equal(approved.data.conflictRepairs, repair);
+      assert.deepEqual((await request(`/boards/${board.id}/conflicts`)).data, []);
+      await wait(repair + 1);
+    }
+    const capped = await approve();
+    assert.equal(capped.status, 409);
+    assert.equal(capped.data.code, "merge_conflict");
+    assert.deepEqual(capped.data.files, ["README.md"]);
+    assert.deepEqual((await request(`/boards/${board.id}/conflicts`)).data.map((item: { files: string[] }) => item.files), [["README.md"]]);
+    assert.equal(((await request(`${base}/runs`)).data as unknown[]).length, 4, "no repair past the cap");
+    assert.equal(git("rev-parse", "main"), main);
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise(resolve => child.once("close", resolve));
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("requesting changes while the pushed PR waits on GitHub keeps the comments and starts nothing, even during a drain", async () => {
   const home = mkdtempSync(join(tmpdir(), "bakery-reqwait-"));
   const repo = join(home, "code", "alpha");

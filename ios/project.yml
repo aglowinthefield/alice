@@ -1,4 +1,4 @@
-name: Bakery
+name: Alice
 options:
   bundleIdPrefix: dev.bakery
   deploymentTarget:
@@ -10,14 +10,14 @@ settings:
     MARKETING_VERSION: "0.1"
     CURRENT_PROJECT_VERSION: "1"
 targets:
-  Bakery:
+  Alice:
     type: application
     platform: iOS
     sources:
-      - path: Bakery
+      - path: Alice
         excludes:
           - "Resources/Icons"
-      - path: Bakery/Resources/Icons
+      - path: Alice/Resources/Icons
         type: folder
         buildPhase: resources
     settings:
@@ -26,7 +26,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Bakery
+        INFOPLIST_KEY_CFBundleDisplayName: Alice
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
@@ -34,27 +34,27 @@ targets:
         DEVELOPMENT_TEAM: MYFY26Q83G
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
     info:
-      path: Bakery/Info.plist
+      path: Alice/Info.plist
       properties:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        NSLocalNetworkUsageDescription: Bakery connects to your Bakery server on your network.
+        NSLocalNetworkUsageDescription: Alice connects to your Alice server on your network.
         UILaunchScreen: {}
-  BakeryUITests:
+  AliceUITests:
     type: bundle.ui-testing
     platform: iOS
-    sources: [BakeryUITests]
+    sources: [AliceUITests]
     dependencies:
-      - target: Bakery
+      - target: Alice
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: dev.bakery.ios.uitests
-        TEST_TARGET_NAME: Bakery
+        TEST_TARGET_NAME: Alice
 schemes:
-  Bakery:
+  Alice:
     build:
       targets:
-        Bakery: all
+        Alice: all
     test:
-      targets: [BakeryUITests]
+      targets: [AliceUITests]

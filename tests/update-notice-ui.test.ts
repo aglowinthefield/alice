@@ -93,6 +93,6 @@ test("a UI-only update installs without waiting on runs, then offers to reload o
     await changelog.getByText("Only the interface changed, so runs keep going.").waitFor();
     await changelog.getByRole("button", { name: "Update interface" }).click();
     await page.getByTestId("update-notice-reload").waitFor({ timeout: 10_000 });
-    await page.getByRole("status").getByText("Bakery's interface was updated.").waitFor();
+    await page.getByRole("status").getByText("Alice's interface was updated.").waitFor();
   } finally { await close(); }
 });

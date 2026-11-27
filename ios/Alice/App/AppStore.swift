@@ -114,7 +114,7 @@ final class AppStore: ObservableObject {
     }
 
     static func friendly(_ error: Error) -> String {
-        if let e = error as? APIError { return e.status == 403 ? "The server refused this address. Add it to BAKERY_ALLOWED_HOSTS on the server." : e.message }
+        if let e = error as? APIError { return e.status == 403 ? "The server refused this address. Add it to ALICE_ALLOWED_HOSTS on the server." : e.message }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain { return "Can't reach the server (\(ns.localizedDescription))" }
         return error.localizedDescription

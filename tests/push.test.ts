@@ -8,7 +8,7 @@ import { Board } from "../server/board.js";
 import { PushNotifications, type Notice, type Send } from "../server/push.js";
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-push-")), repo = join(dir, "repo");
+  const dir = mkdtempSync(join(tmpdir(), "alice-push-")), repo = join(dir, "repo");
   mkdirSync(repo);
   execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"]);
   writeFileSync(join(repo, "README.md"), "hi\n");

@@ -17,7 +17,7 @@ export function CostBadge({
   return (
     <span
       title={usageTitle(usage)}
-      className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+      className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
     >
       {label}: {formatCost(usage.cost)}
     </span>
@@ -48,7 +48,7 @@ export function AgentBadge({
   return (
     <span
       title={`${phase} agent: ${agent || (pending ? "not reported yet" : "not recorded for this older run")}`}
-      className="min-w-0 max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+      className="min-w-0 max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
     >
       {phase}: {text}
     </span>
@@ -62,7 +62,7 @@ export function errorPrompt(
   card?: Pick<Card, "title" | "repo"> | null,
 ): string {
   const lines = [
-    "A Bakery agent run failed. Investigate the failure and fix the cause.",
+    "A Alice agent run failed. Investigate the failure and fix the cause.",
     "",
   ];
   if (card?.title) lines.push(`Card: ${card.title}`);

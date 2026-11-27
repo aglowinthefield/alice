@@ -35,7 +35,7 @@ test("the threshold is exclusive, per board, 0 turns it off, and only Review car
 });
 
 test("a Review card carries when it entered Review, and each board keeps its own threshold", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-stale-")), repo = join(dir, "repo");
+  const dir = mkdtempSync(join(tmpdir(), "alice-stale-")), repo = join(dir, "repo");
   mkdirSync(repo);
   execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"]);
   writeFileSync(join(repo, "README.md"), "hi\n");

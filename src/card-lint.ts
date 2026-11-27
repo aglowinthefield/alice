@@ -1,5 +1,5 @@
 /**
- * Plain-text checks Bakery runs on a card as it moves from Triage to Ready, before a paid run can start. They look for
+ * Plain-text checks Alice runs on a card as it moves from Triage to Ready, before a paid run can start. They look for
  * asks only a person can meet (a physical device, screenshots by hand, staging or production) and for a body that never
  * says what done looks like: the two kinds of card that reviewers send back most. The flags are advice; the card still
  * moves with one more click.
@@ -93,7 +93,7 @@ function quoteAround(text: string, index: number, length: number): string {
 
 /**
  * The flags to show as a card moves to Ready. Only Triage cards are checked: a card that already ran was committed to
- * before. Sentinel cards are skipped too, since Bakery wrote their text from its own template.
+ * before. Sentinel cards are skipped too, since Alice wrote their text from its own template.
  */
 export function readyFlags(card: {
   title: string;

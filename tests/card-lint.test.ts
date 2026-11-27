@@ -97,5 +97,5 @@ test("only Triage cards written by people are checked on the way to Ready", () =
   assert.deepEqual(readyFlags(card).map(flag => flag.rule), ["person-only", "no-acceptance"]);
   assert.deepEqual(readyFlags({ ...card, status: "failed" }), [], "a retry was committed to before");
   assert.deepEqual(readyFlags({ ...card, status: "done" }), [], "reopening is not a first move to Ready");
-  assert.deepEqual(readyFlags({ ...card, sentinelId: "sentinel-1" }), [], "sentinel cards come from Bakery's own template");
+  assert.deepEqual(readyFlags({ ...card, sentinelId: "sentinel-1" }), [], "sentinel cards come from Alice's own template");
 });

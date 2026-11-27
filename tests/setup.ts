@@ -56,7 +56,7 @@ if (process.platform === "win32") {
   fs.chmodSync = (path: fs.PathLike, mode: fs.Mode) => {
     chmodSync(path, mode);
     const file = String(path);
-    if (/\.(cmd|cjs)$/i.test(file) || /[\\/]hooks[\\/]/.test(file)) return;
+    if (/\.(cmd|cjs)$/i.test(file) || /[\\/]hooks[\\/]/.test(file) || fs.statSync(file).isDirectory()) return;
     const shebang = /^#!(\S+)(?: (\S+))?/.exec(fs.readFileSync(file, "utf8").slice(0, 200));
     if (!shebang) return;
     const node = shebang[2] === "node" || shebang[1].endsWith("/node");

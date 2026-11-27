@@ -388,7 +388,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), sentinels = board.sentinelInProgressCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0, sentinelsInProgress: sentinels[item.repo] ?? 0 }))); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), sentinels = board.sentinelInProgressCounts(), hotspots = board.conflictHotspots(); send(res, 200, board.listBoards().map(item => ({ ...item, conflictHotspots: hotspots[item.repo] ?? [], cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0, sentinelsInProgress: sentinels[item.repo] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
       // Every visible board's cards, for the Today view. Removed boards, archived cards and sentinel jobs stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
@@ -554,6 +554,15 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(conflictsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.listMergeFailures(repoBoard.repo)); return;
+    }
+    const hotspotRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflict-hotspots\/dismiss$/);
+    if (hotspotRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(hotspotRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      const { file } = await body(req);
+      if (typeof file !== "string" || !file || file.length > 4096) { send(res, 400, { error: "file must name the conflicting file" }); return; }
+      board.dismissConflictHotspot(repoBoard.repo, file);
+      send(res, 200, { ok: true }); return;
     }
     // Attachments stream as the raw request body (name in ?name=, type in Content-Type), never through JSON.
     const attachmentRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/([\w-]+)\/attachments(?:\/([\w-]+))?$/);

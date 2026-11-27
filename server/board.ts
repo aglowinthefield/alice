@@ -12,6 +12,7 @@ import { summarizeFailure } from "./failure-summary.js";
 import type { ThemeName } from "../src/themes.js";
 import { featureOffMessage, readFeatures, type Features } from "../src/features.js";
 import { parsePlan } from "../src/plan.js";
+import { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot } from "../src/model.js";
 import { classifyRuns, type RunKind } from "../src/run-kinds.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 import type { StatsInput } from "./stats.js";
@@ -182,6 +183,9 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
 export type AutoReviewJob = { cardId: string; runId: string; state: "running" | "needs_human" | "approved" | "merged" | "pull_request"; details: string; fingerprint: string; startedAt: string; finishedAt: string | null; agent: string; interruptions: number; requeued: number; changes: string } & UsageFields;
 export type MergeFailure = { cardId: string; files: string[]; details: string };
+export { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot };
+// Conflict events older than this are pruned; only the hotspot window reads them.
+const conflictEventRetentionDays = 30;
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
 const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
@@ -247,6 +251,9 @@ export class Board {
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS merge_failures (cardId TEXT PRIMARY KEY, files TEXT NOT NULL, details TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conflict_events (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, cardId TEXT NOT NULL, file TEXT NOT NULL, createdAt TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS conflict_events_window ON conflict_events(createdAt, repo, file);
+      CREATE TABLE IF NOT EXISTS conflict_hotspot_dismissals (repo TEXT NOT NULL, file TEXT NOT NULL, lastEventId INTEGER NOT NULL, PRIMARY KEY(repo, file));
       CREATE TABLE IF NOT EXISTS dependent_updates (cardId TEXT PRIMARY KEY, parentId TEXT NOT NULL, deferredAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS auto_review_jobs (cardId TEXT NOT NULL, runId TEXT NOT NULL PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('running','needs_human','approved','merged','pull_request')), details TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', startedAt TEXT NOT NULL, finishedAt TEXT, ${usageDefinitions});
       CREATE TABLE IF NOT EXISTS auto_pull_requests (runId TEXT PRIMARY KEY, cardId TEXT NOT NULL, at TEXT NOT NULL);
@@ -1546,9 +1553,40 @@ export class Board {
     return (this.db.prepare("SELECT merge_failures.* FROM merge_failures JOIN cards ON cards.id=merge_failures.cardId WHERE cards.repo=? AND cards.status IN ('review', 'failed')").all(repo) as { cardId: string; files: string; details: string }[])
       .map(row => ({ cardId: row.cardId, files: JSON.parse(row.files) as string[], details: row.details }));
   }
+  /** Stores the card's current conflict and logs one event per file, so files that keep conflicting can be counted after the failure clears. */
   recordMergeFailure(cardId: string, files: string[], details: string): void {
     this.db.prepare("INSERT INTO merge_failures(cardId, files, details) VALUES (?, ?, ?) ON CONFLICT(cardId) DO UPDATE SET files=excluded.files, details=excluded.details")
       .run(cardId, JSON.stringify(files), details);
+    this.recordConflictEvents(cardId, files);
+  }
+  /** Logs a conflict for the hotspot count only, leaving the card's current merge-failure state alone. Pass Git's real path names (read with `-z`), not its quoted spelling. */
+  recordConflictEvents(cardId: string, files: string[]): void {
+    const at = now(), log = this.db.prepare("INSERT INTO conflict_events(repo, cardId, file, createdAt) SELECT repo, id, ?, ? FROM cards WHERE id=?");
+    for (const file of new Set(files)) log.run(file, at, cardId);
+    const cutoff = new Date(Date.now() - conflictEventRetentionDays * 86_400_000).toISOString();
+    if (this.db.prepare("DELETE FROM conflict_events WHERE createdAt<?").run(cutoff).changes)
+      this.db.exec("DELETE FROM conflict_hotspot_dismissals WHERE NOT EXISTS (SELECT 1 FROM conflict_events e WHERE e.repo=conflict_hotspot_dismissals.repo AND e.file=conflict_hotspot_dismissals.file)");
+  }
+  /**
+   * Files per repo that conflicted on at least `conflictHotspotCards` cards in the `conflictHotspotDays` before `at`,
+   * most cards first. A dismissed file stays hidden until it conflicts again.
+   */
+  conflictHotspots(at = new Date()): Record<string, ConflictHotspot[]> {
+    const since = new Date(at.getTime() - conflictHotspotDays * 86_400_000).toISOString();
+    const rows = this.db.prepare(`SELECT e.repo, e.file, COUNT(DISTINCT e.cardId) AS cards, group_concat(DISTINCT e.cardId) AS cardIds, MAX(e.createdAt) AS lastAt
+      FROM conflict_events e LEFT JOIN conflict_hotspot_dismissals d ON d.repo=e.repo AND d.file=e.file
+      WHERE e.createdAt>=? AND e.createdAt<=? GROUP BY e.repo, e.file
+      HAVING COUNT(DISTINCT e.cardId)>=? AND MAX(e.id)>COALESCE(MAX(d.lastEventId), 0)
+      ORDER BY cards DESC, lastAt DESC, e.file`).all(since, at.toISOString(), conflictHotspotCards) as { repo: string; file: string; cards: number; cardIds: string; lastAt: string }[];
+    const byRepo: Record<string, ConflictHotspot[]> = {};
+    for (const row of rows) (byRepo[row.repo] ??= []).push({ file: row.file, cards: Number(row.cards), cardIds: row.cardIds.split(","), lastAt: row.lastAt });
+    return byRepo;
+  }
+  /** Hides a file's hotspot notice until the file conflicts again. */
+  dismissConflictHotspot(repo: string, file: string): void {
+    const last = this.db.prepare("SELECT MAX(id) AS id FROM conflict_events WHERE repo=? AND file=?").get(repo, file) as { id: number | null };
+    if (last.id === null) throw new Error("No conflicts recorded for that file on this board");
+    this.db.prepare("INSERT INTO conflict_hotspot_dismissals(repo, file, lastEventId) VALUES (?, ?, ?) ON CONFLICT(repo, file) DO UPDATE SET lastEventId=excluded.lastEventId").run(repo, file, last.id);
   }
   clearMergeFailure(cardId: string): void { this.db.prepare("DELETE FROM merge_failures WHERE cardId=?").run(cardId); }
   /**

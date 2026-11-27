@@ -1076,6 +1076,44 @@ test("github-pr: CI fix runs retry a start that failed, stop at the limit, and l
   } finally { f.cleanup(); }
 });
 
+test("github-pr: conflicts from CI-fix merges and PR conflict repairs count toward one hotspot under the file's real name", async () => {
+  const f = fixture();
+  // Every card writes its own line to a file whose name Git quotes in newline output ("notes \\303\\274.md").
+  writeFileSync(f.fakePi, `#!/bin/sh\necho "card $(basename "$PWD")" > 'notes ü.md'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  const worker = new Worker(f.board, f.data, f.fakePi);
+  const sync = new GitHubSync(f.board, f.data, f.github, undefined, 60_000, card => worker.start(card));
+  try {
+    const cards: Card[] = [];
+    for (const title of ["CI fix", "Repair one", "Repair two"]) { const card = await reviewedCard(f, title); await approve(f, card.id); cards.push(card); }
+    const [ciFix, ...repairs] = cards;
+    const pushed = (id: string) => git(f.origin, "rev-parse", `refs/heads/alice/${id}`);
+    const prs = f.prs(), prFor = (id: string) => prs.find(pr => pr.headRefName === `alice/${id}`)!;
+    git(f.upstream, "pull", "-q", "--ff-only", "origin", "main");
+    writeFileSync(join(f.upstream, "notes ü.md"), "main\n"); git(f.upstream, "add", "notes ü.md"); git(f.upstream, ...commitArgs, "main edits notes"); git(f.upstream, "push", "-q", "origin", "main");
+    const done = new Date(Date.now() - 1000).toISOString();
+    const lint = { __typename: "CheckRun", name: "lint", workflowName: "CI", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done };
+    // GitHub can report a PR mergeable while its checks fail; the fix run's own merge of main then conflicts.
+    f.setPrs([
+      { ...prFor(ciFix.id), headRefOid: pushed(ciFix.id), mergeable: "MERGEABLE", statusCheckRollup: [lint] },
+      ...repairs.map(card => ({ ...prFor(card.id), headRefOid: pushed(card.id), mergeable: "CONFLICTING", statusCheckRollup: [] })),
+    ]);
+    assert.deepEqual(f.board.conflictHotspots(), {});
+    await sync.syncBoard(f.repoBoard.id);
+    await waitFor(() => cards.every(card => { const [run] = f.board.listRuns(card.id); return run.attempt === 2 && run.status !== "running"; }));
+
+    const ciRun = f.board.listRuns(ciFix.id)[0];
+    assert.match(ciRun.output, /The merge conflicted in notes ü\.md; the card branch is unchanged/);
+    assert.equal(f.board.getMergeFailure(ciFix.id), undefined, "the CI-fix merge leaves the card's merge-failure state alone");
+    for (const card of repairs) assert.equal(f.board.listRuns(card.id)[0].ciFix, 2, "a conflict repair run");
+    const hotspots = f.board.conflictHotspots()[f.repoBoard.repo];
+    assert.deepEqual(hotspots?.map(item => [item.file, item.cards]), [["notes ü.md", 3]], "one file, counted once per card");
+    assert.deepEqual([...hotspots[0].cardIds].sort(), cards.map(card => card.id).sort());
+    // The local merge at Approve reads `ls-files -u -z`, so it records the same spelling and adds to the same row.
+    f.board.recordMergeFailure(ciFix.id, ["notes ü.md"], "local merge conflict");
+    assert.deepEqual(f.board.conflictHotspots()[f.repoBoard.repo].map(item => item.file), ["notes ü.md"]);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the operator starts still waits for Approve", async () => {
   const f = fixture();
   const fixPi = join(f.dir, "pi-fix");

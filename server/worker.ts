@@ -37,6 +37,11 @@ function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/** Unmerged paths in a worktree mid-merge or mid-rebase, read NUL-delimited so names keep their real spelling instead of Git's quoting. */
+function unmergedFiles(repo: string): string[] {
+  return execFileSync("git", ["-C", repo, "diff", "--name-only", "-z", "--diff-filter=U"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).split("\0").filter(Boolean);
+}
+
 function fetchOrigin(repo: string) {
   try { execFileSync("git", ["-C", repo, "fetch", "origin", "--prune", "--quiet"], { stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }); }
   catch (error) { throw new Error(`git fetch origin failed: ${((error as { stderr?: Buffer }).stderr?.toString() || String(error)).trim().slice(0, 2000)}`); }
@@ -279,11 +284,10 @@ export class Worker {
       if (this.hasWorktrunk()) execFileSync(...command(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"]), { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
       else git(worktree, "rebase", "origin/main");
     } catch (error) {
-      let files = "";
-      try { files = git(worktree, "diff", "--name-only", "--diff-filter=U"); } catch { /* Keep the rebase error. */ }
+      let conflicted: string[] = [];
+      try { conflicted = unmergedFiles(worktree); } catch { /* Keep the rebase error. */ }
       try { git(worktree, merging ? "merge" : "rebase", "--abort"); } catch { /* Nothing in progress. */ }
       const detail = (error as { stderr?: string }).stderr?.toString().trim() || (error instanceof Error ? error.message : String(error));
-      const conflicted = files.split("\n").filter(Boolean);
       if (conflicted.length) this.board.recordMergeFailure(card.id, conflicted, detail);
       const next = conflicted.length ? "Choose Fix conflict with Pi, or resolve it yourself" : "Resolve it";
       throw new Error(`${merging ? "Merge of" : "Rebase onto"} origin/main conflicted${conflicted.length ? ` in ${conflicted.join(", ")}` : ""}; the card branch is unchanged. ${next} in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
@@ -305,8 +309,10 @@ export class Worker {
       git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "origin/main");
     } catch {
       let files: string[] = [];
-      try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean); } catch { /* Keep going without the list. */ }
+      try { files = unmergedFiles(worktree); } catch { /* Keep going without the list. */ }
       try { git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
+      // Counts toward the board's conflict hotspots. The fix run still targets CI, so the card gets no merge failure.
+      if (files.length) this.board.recordConflictEvents(run.cardId, files);
       this.board.append(run.id, `The merge conflicted${files.length ? ` in ${files.join(", ")}` : ""}; the card branch is unchanged.\n`);
       return `Alice tried to merge origin/main (${tip}) into the card branch before this run and it conflicted${files.length ? ` in ${files.join(", ")}` : ""}, so the branch is unchanged. Merge origin/main yourself and commit the merge on the card branch if every conflict is mechanical; otherwise run \`git merge --abort\` and say what decision the conflict needs.`;
     }

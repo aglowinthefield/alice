@@ -2,13 +2,13 @@ import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from "node:
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { command } from "./platform.js";
+import { command, killTree } from "./platform.js";
 
-const NAME = /^bakery-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** Who made the directory: the Bakery server and the Pi child, each as a pid plus start time so a reused pid doesn't count. */
-const OWNER = ".bakery-owner";
+const NAME = /^alice-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** Who made the directory: the Alice server and the Pi child, each as a pid plus start time so a reused pid doesn't count. */
+const OWNER = ".alice-owner";
 /**
- * After Pi exits, how long a tool process it left behind may hold its stdout open. Then Bakery closes the pipes, so
+ * After Pi exits, how long a tool process it left behind may hold its stdout open. Then Alice closes the pipes, so
  * 'close' fires and every caller's 'close' handler (a chat publishing screenshots, a run finishing) runs before the directory goes.
  */
 const CLOSE_GRACE_MS = 2000;
@@ -19,10 +19,10 @@ type Identity = { pid: number; start: string | null };
 type Owner = { server: Identity; pi: Identity | null };
 const live = new Map<ChildProcess, { done: Promise<void>; group: boolean }>();
 
-export function runTempDir(id: string) { return join(root(), `bakery-run-${id}`); }
+export function runTempDir(id: string) { return join(root(), `alice-run-${id}`); }
 
 /**
- * Spawns Pi with its own TMPDIR (TMP and TEMP on Windows), `<tmp>/bakery-run-<id>`, and removes the directory once Pi
+ * Spawns Pi with its own TMPDIR (TMP and TEMP on Windows), `<tmp>/alice-run-<id>`, and removes the directory once Pi
  * exits, however it ends. Whatever Pi and its tools leave there (browser profiles, clones, test scratch) goes with it,
  * instead of piling up in the shared temp directory. `id` is a UUID used for one spawn only: a run id or a fresh one.
  */
@@ -64,7 +64,7 @@ export function spawnPi(id: string, bin: string, args: string[], options: SpawnO
 export async function stopPi(): Promise<void> {
   const signal = (name: NodeJS.Signals) => {
     for (const [child, { group }] of live) {
-      try { if (group && child.pid) process.kill(-child.pid, name); else child.kill(name); } catch { child.kill(name); }
+      try { if (group && child.pid) process.kill(-child.pid, name); else killTree(child, name); } catch { killTree(child, name); }
     }
   };
   signal("SIGTERM");
@@ -74,8 +74,8 @@ export async function stopPi(): Promise<void> {
 }
 
 /**
- * Removes the run temp directories a Bakery that stopped without cleaning up left behind (a crash, SIGKILL, power loss).
- * Only directories with Bakery's name and owner record count, owned by this user. One stays while its server is alive
+ * Removes the run temp directories a Alice that stopped without cleaning up left behind (a crash, SIGKILL, power loss).
+ * Only directories with Alice's name and owner record count, owned by this user. One stays while its server is alive
  * (a dev server, a test server) or while its Pi is still running, such as an orphaned chat or an interrupted card run.
  */
 export function sweepRunTemp() {

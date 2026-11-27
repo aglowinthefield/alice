@@ -1,5 +1,5 @@
-// Every command bakery-cli knows, and the help it prints. Adding a command means adding an entry here;
-// tests/bakery-cli.test.ts checks that the commands the CLI runs and the ones listed here are the same.
+// Every command the alice CLI knows, and the help it prints. Adding a command means adding an entry here;
+// tests/alice.test.ts checks that the commands the CLI runs and the ones listed here are the same.
 import { banner, c, columns, pad, pretty, wrap } from "./cli-style.mjs";
 
 const BOARD = ["--board ID|PATH", "the board (default: the one whose repository holds the current directory, or the only one)"];
@@ -15,14 +15,14 @@ export const COMMANDS = [
     full: "TITLE... [--body BODY] [--priority P] [--source NAME] [--board ID|PATH] [--json]",
     details: "The words after add become the title.",
     options: [["--body BODY", "the description"], PRIORITY, SOURCE, BOARD, JSON_OUT],
-    examples: [["bakery-cli add Fix the flaky login test", ""], ["bakery-cli add Ship it --priority urgent", ""]],
+    examples: [["alice add Fix the flaky login test", ""], ["alice add Ship it --priority urgent", ""]],
   },
   {
     name: "create", group: "Cards", args: "--title TITLE", summary: "a new card, with a key or dependencies",
     full: "--title TITLE [--body BODY] [--key KEY] [--priority P] [--source NAME] [--after CARD_ID]... [--board ID|PATH] [--json]",
     details: "--key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status, it is printed instead of creating another.\n--after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.\n--source NAME records where the card came from, shown on its Details tab; it defaults to cli. Agents name themselves, for example --source hermes.",
     options: [["--title TITLE", "the title"], ["--body BODY", "the description"], ["--key KEY", "create once per board; later calls print the same card"], PRIORITY, SOURCE, ["--after CARD_ID", "wait for that card first (repeatable)"], BOARD, JSON_OUT],
-    examples: [["bakery-cli create --title 'Add the API' --key gh-42/t1", ""], ["bakery-cli create --title 'Use the API' --after CARD_ID", "start only after CARD_ID is done"]],
+    examples: [["alice create --title 'Add the API' --key gh-42/t1", ""], ["alice create --title 'Use the API' --after CARD_ID", "start only after CARD_ID is done"]],
   },
   {
     name: "cards", group: "Cards", summary: "the board's lanes and cards",
@@ -33,12 +33,12 @@ export const COMMANDS = [
   {
     name: "tui", group: "Cards", summary: "the board in the terminal, driven by keys",
     full: "[--board ID|PATH]", options: [BOARD],
-    details: "Arrow keys or j/k move between cards, enter opens one, o opens it in the browser and ? lists every key. s starts a run, x stops one, a approves, r and t move between Ready and Triage. Paid runs and merges ask first. Refreshes every 2 seconds; q quits.",
+    details: "The web app across the whole terminal. 0 opens Today and 1-9 the numbered boards in the sidebar. h/l or the arrows move between lanes and j/k within one, enter opens a card, o opens it in the browser and ? lists every key. s starts a run, x stops one, a approves, r and t move between Ready and Triage. Paid runs and merges ask first. Refreshes every 2 seconds; q quits.",
   },
   {
     name: "open", group: "Cards", args: "[CARD_ID]", summary: "open the board, or a card, in the browser",
     full: "[CARD_ID] [--board ID|PATH] [--print] [--json]",
-    details: "CARD_ID may be the 8-character ID the other commands print. Uses $BROWSER when set, else the system's opener, and always prints the URL; with no display (over SSH) it only prints. With several boards and none chosen, it opens Bakery's home page.",
+    details: "CARD_ID may be the 8-character ID the other commands print. Uses $BROWSER when set, else the system's opener, and always prints the URL; with no display (over SSH) it only prints. With several boards and none chosen, it opens Alice's home page.",
     options: [["--print", "print the URL without opening it"], BOARD, JSON_OUT],
   },
   {
@@ -66,9 +66,9 @@ export const COMMANDS = [
   {
     name: "attach", group: "Cards", args: "CARD_ID FILE...", summary: "save files on a card, print markdown links",
     full: "CARD_ID FILE... [--board ID|PATH] [--json]",
-    details: "Saves local files (screenshots, logs, recordings) as attachments of a card and prints a markdown line for each: ![name](/api/boards/…/attachments/ID) for images, [name](…) for other files. Paste those lines into a report to show images inline, since a /tmp path in a report is not durable.\nIt reads each FILE as you, so it can read what you can; the server never reads paths. Nothing is sent to any service outside Bakery.",
+    details: "Saves local files (screenshots, logs, recordings) as attachments of a card and prints a markdown line for each: ![name](/api/boards/…/attachments/ID) for images, [name](…) for other files. Paste those lines into a report to show images inline, since a /tmp path in a report is not durable.\nIt reads each FILE as you, so it can read what you can; the server never reads paths. Nothing is sent to any service outside Alice.",
     options: [BOARD, JSON_OUT],
-    examples: [["bakery-cli attach CARD_ID before.png after.png", ""]],
+    examples: [["alice attach CARD_ID before.png after.png", ""]],
   },
   {
     name: "ready", group: "Runs", args: "CARD_ID", summary: "move a card to Ready",
@@ -100,9 +100,9 @@ export const COMMANDS = [
   },
   {
     name: "close", group: "Runs", args: "CARD_ID", summary: "move a Review card to Done without merging",
-    full: "CARD_ID [--board ID|PATH] [--json]",
-    details: "The worktree and branch stay. No command approves a merge.",
-    options: [BOARD, JSON_OUT],
+    full: "CARD_ID [--reason REASON [--note TEXT]] [--board ID|PATH] [--json]",
+    details: "The worktree and branch stay. No command approves a merge. The reason is optional and shows in the card's history and on the Statistics page.",
+    options: [["--reason REASON", "duplicate, wrong-approach, not-needed, superseded or other"], ["--note TEXT", "free text with the reason, up to 500 characters"], BOARD, JSON_OUT],
   },
   {
     name: "conflicts", group: "Runs", summary: "cards whose merge conflicts",
@@ -143,7 +143,7 @@ export const COMMANDS = [
   {
     name: "pr", group: "Boards", args: "CARD_ID [URL|off]", summary: "link a card to a pull request",
     full: "CARD_ID [URL|off] [--board ID|PATH] [--json]",
-    details: "Links a card to a pull request URL instead of the bakery/CARD_ID branch lookup; off removes the link. With no URL, prints the card's pull request.",
+    details: "Links a card to a pull request URL instead of the alice/CARD_ID branch lookup; off removes the link. With no URL, prints the card's pull request.",
     options: [BOARD, JSON_OUT],
   },
   {
@@ -155,21 +155,21 @@ export const COMMANDS = [
     full: "[N|auto] [--json]",
     details: "Card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. auto is a quarter of the CPU cores, at least 2. Automatic work (pickup, send-backs, CI and hook fixes, sentinels, reviews) waits for a slot; a run you start yourself always starts.",
     options: [JSON_OUT],
-    examples: [["bakery-cli agents 4", ""], ["bakery-cli agents auto", ""]],
+    examples: [["alice agents 4", ""], ["alice agents auto", ""]],
   },
   {
     name: "limits", group: "Boards", args: "[on|off]", summary: "spend limits: show, or turn them on or off",
     full: "[on|off] [--board ID|PATH] [--json]",
     details: "Spend limits are the daily start limit, the daily cost budget and the agent reviewer's diff caps. They are off by default, and apply only when on; the stored values are kept either way. Concurrency and loop guards (send-back, CI-fix and retry caps) always apply. Set the values with pickup --limit and --budget.",
     options: [BOARD, JSON_OUT],
-    examples: [["bakery-cli limits on", ""], ["bakery-cli limits off --board ~/code/scratch", ""]],
+    examples: [["alice limits on", ""], ["alice limits off --board ~/code/scratch", ""]],
   },
   {
     name: "pickup", group: "Boards", args: "[on|off|reset]", summary: "automatic starts: show or change them",
     full: "[on|off|reset] [--concurrency 1-4] [--limit 0-99|off] [--budget USD|off] [--board ID|PATH] [--yes]",
     details: "With no argument, prints the pickup state. on, and reset (which clears the 24-hour count), can start paid Pi runs, so they need --yes. --limit and --budget are stored, and apply only while the board's limits are on (see limits).",
     options: [["--concurrency N", "runs at once, 1 to 4"], ["--limit N|off", "most automatic starts per rolling 24 hours; 0 or off means no limit"], ["--budget USD|off", "stop starting once 24 hours of runs cost this much"], BOARD, ["--yes", "confirm"]],
-    examples: [["bakery-cli pickup on --concurrency 2 --budget 20 --yes", ""], ["bakery-cli pickup off", ""]],
+    examples: [["alice pickup on --concurrency 2 --budget 20 --yes", ""], ["alice pickup off", ""]],
   },
   {
     name: "sentinels", group: "Sentinels", summary: "list monitors: state, schedule, latest run",
@@ -190,16 +190,16 @@ export const COMMANDS = [
     full: "SENTINEL_ID [--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
   },
   {
-    name: "service", group: "Setup", args: "ACTION", summary: "run Bakery in the background: install, restart, logs",
+    name: "service", group: "Setup", args: "ACTION", summary: "run Alice in the background: install, restart, logs",
     full: "install|uninstall|start|stop|restart|status|logs [--host HOST] [--yes]",
-    details: "install runs this checkout as a systemd user service (Linux) or launchd agent (macOS) that starts at login, restarts on failure and checks for updates every 2 minutes. Settings go in ~/.config/bakery/bakery.env, which install creates once and never overwrites. restart waits for active runs to finish first. stop and uninstall end active runs at once, so they need --yes. Run install again after moving node, npm or pi.",
-    options: [["--host HOST", "the bind address written to a new bakery.env (default: 127.0.0.1)"], ["--yes", "confirm stop or uninstall"]],
-    examples: [["bakery-cli service install", ""], ["bakery-cli service install --host 100.64.0.10", "listen on a tailnet address"], ["bakery-cli service restart", "after editing bakery.env"]],
+    details: "install runs this checkout as a systemd user service (Linux) or launchd agent (macOS) that starts at login, restarts on failure and checks for updates every 2 minutes. Settings go in ~/.config/alice/alice.env, which install creates once and never overwrites. restart waits for active runs to finish first. stop and uninstall end active runs at once, so they need --yes. Run install again after moving node, npm or pi.",
+    options: [["--host HOST", "the bind address written to a new alice.env (default: 127.0.0.1)"], ["--yes", "confirm stop or uninstall"]],
+    examples: [["alice service install", ""], ["alice service install --host 100.64.0.10", "listen on a tailnet address"], ["alice service restart", "after editing alice.env"]],
   },
   {
     name: "doctor", group: "Setup", summary: "check tools, data, server and boards",
     full: "[--json]",
-    details: "Checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL per check; it exits 1 if any check fails. Against a remote BAKERY_URL it checks only the server and boards.",
+    details: "Checks Node, git, pi, gh, worktrunk, the data directory, the server and each board, printing PASS, WARN or FAIL per check; it exits 1 if any check fails. Against a remote ALICE_URL it checks only the server and boards.",
     options: [JSON_OUT],
   },
   {
@@ -209,9 +209,9 @@ export const COMMANDS = [
 ];
 
 export const ENV = [
-  ["BAKERY_URL", "the server, e.g. 127.0.0.1:4317; the scheme and port 4317 may be left out"],
-  ["BAKERY_PORT", "the local server's port (default: 4317)"],
-  ["BAKERY_ALLOW_REMOTE=1", "allow a BAKERY_URL that is not this machine"],
+  ["ALICE_URL", "the server, e.g. 127.0.0.1:4317; the scheme and port 4317 may be left out"],
+  ["ALICE_PORT", "the local server's port (default: 4317)"],
+  ["ALICE_ALLOW_REMOTE=1", "allow an ALICE_URL that is not this machine"],
   ["NO_COLOR", "plain text on a terminal"],
 ];
 
@@ -221,7 +221,7 @@ export function overview(version) {
   const width = Math.max(...COMMANDS.map(cmd => signature(cmd).length)) + 2;
   const out = [];
   if (pretty()) out.push("", banner(version), "");
-  out.push(`${c.head("Usage")}  bakery-cli ${c.cmd("<command>")} ${c.arg("[options]")}`);
+  out.push(`${c.head("Usage")}  alice ${c.cmd("<command>")} ${c.arg("[options]")}`);
   for (const group of GROUPS) {
     out.push("", c.head(group));
     for (const cmd of COMMANDS.filter(item => item.group === group)) {
@@ -239,7 +239,7 @@ export function overview(version) {
     "", c.head("Options"),
     ...table([["--board ID|PATH", "pick the board (default: the one for the current directory, or the only one)"], ["--json", "print the full API data"], ["--yes", "confirm a paid run or a deletion"], ["-v, --version", "print the version"]]),
     "", c.head("Environment"), ...table(ENV),
-    "", `  bakery-cli help <command> for its options and examples. Installed with npm link, it is also bakery.`,
+    "", `  alice help <command> for its options and examples.`,
   );
   return out.join("\n");
 }
@@ -247,7 +247,7 @@ export function overview(version) {
 export function commandHelp(name) {
   const cmd = COMMANDS.find(item => item.name === name);
   if (!cmd) return undefined;
-  const out = [`${c.cmd(`bakery-cli ${cmd.name}`)}  ${cmd.summary}`, "", c.head("Usage"), `  bakery-cli ${cmd.name}${cmd.full ? ` ${c.arg(cmd.full)}` : ""}`];
+  const out = [`${c.cmd(`alice ${cmd.name}`)}  ${cmd.summary}`, "", c.head("Usage"), `  alice ${cmd.name}${cmd.full ? ` ${c.arg(cmd.full)}` : ""}`];
   if (cmd.details) out.push("", ...cmd.details.split("\n").flatMap((para, i) => [...(i ? [""] : []), ...wrap(para, Math.min(columns(), 100) - 4).map(line => `  ${line}`)]));
   if (cmd.options?.length) {
     const w = Math.max(...cmd.options.map(row => row[0].length)) + 2;
@@ -263,7 +263,7 @@ export function commandHelp(name) {
 /** The usage line for one command, for argument errors. */
 export const usageLine = name => {
   const cmd = COMMANDS.find(item => item.name === name);
-  return cmd ? `Usage: bakery-cli ${cmd.name}${cmd.full ? ` ${cmd.full}` : ""}` : "";
+  return cmd ? `Usage: alice ${cmd.name}${cmd.full ? ` ${cmd.full}` : ""}` : "";
 };
 
 // The closest command name, for a typo.

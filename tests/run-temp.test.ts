@@ -25,7 +25,7 @@ const mktemp = (seen: string) => `d=$(mktemp -d) && echo marker > "$d/file" && p
 const settled = `printf '%s\\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"done"}]}}' '{"type":"agent_settled","aborted":false}'`;
 
 function repoFixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-run-temp-")), repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), seen = join(dir, "seen");
+  const dir = mkdtempSync(join(tmpdir(), "alice-run-temp-")), repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), seen = join(dir, "seen");
   execFileSync("git", ["init", "-q", repo]);
   writeFileSync(join(repo, "README.md"), "fixture\n");
   execFileSync("git", ["-C", repo, "add", "README.md"]);
@@ -57,7 +57,7 @@ test("a card run's scratch lands in its own TMPDIR, which is removed when the ru
     await run(`${mktemp(f.seen)}\n${settled}`, "review");
     await run(`${mktemp(f.seen)}\nexit 1`, "failed");
     await run(`${mktemp(f.seen)}\nexec sleep 30`, "failed", true);
-    assert.match(f.board.listRuns(card.id)[0].error!, /Bakery sent SIGTERM: manual stop/);
+    assert.match(f.board.listRuns(card.id)[0].error!, /Alice sent SIGTERM: manual stop/);
   } finally { f.close(); }
 });
 
@@ -76,7 +76,7 @@ ${settled}`);
     chats.send(repoBoard, chat.id, "hello");
     await finished;
     const turnDir = dirname(readFileSync(f.seen, "utf8"));
-    assert.match(turnDir, /[\\/]bakery-run-[0-9a-f-]{36}$/);
+    assert.match(turnDir, /[\\/]alice-run-[0-9a-f-]{36}$/);
     const reply = f.board.listChatMessages(chat.id).find(message => message.role === "agent")!;
     const image = /\/images\/([0-9a-f]{64})\)/.exec(reply.parts.map(part => part.type === "text" ? part.text : "").join(""));
     assert.ok(image, `the screenshot link was published: ${JSON.stringify(reply.parts)}`);
@@ -91,14 +91,14 @@ ${settled}`);
   } finally { f.close(); }
 });
 
-test("when a tool process Pi left behind holds stdout open, Bakery closes the pipes so 'close' fires and the TMPDIR goes", async () => {
+test("when a tool process Pi left behind holds stdout open, Alice closes the pipes so 'close' fires and the TMPDIR goes", async () => {
   const f = repoFixture();
   const leftover = join(f.dir, "leftover.pid"), id = randomUUID();
   try {
     const child = spawnPi(id, "/bin/sh", ["-c", `sleep 30 & echo $! > '${leftover}'; exit 0`], { stdio: ["ignore", "pipe", "pipe"] });
     await new Promise(resolve => child.once("close", resolve));
     await waitFor(() => !existsSync(runTempDir(id)));
-    assert.ok(alive(Number(readFileSync(leftover, "utf8"))), "the leftover still held the pipe; Bakery did not wait for it");
+    assert.ok(alive(Number(readFileSync(leftover, "utf8"))), "the leftover still held the pipe; Alice did not wait for it");
   } finally {
     try { process.kill(Number(readFileSync(leftover, "utf8")), "SIGKILL"); } catch { /* Already gone. */ }
     f.close();
@@ -139,7 +139,7 @@ function diskFullAt(n: number) {
   let writes = 0;
   const realWrite = fs.writeFileSync, realSpawn = childProcess.spawn;
   const write = mock.method(fs, "writeFileSync", (...args: Parameters<typeof fs.writeFileSync>) => {
-    if (String(args[0]).endsWith(".bakery-owner.tmp") && ++writes === n) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    if (String(args[0]).endsWith(".alice-owner.tmp") && ++writes === n) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
     return realWrite(...args);
   });
   const start = mock.method(childProcess, "spawn", (...args: Parameters<typeof childProcess.spawn>) => { const child = realSpawn(...args); spawned.push(child); return child; });
@@ -166,31 +166,31 @@ test("a full disk at the second owner write kills the Pi it just started and rem
   await waitFor(() => !existsSync(runTempDir(id)));
 });
 
-test("startup sweeps only Bakery's own leftovers whose server and Pi are both gone", () => {
+test("startup sweeps only Alice's own leftovers whose server and Pi are both gone", () => {
   const made: string[] = [];
   const dead = { pid: spawnSync(process.execPath, ["-e", ""]).pid!, start: null };
   const leftover = (owner: unknown) => {
     const dir = runTempDir(randomUUID());
     mkdirSync(dir); made.push(dir);
     writeFileSync(join(dir, "scratch"), "x");
-    if (owner !== undefined) writeFileSync(join(dir, ".bakery-owner"), JSON.stringify(owner));
+    if (owner !== undefined) writeFileSync(join(dir, ".alice-owner"), JSON.stringify(owner));
     return dir;
   };
   try {
-    const unrelated = mkdtempSync(join(dirname(runTempDir("x")), "bakery-run-temp-")); made.push(unrelated);
+    const unrelated = mkdtempSync(join(dirname(runTempDir("x")), "alice-run-temp-")); made.push(unrelated);
     const crashed = leftover({ server: dead, pi: { ...dead } });
     const reusedPid = leftover({ server: { pid: process.pid, start: "not-this-process" }, pi: null });
     const unmarked = leftover(undefined), garbled = leftover("nonsense");
-    const otherBakery = leftover({ server: { pid: process.ppid, start: null }, pi: dead });
+    const otherAlice = leftover({ server: { pid: process.ppid, start: null }, pi: dead });
     sweepRunTemp();
     assert.deepEqual([crashed, reusedPid].map(existsSync), [false, false], "a dead owner, or a reused pid, is a leftover");
-    assert.deepEqual([unrelated, unmarked, garbled].map(existsSync), [true, true, true], "anything without Bakery's name and owner record is left alone");
-    assert.equal(existsSync(otherBakery), true, "another live Bakery keeps its directories");
+    assert.deepEqual([unrelated, unmarked, garbled].map(existsSync), [true, true, true], "anything without Alice's name and owner record is left alone");
+    assert.equal(existsSync(otherAlice), true, "another live Alice keeps its directories");
   } finally { for (const dir of made) rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("after a crash, startup keeps an orphaned Pi's TMPDIR while it runs and removes it once that Pi is gone", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-orphan-")), script = join(dir, "server.ts"), pidFile = join(dir, "pi.pid"), id = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), "alice-orphan-")), script = join(dir, "server.ts"), pidFile = join(dir, "pi.pid"), id = randomUUID();
   let piPid = 0;
   try {
     // A stand-in server starts a chat-like Pi and dies without cleaning up, as on SIGKILL or a power cut.
@@ -222,5 +222,5 @@ test("each spawn creates its directory exclusively and refuses a path that alrea
   mkdirSync(runTempDir(id));
   try { assert.throws(() => spawnPi(id, "true", [], { stdio: "ignore" }), /EEXIST/); }
   finally { rmSync(runTempDir(id), { recursive: true, force: true }); }
-  assert.equal(readdirSync(dirname(runTempDir(id))).includes(`bakery-run-${id}`), false);
+  assert.equal(readdirSync(dirname(runTempDir(id))).includes(`alice-run-${id}`), false);
 });

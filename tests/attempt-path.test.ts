@@ -4,12 +4,12 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 // Playwright only grants clipboard permissions in Chromium.
-process.env.BAKERY_TEST_BROWSER = "chromium";
+process.env.ALICE_TEST_BROWSER = "chromium";
 
 const worktree = "/Users/example/projects/a very long repository name/worktrees/attempt-with-an-exact-path";
 const otherWorktree = "/Users/example/projects/other/worktrees/previous";
-const failedWorktree = "/Users/example/.local/share/bakery/worktrees/failed-run";
-const failure = "Pi exited (143); Bakery sent SIGTERM: server received SIGTERM; no settlement event; stderr logged on server";
+const failedWorktree = "/Users/example/.local/share/alice/worktrees/failed-run";
+const failure = "Pi exited (143); Alice sent SIGTERM: server received SIGTERM; no settlement event; stderr logged on server";
 const runs = [
   { id: "errored", attempt: 4, status: "failed", worktree: failedWorktree, output: "line one\nlast words", error: failure, startedAt: "2025-01-01T13:00:00Z", finishedAt: "2025-01-01T13:05:00Z", startedBy: "manual" },
   { id: "first", attempt: 3, status: "failed", worktree, output: "", error: null, startedAt: "2025-01-01T12:00:00Z", finishedAt: null, startedBy: "manual" },

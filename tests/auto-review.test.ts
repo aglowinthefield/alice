@@ -8,6 +8,9 @@ import { dirname, join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
 import { AutoReview, promptDiff, reviewerPrompt, reviewerVerdict } from "../server/auto-review.js";
+import { RunLimitError } from "../server/board.js";
+import { AutoPickup } from "../server/auto-pickup.js";
+import { Worker } from "../server/worker.js";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim(); }
 const settle = (verdict: string) => [
@@ -16,7 +19,7 @@ const settle = (verdict: string) => [
   JSON.stringify({ type: "agent_settled", aborted: false }), "",
 ].join("\n");
 function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and correct"}') {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-review-")), repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
@@ -30,7 +33,7 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
     const card = board.createCard({ repo, title: "Add a new line", body: "Include a regression test" });
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
-    git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);
     writeFileSync(join(worktree, "README.md"), `original\nnew ${card.id}\n`);
     board.finish(run.id, "review");
@@ -52,7 +55,7 @@ test("the agent reviewer's scratch lands in its own TMPDIR, removed when the rev
     item.reviewedCard();
     await item.auto.tick();
     const scratch = readFileSync(seen, "utf8");
-    assert.match(dirname(scratch), /[\\/]bakery-run-[^/\\]+$/);
+    assert.match(dirname(scratch), /[\\/]alice-run-[^/\\]+$/);
     assert.equal(existsSync(dirname(scratch)), false);
   } finally { item.close(); }
 });
@@ -132,7 +135,7 @@ test("a failed card can be set back to Ready", () => {
   } finally { item.close(); }
 });
 
-test("the global tick reconciles a failed card merged outside Bakery without enabling auto-review", async () => {
+test("the global tick reconciles a failed card merged outside Alice without enabling auto-review", async () => {
   const item = fixture();
   try {
     const { card, run, worktree } = item.reviewedCard();
@@ -472,7 +475,7 @@ test("reviewer progress reports elapsed time, turns, tool counts and narration w
   assert.doesNotMatch(text, /SECRET/);
 });
 
-test("on a pull-request board an agent approval is advice when Bakery cannot push: the card stays in Review with the verdict recorded", async () => {
+test("on a pull-request board an agent approval is advice when Alice cannot push: the card stays in Review with the verdict recorded", async () => {
   const item = fixture();
   try {
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
@@ -542,7 +545,7 @@ test("on a pull-request board a failed or refused push leaves the agent-approved
 });
 
 test("an older auto-review table is rebuilt to accept the pull_request state without losing jobs", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-auto-review-schema-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-auto-review-schema-"));
   try {
     const path = join(dir, "board.sqlite");
     new Board(path).close();
@@ -673,7 +676,7 @@ test("the reviewer sees the implementer's report and the card's attachments, so 
     const card = item.board.createCard({ repo: item.repo, title: "Restyle the palette", body: "Attach dark and light screenshots" });
     item.board.setStatus(card.id, "ready");
     const run = item.board.claim(card.id), worktree = join(item.data, "worktrees", card.id);
-    git(item.repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    git(item.repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     item.board.attach(run.id, process.pid, worktree);
     writeFileSync(join(worktree, "README.md"), "restyled\n");
     item.board.recordReport(run.id, "Restyled the palette. Screenshots attached for both themes.");
@@ -682,7 +685,10 @@ test("the reviewer sees the implementer's report and the card's attachments, so 
     await item.auto.tick();
     const prompt = readFileSync(argsFile, "utf8");
     assert.match(prompt, /implementer's report for this run[^\n]*\nRestyled the palette\. Screenshots attached for both themes\./);
-    assert.match(prompt, new RegExp(`- ${item.data}/attachments/${card.id}/[^ ]*palette-dark\\.png \\(palette-dark\\.png, image/png\\)`));
+    // The server joins the path with the platform's separator, so the expectation does too (and is not a RegExp: a
+    // Windows path's backslashes would read as escapes).
+    const shot = join(item.data, "attachments", card.id, "shot", "palette-dark.png");
+    assert.ok(prompt.includes(`- ${shot} (palette-dark.png, image/png)`), prompt);
     assert.match(prompt, /a screenshot that shows what the card asks for is evidence/);
   } finally { item.close(); }
 });
@@ -710,5 +716,134 @@ test("auto-review is not stopped by the diff viewer's 200-file cap, but still re
     await item.auto.tick();
     assert.equal(item.board.listAutoReviewJobs(many.card.id)[0].details, "Agent requested human review: Stop here", "reached the reviewer");
     assert.match(item.board.listAutoReviewJobs(binary.card.id)[0].details, /Binary, symlink, or submodule/);
+  } finally { item.close(); }
+});
+
+const requestChanges = '{"verdict":"request_changes","reason":"Missing test","changes":[{"path":"README.md","line":1,"comment":"Add a regression test"}]}';
+function pullRequestBoard(item: ReturnType<typeof fixture>) {
+  item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
+  item.board.setIntegration(item.repoBoard.id, "github-pr");
+  item.board.setAutoPullRequest(item.repoBoard.id, true);
+  item.board.setAutoReview(item.repoBoard.id, true);
+}
+
+test("a reviewer's send-back at the run limit waits for a free slot instead of landing in Review for a person", async () => {
+  const item = fixture(requestChanges);
+  try {
+    pullRequestBoard(item);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    let full = true;
+    const started: string[] = [];
+    const auto = new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => {
+      if (full) throw new RunLimitError("at its limit");
+      started.push(current.card.id);
+    });
+    await auto.tick();
+    assert.equal(item.board.getCard(current.card.id)!.reviewWait, "rerun_queued");
+    assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "automatic pull requests do not take a queued rerun");
+    assert.deepEqual(item.board.listSlotQueuedStarts().map(entry => entry.card.id), [current.card.id]);
+    const worker = { start: () => { if (full) throw new RunLimitError("at its limit"); started.push(current.card.id); } } as unknown as Worker;
+    new AutoPickup(item.board, worker).tick();
+    assert.deepEqual(started, [], "still full");
+    full = false;
+    new AutoPickup(item.board, worker).tick();
+    assert.deepEqual(started, [current.card.id]);
+  } finally { item.close(); }
+});
+
+test("a card the reviewer hands to a person, or sends back too often, becomes a candidate for a draft pull request with the findings", async () => {
+  for (const verdict of ['{"verdict":"needs_human","reason":"Product call"}', requestChanges]) {
+    const item = fixture(verdict);
+    try {
+      pullRequestBoard(item);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const current = item.reviewedCard();
+      if (verdict === requestChanges) {
+        // Out of reruns: two earlier send-backs on this card.
+        for (const id of ["old-1", "old-2"]) item.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','[{}]')").run(current.card.id, id);
+      }
+      await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new Error("must not rerun"); }).tick();
+      assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [current.card.id]);
+      assert.match(item.board.autoReviewHandoff(current.run.id) ?? "", verdict === requestChanges ? /out of reruns[\s\S]*Missing test[\s\S]*README\.md:1/ : /Product call/);
+    } finally { item.close(); }
+  }
+});
+
+test("a rerun that cannot start for another reason hands the findings to a person, in the reviewer and in AutoPickup", async () => {
+  for (const where of ["reviewer", "pickup"]) {
+    const item = fixture(requestChanges);
+    try {
+      pullRequestBoard(item);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const current = item.reviewedCard();
+      const broken = () => { throw new Error("worktree is gone"); };
+      if (where === "reviewer") await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), broken).tick();
+      else {
+        await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new RunLimitError("full"); }).tick();
+        new AutoPickup(item.board, { start: broken } as unknown as Worker).tick();
+      }
+      assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [current.card.id], where);
+      assert.match(item.board.autoReviewHandoff(current.run.id) ?? "", /Missing test[\s\S]*README\.md:1/, where);
+      assert.equal(item.board.listSlotQueuedStarts().length, 0, where);
+      assert.equal(item.board.getReviewerChanges(current.run.id).length, 1, "a manual retry still gets the requested fixes");
+    } finally { item.close(); }
+  }
+});
+
+test("a failed push never puts its output in the public handoff", async () => {
+  const item = fixture();
+  try {
+    pullRequestBoard(item);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined, async () => { throw new Error("pre-push hook failed: SECRET-MARKER"); }).tick();
+    const handoff = item.board.autoReviewHandoff(current.run.id) ?? "";
+    assert.match(handoff, /stopped before a verdict/);
+    assert.doesNotMatch(handoff, /SECRET-MARKER/);
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /SECRET-MARKER/, "raw diagnostics stay local");
+  } finally { item.close(); }
+});
+
+test("a long handoff keeps every requested change", async () => {
+  const changes = Array.from({ length: 10 }, (_, index) => ({ path: `file${index}.ts`, comment: `${"x".repeat(1900)} END${index}` }));
+  const item = fixture(JSON.stringify({ verdict: "request_changes", reason: "Many problems", changes }));
+  try {
+    pullRequestBoard(item);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    for (const id of ["old-1", "old-2"]) item.board.sqlite.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,changes) VALUES (?,?,'needs_human','2020-01-01T00:00:00.000Z','[{}]')").run(current.card.id, id);
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new Error("must not rerun"); }).tick();
+    const handoff = item.board.autoReviewHandoff(current.run.id) ?? "";
+    assert.ok(handoff.length > 19000);
+    assert.match(handoff, /END9/);
+  } finally { item.close(); }
+});
+
+test("reviewer stderr never reaches the public handoff", async () => {
+  const item = fixture();
+  try {
+    pullRequestBoard(item);
+    writeFileSync(join(item.dir, "fake-pi"), "#!/bin/sh\necho SECRET-MARKER >&2\nexit 3\n");
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const current = item.reviewedCard();
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi")).tick();
+    const handoff = item.board.autoReviewHandoff(current.run.id) ?? "";
+    assert.match(handoff, /stopped before a verdict/);
+    assert.doesNotMatch(handoff, /SECRET-MARKER/);
+    assert.match(item.board.getAutoReviewJob(current.run.id)!.details, /SECRET-MARKER/, "raw diagnostics stay local");
+  } finally { item.close(); }
+});
+
+test("on a pull-request board the reviewer is told that no pull request exists yet", async () => {
+  const item = fixture();
+  try {
+    pullRequestBoard(item);
+    const prompt = join(item.dir, "prompt.txt");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nfor last; do :; done\nprintf '%s' "$last" > ${prompt}\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"ok"}')}EVENTS\n`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    item.reviewedCard();
+    await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), undefined, async card => item.board.getCard(card.id)!).tick();
+    assert.match(readFileSync(prompt, "utf8"), /none exists for this card yet[^.]*never a finding/);
   } finally { item.close(); }
 });

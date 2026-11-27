@@ -8,7 +8,7 @@ import { modelLister } from "../server/pi-models.js";
 
 const table = "printf '%s\\n' 'provider  model  context' 'anthropic  claude-sonnet-4-5  200K'";
 function fixture(body: string) {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-pi-models-")), pi = join(dir, "pi"), leftover = join(dir, "leftover.pid");
+  const dir = mkdtempSync(join(tmpdir(), "alice-pi-models-")), pi = join(dir, "pi"), leftover = join(dir, "leftover.pid");
   writeFileSync(pi, `#!/bin/sh\n${body.replaceAll("LEFTOVER", leftover)}\n`);
   chmodSync(pi, 0o755);
   return {
@@ -24,7 +24,7 @@ test("a model list that failed before Pi started is not served again: the next r
   const realMkdir = fs.mkdirSync;
   let failures = 1;
   const mkdir = mock.method(fs, "mkdirSync", (...args: Parameters<typeof fs.mkdirSync>) => {
-    if (String(args[0]).includes("bakery-run-") && failures-- > 0) throw Object.assign(new Error("ENOSPC: no space left on device, mkdir"), { code: "ENOSPC" });
+    if (String(args[0]).includes("alice-run-") && failures-- > 0) throw Object.assign(new Error("ENOSPC: no space left on device, mkdir"), { code: "ENOSPC" });
     return realMkdir(...args);
   });
   syncBuiltinESMExports();

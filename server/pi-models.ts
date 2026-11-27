@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { parseModelList } from "./agent-models.js";
+import { parseModelList } from "../shared/agent-models.js";
 import { spawnPi } from "./run-temp.js";
 
 export type ModelList = { models: string[]; error?: string };

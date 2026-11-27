@@ -1,8 +1,8 @@
 import { execFile, execFileSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
-// Updates for a hosted Bakery checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
+// Updates for a hosted Alice checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
 // brought in, plus anything merged into the checked-out main since the server started (approving a card merges it
 // locally), so the UI can show a changelog. It installs only on request.
 // An update that touches only the browser UI swaps the new build in at once. Anything the server process runs (its
@@ -195,7 +195,8 @@ export function serverModules(root: string, entry = "server/index.ts"): Set<stri
   const queue = [resolve(root, entry)];
   while (queue.length) {
     const file = queue.pop()!;
-    const path = relative(root, file);
+    // Forward slashes on every platform, matching the paths `git diff --name-only` reports.
+    const path = relative(root, file).split(sep).join("/");
     if (seen.has(path) || !existsSync(file)) continue;
     seen.add(path);
     const source = readFileSync(file, "utf8");

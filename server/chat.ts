@@ -2,9 +2,10 @@ import { type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { killTree } from "./platform.js";
 import { runTempDir, spawnPi } from "./run-temp.js";
 import { settledReply } from "./agent.js";
-import { piModelArgs } from "./agent-models.js";
+import { piModelArgs } from "../shared/agent-models.js";
 import { publishChatImages } from "./chat-images.js";
 import type { Board, Card, Chat, ChatMessage, ChatPart, RepoBoard } from "./board.js";
 
@@ -31,13 +32,13 @@ export function chatSystemPrompt(repoBoard: RepoBoard, cards: Card[], cli: strin
     return `- ${card.id} [${card.status}] ${card.title}${extra ? ` (${extra})` : ""}`;
   });
   return [
-    "## Bakery board chat",
-    `You are chatting with the operator inside Bakery, a local kanban that runs Pi agents on cards. This chat belongs to the board for the repository at ${repoBoard.repo} (board id ${repoBoard.id}). Your working directory is that repository's main checkout.`,
-    "Answer questions about the board, its cards and the code, and change the board when the operator asks. Read and change the board with the Bakery CLI:",
+    "## Alice board chat",
+    `You are chatting with the operator inside Alice, a local kanban that runs Pi agents on cards. This chat belongs to the board for the repository at ${repoBoard.repo} (board id ${repoBoard.id}). Your working directory is that repository's main checkout.`,
+    "Answer questions about the board, its cards and the code, and change the board when the operator asks. Read and change the board with the Alice CLI:",
     `\`${cli} <command> --board ${repoBoard.id}\`. Commands include cards, show CARD_ID, add TITLE, create, edit, depend, undepend, ready, triage, start, archive, close, restore and stats. Add --json for full data; run \`${cli} --help\` for the exact usage.`,
     "When a card is actionable and clear, with no open decisions, create it and move it to Ready, then tell the operator it was created in Ready and will start now (auto pickup launches a paid run). Leave it in Triage only if it needs a decision, a scope answer or more info, and say what is missing.",
     "When you create a feature or task card, write its description as short Markdown with these sections: `## Goal` (one or two sentences), `## Changes` (short bullets) and `## Acceptance criteria` (short bullets). Add `## Context` or `## Out of scope` only when useful, and omit empty sections. Keep the operator's scope and constraints, and match detail to the request: do not inflate small tasks.",
-    "Code changes normally go through cards. Edit files in this checkout only when the operator asks you to, since Bakery merges finished cards into it.",
+    "Code changes normally go through cards. Edit files in this checkout only when the operator asks you to, since Alice merges finished cards into it.",
     `Board snapshot (${live.length} card${live.length === 1 ? "" : "s"} open${live.length > maxCards ? `, first ${maxCards} shown` : ""}; done and archived cards are not listed, so run \`cards\` for them; it may be stale by the time you act, so check with the CLI before changing a card):`,
     lines.length ? lines.join("\n") : "(no cards)",
   ].join("\n\n");
@@ -104,8 +105,8 @@ export function writeTopic(piBin: string, cwd: string, models: string[], message
   return new Promise((resolve, reject) => {
     const child = spawnPi(randomUUID(), piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
-    const timer = setTimeout(() => child.kill("SIGTERM"), 60_000);
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 200_000) child.kill("SIGTERM"); });
+    const timer = setTimeout(() => killTree(child), 60_000);
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 200_000) killTree(child); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-1000); });
     child.once("error", error => { clearTimeout(timer); reject(error); });
     child.once("close", code => {
@@ -120,7 +121,7 @@ type Turn = { child: ChildProcess; live: NonNullable<ChatLive>; stopped: boolean
 
 /**
  * Runs board chat turns. Each chat is one Pi session (`--session-id` = chat id under `sessionDir`), so Pi carries the
- * conversation; Bakery saves each turn's parts for display and streams the live turn to subscribers.
+ * conversation; Alice saves each turn's parts for display and streams the live turn to subscribers.
  */
 export class Chats {
   private turns = new Map<string, Turn>();
@@ -260,7 +261,7 @@ export class Chats {
     if (!turn) return;
     turn.stopped = true;
     // Pi's tool processes share its pipes, so end the whole group or the turn would not finish until they exit.
-    try { if (process.platform !== "win32" && turn.child.pid) process.kill(-turn.child.pid, "SIGTERM"); else turn.child.kill("SIGTERM"); } catch { turn.child.kill("SIGTERM"); }
+    try { if (process.platform !== "win32" && turn.child.pid) process.kill(-turn.child.pid, "SIGTERM"); else killTree(turn.child); } catch { killTree(turn.child); }
   }
 
   /** Stops any reply, then removes the chat and its Pi session file. */

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { killTree } from "./platform.js";
 import { spawnPi } from "./run-temp.js";
 import { settledReply } from "./agent.js";
 import type { Card, DiscussionMessage, Run } from "./board.js";
@@ -10,7 +11,7 @@ const maxHistory = 12;
 export function discussionPrompt(card: Card, run: Run | undefined, history: DiscussionMessage[], message: string, files = ""): string {
   const past = history.slice(-maxHistory).map(item => `${item.role === "user" ? "Operator" : "You"}: ${item.body}`).join("\n\n");
   return [
-    "You are discussing a Bakery card with the operator. This is a conversation about the work, not a work run.",
+    "You are discussing an Alice card with the operator. This is a conversation about the work, not a work run.",
     "Answer questions, explain what was done and why, and suggest next steps. You may read files and run read-only commands to check facts.",
     "Do NOT edit, create or delete files, commit, push, or change the card. If the operator wants changes, tell them to request changes or run the card again.",
     `Card: ${card.title} (status: ${card.status})`,
@@ -30,8 +31,8 @@ export function discuss({ prompt, cwd, piBin, models }: { prompt: string; cwd: s
     // A screenshot the agent reads back makes one event line several MB, so the cap matches the worker's.
     const chunks: Buffer[] = [];
     let stdoutBytes = 0, stderr = "", exceeded = false;
-    const timer = setTimeout(() => { exceeded = true; child.kill("SIGTERM"); }, 10 * 60_000);
-    child.stdout?.on("data", (chunk: Buffer) => { chunks.push(chunk); stdoutBytes += chunk.length; if (stdoutBytes > 500_000_000) { exceeded = true; child.kill("SIGTERM"); } });
+    const timer = setTimeout(() => { exceeded = true; killTree(child); }, 10 * 60_000);
+    child.stdout?.on("data", (chunk: Buffer) => { chunks.push(chunk); stdoutBytes += chunk.length; if (stdoutBytes > 500_000_000) { exceeded = true; killTree(child); } });
     child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-1000); });
     child.once("error", error => { clearTimeout(timer); reject(new Error(`Pi could not start: ${error.message}`)); });
     child.once("close", code => {

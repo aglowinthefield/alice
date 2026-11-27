@@ -18,7 +18,7 @@ async function freePort(): Promise<number> {
 }
 
 test("SIGTERM exits the server even while a card run's Pi ignores SIGTERM: it is killed and its TMPDIR removed", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-shutdown-stubborn-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-shutdown-stubborn-"));
   const repo = join(home, "code", "alpha"), dataDir = join(home, "data"), fakePi = join(home, "pi"), seen = join(home, "seen");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -29,7 +29,7 @@ test("SIGTERM exits the server even while a card run's Pi ignores SIGTERM: it is
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_SENTINEL: "0", BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_SENTINEL: "0", ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -63,8 +63,8 @@ test("SIGTERM exits the server even while a card run's Pi ignores SIGTERM: it is
     assert.equal(result, 0, `server exited with ${result}: ${output}`);
     assert.equal(alive(pid), false, "the Pi that ignored SIGTERM was killed");
     assert.equal(existsSync(dir), false);
-    const db = new DatabaseSync(join(dataDir, "bakery.sqlite"));
-    try { assert.match(String((db.prepare("SELECT error FROM runs").get() as { error: string }).error), /Bakery sent SIGTERM: server received SIGTERM/); }
+    const db = new DatabaseSync(join(dataDir, "alice.sqlite"));
+    try { assert.match(String((db.prepare("SELECT error FROM runs").get() as { error: string }).error), /Alice sent SIGTERM: server received SIGTERM/); }
     finally { db.close(); }
   } finally {
     child.kill("SIGKILL");
@@ -75,7 +75,7 @@ test("SIGTERM exits the server even while a card run's Pi ignores SIGTERM: it is
 });
 
 test("SIGTERM stops a chat turn and its topic writer, and removes their TMPDIRs, before the server exits", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-shutdown-chat-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-shutdown-chat-"));
   const repo = join(home, "code", "alpha"), dataDir = join(home, "data"), fakePi = join(home, "pi"), seen = join(home, "seen");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -85,7 +85,7 @@ test("SIGTERM stops a chat turn and its topic writer, and removes their TMPDIRs,
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_SENTINEL: "0", BAKERY_PI_BIN: fakePi },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_SENTINEL: "0", ALICE_PI_BIN: fakePi },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -128,16 +128,17 @@ test("SIGTERM stops a chat turn and its topic writer, and removes their TMPDIRs,
 
 // An open browser tab holds a chat event stream. If shutdown leaves it open, the process never exits, systemd never
 // restarts it, and the tab keeps talking to a server whose database is closed.
-test("SIGTERM exits the server even while a chat event stream is open", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-shutdown-"));
+// Windows cannot deliver SIGTERM (child.kill() ends the process outright), so there the same shutdown is asked for over IPC.
+test("a shutdown request exits the server even while a chat event stream is open", async () => {
+  const home = mkdtempSync(join(tmpdir(), "alice-shutdown-"));
   const repo = join(home, "code", "alpha"), dataDir = join(home, "data");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_SENTINEL: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_SENTINEL: "0" },
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
   child.stderr?.on("data", chunk => { output += chunk.toString(); });
@@ -159,10 +160,10 @@ test("SIGTERM exits the server even while a chat event stream is open", async ()
     await new Promise<void>(resolve => { stream.on("response", response => { response.resume(); resolve(); }); stream.end(); });
 
     const exited = new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
-    child.kill("SIGTERM");
+    if (process.platform === "win32") child.send({ type: "shutdown" }); else child.kill("SIGTERM");
     const result = await Promise.race([exited, new Promise<"hung">(resolve => setTimeout(() => resolve("hung"), 10_000))]);
     stream.destroy();
-    assert.notEqual(result, "hung", `server did not exit after SIGTERM: ${output}`);
+    assert.notEqual(result, "hung", `server did not exit after the shutdown request: ${output}`);
     assert.equal(result, 0, `server exited with ${result}: ${output}`);
   } finally {
     child.kill("SIGKILL");

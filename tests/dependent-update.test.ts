@@ -25,7 +25,7 @@ async function waitFor(predicate: () => boolean) {
 
 /** A local board with a parent card and a card that depends on it, both in Review on worktrees cut from main. */
 function fixture({ autoReview = false } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-dependents-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-dependents-"));
   const repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
@@ -40,7 +40,7 @@ function fixture({ autoReview = false } = {}) {
     const card = board.createCard({ title, body: "", repo });
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
-    git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+    git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);
     return { card, run, worktree, finish: () => board.finish(run.id, "review") };
   };
@@ -111,7 +111,7 @@ test("a dependent branch with commits of its own gets main merged in with a merg
 
     const main = git(f.repo, "rev-parse", "main");
     assert.equal(git(f.child.worktree, "rev-list", "--parents", "-n", "1", "HEAD"), `${git(f.child.worktree, "rev-parse", "HEAD")} ${childHead} ${main}`);
-    assert.equal(git(f.child.worktree, "log", "-1", "--format=%s"), `Merge main into bakery/${f.child.card.id}`);
+    assert.equal(git(f.child.worktree, "log", "-1", "--format=%s"), `Merge main into alice/${f.child.card.id}`);
     assert.equal(readFileSync(join(f.child.worktree, "README.md"), "utf8"), "original\nfrom parent\n");
     assert.deepEqual(status(f.child.worktree), [" M notes.txt"]);
     assert.match(f.note(f.child.card.id), /with a merge commit on the card branch\. Refresh the diff/);
@@ -138,7 +138,7 @@ test("a dependent that would conflict with the new main shows the conflict and i
     assert.equal(readFileSync(join(f.child.worktree, "README.md"), "utf8"), "from child\n");
     const [failure] = f.board.listMergeFailures(f.repo);
     assert.deepEqual({ cardId: failure?.cardId, files: failure?.files }, { cardId: f.child.card.id, files: ["README.md"] });
-    assert.match(failure.details, /up to date with main .* after "Parent" merged conflicts in README\.md\. Bakery changed nothing/);
+    assert.match(failure.details, /up to date with main .* after "Parent" merged conflicts in README\.md\. Alice changed nothing/);
     const child = f.board.getCard(f.child.card.id)!;
     assert.equal(child.status, "review");
     assert.equal(child.reviewWait, null, "a conflicting card is not queued for agent review");
@@ -167,7 +167,7 @@ test("an ignored local file that main starts tracking is reported as a conflict 
     assert.deepEqual(status(f.child.worktree), before);
     const [failure] = f.board.listMergeFailures(f.repo);
     assert.deepEqual(failure?.files, ["secret.env"]);
-    assert.match(failure.details, /would overwrite local files Git ignores: secret\.env\. Bakery changed nothing/);
+    assert.match(failure.details, /would overwrite local files Git ignores: secret\.env\. Alice changed nothing/);
   } finally { f.close(); }
 });
 
@@ -203,13 +203,13 @@ test("a dependent with an approval in progress waits, and is updated once the ap
     f.approve(f.board.getCard(f.parent.card.id)!);
     await f.integration.dependentUpdatesSettled();
     const childHead = git(f.child.worktree, "rev-parse", "HEAD");
-    // Main moves again, and a pending approval holds the child: Bakery must not move its branch under it.
+    // Main moves again, and a pending approval holds the child: Alice must not move its branch under it.
     writeFileSync(join(f.repo, "other.txt"), "other\n"); git(f.repo, "add", "other.txt"); git(f.repo, ...commitArgs, "other");
     writeFileSync(join(f.child.worktree, "child.txt"), "child\n");
     f.board.recordApproval(f.child.card.id, f.child.run.id, childHead);
     const [result] = await f.integration.updateDependents(f.parent.card.id);
     assert.equal(result.outcome, "deferred");
-    assert.match(result.detail, /an approval is in progress\. Bakery updates it once that finishes/);
+    assert.match(result.detail, /an approval is in progress\. Alice updates it once that finishes/);
     assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), childHead);
     assert.deepEqual(await f.integration.retryDeferredDependents(), [{ cardId: f.child.card.id, outcome: "deferred", detail: "" }], "still busy, and noted only once");
 
@@ -250,7 +250,7 @@ test("a parent that merges during the dependent's agent review updates it after 
     f.approve(f.board.getCard(f.parent.card.id)!);
     await f.integration.dependentUpdatesSettled();
     assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), childHead, "the worktree under review is left alone");
-    assert.match(f.note(f.child.card.id), /an agent review is in progress\. Bakery updates it once that finishes/);
+    assert.match(f.note(f.child.card.id), /an agent review is in progress\. Alice updates it once that finishes/);
 
     writeFileSync(release, "");
     await first;

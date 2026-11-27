@@ -22,7 +22,7 @@ type LocalMerge = {
 
 /**
  * Offers to reset local main to origin/main after saving its tip as
- * bakery-recovery/<sha>. Resets only when the operator confirms this tip.
+ * alice-recovery/<sha>. Resets only when the operator confirms this tip.
  */
 export function MainReset({
   boardId,
@@ -87,7 +87,7 @@ export function MainReset({
 }
 
 /**
- * Done cards Bakery merged into local main whose work is not on origin/main.
+ * Done cards Alice merged into local main whose work is not on origin/main.
  * On a github-pr board each can be published as a pull request.
  */
 export function LocalMerges({
@@ -137,7 +137,7 @@ export function LocalMerges({
           <div className="font-medium">Merged only into local main</div>
           <p className="mt-1 text-muted-foreground">
             {integration === "github-pr"
-              ? "Publish as PR pushes the approved work to bakery/<card>, opens a pull request, and moves the card back to Review until it merges."
+              ? "Publish as PR pushes the approved work to alice/<card>, opens a pull request, and moves the card back to Review until it merges."
               : "Switch to GitHub pull requests to publish these as pull requests."}
           </p>
           <ul className="mt-2 space-y-2">

@@ -15,15 +15,15 @@ export function chatImagePath(sessionDir: string, chatId: string, id: string): s
   return join(sessionDir, "images", chatId, id);
 }
 
-/** Import explicit local raster links into opaque, chat-scoped storage. `scratch` is the running turn's own temp directory. */
+/** Import explicit local raster links into opaque, chat-scoped storage. Absolute paths only: `/…`, or `C:\…` on Windows. `scratch` is the running turn's own temp directory. */
 export function publishChatImages(text: string, sessionDir: string, chatId: string, boardId: string, repo: string, scratch?: string): string {
-  return text.replace(/!?\[([^\]\n]*)\]\(\s*(\/[^)\n]+?)\s*\)/g, (original, label: string, path: string) => {
+  return text.replace(/!?\[([^\]\n]*)\]\(\s*((?:\/|[A-Za-z]:[\\/])[^)\n]+?)\s*\)/g, (original, label: string, path: string) => {
     try {
       if (!/\.(png|jpe?g|gif|webp)$/i.test(path)) return original;
-      const file = realpathSync(path);
+      const file = realpathSync.native(path);
       const allowed = [repo, tmpdir(), ...(scratch ? [scratch] : [])].some(root => {
         try {
-          const part = relative(realpathSync(root), file);
+          const part = relative(realpathSync.native(root), file);
           return part !== "" && !part.startsWith("..") && !isAbsolute(part);
         } catch { return false; }
       });

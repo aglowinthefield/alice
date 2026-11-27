@@ -8,7 +8,7 @@ import { turboCacheUsage } from "../server/turbo-summary.js";
 const summary = (...statuses: ("HIT" | "MISS")[]) => JSON.stringify({ tasks: statuses.map(status => ({ cache: { status, timeSaved: status === "HIT" ? 1500 : 0 } })) });
 
 test("turbo summaries written since the run started give its hit count and time saved", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-turbo-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-turbo-"));
   try {
     assert.equal(turboCacheUsage(dir, 0), null);
     mkdirSync(join(dir, ".turbo", "runs"), { recursive: true });

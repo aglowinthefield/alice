@@ -57,6 +57,9 @@ struct CardDetailSheet: View {
     @State private var editing = false
     @State private var confirm: Confirmation?
     @State private var replying = false
+    @State private var closing = false
+    @State private var closingOther = false
+    @State private var otherNote = ""
 
     struct Confirmation: Identifiable { let id = UUID(); let title: String; let message: String; let action: () async -> Void }
 
@@ -354,7 +357,7 @@ struct CardDetailSheet: View {
                     }
                     if model.approvalPending { button("Withdraw approval", .outline) { try await postEmpty(base + "/withdraw") } }
                     startButton(card, base, outline: true)
-                    button("Close", .outline, confirm: "Close this card without merging? Its worktree and branch stay.") { try await post(base + "/close", Empty()) }
+                    Button { closing = true } label: { Text("Close").fixedSize() }.buttonStyle(.pill(.outline))
                 case .failed, .interrupted:
                     if card.status == .interrupted {
                         button("Release for retry", .primary) { try await post(base + "/resolve", Ack(acknowledged: true)) }
@@ -367,6 +370,44 @@ struct CardDetailSheet: View {
                     button("Restore to Done", .outline) { try await post("/boards/\(route.boardId)/cards/unarchive", Ids(cardIds: [card.id])) }
                 case .unknown: EmptyView()
                 }
+            }
+        }
+        // Mirrors the web dialog: one tap on a reason closes the card, Other asks for a note, and the reason is optional.
+        .confirmationDialog("Close without merging?", isPresented: $closing, titleVisibility: .visible) {
+            ForEach(Self.closeReasons) { reason in
+                Button(reason.label) { close(base, CloseChoice(reason: reason.id, note: nil)) }
+            }
+            Button("Other…") { otherNote = ""; closingOther = true }
+            Button("Close without a reason") { close(base, nil) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Its worktree and branch stay, and Reopen brings it back. Why is it being closed?")
+        }
+        .alert("Other reason", isPresented: $closingOther) {
+            TextField("What happened?", text: $otherNote)
+            Button("Close card") {
+                let note = otherNote.trimmingCharacters(in: .whitespacesAndNewlines)
+                close(base, CloseChoice(reason: "other", note: note.isEmpty ? nil : String(note.prefix(500))))
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Mirrors `closeReasons` in server/board.ts; Other is offered separately because it takes a note.
+    struct CloseReason: Identifiable { let id: String; let label: String }
+    static let closeReasons = [
+        CloseReason(id: "duplicate", label: "Duplicate"),
+        CloseReason(id: "wrong-approach", label: "Wrong approach"),
+        CloseReason(id: "not-needed", label: "Not needed"),
+        CloseReason(id: "superseded", label: "Superseded"),
+    ]
+    /// Nil fields are left out of the JSON, so a skipped note sends only the reason.
+    struct CloseChoice: Encodable { let reason: String; let note: String? }
+
+    private func close(_ base: String, _ choice: CloseChoice?) {
+        Task {
+            await store.act {
+                if let choice { try await post(base + "/close", choice) } else { try await post(base + "/close", Empty()) }
             }
         }
     }

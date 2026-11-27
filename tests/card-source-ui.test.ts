@@ -46,6 +46,6 @@ test("a follow-up added from a run report is created with source follow-up, and 
     await page.getByRole("tab", { name: "Details" }).click();
     const source = page.getByTestId("card-source");
     await source.waitFor();
-    assert.equal((await source.textContent())?.trim(), "Sourcemanual(made before Bakery recorded sources)");
+    assert.equal((await source.textContent())?.trim(), "Sourcemanual(made before Alice recorded sources)");
   } finally { await browser.close(); await server.close(); }
 });

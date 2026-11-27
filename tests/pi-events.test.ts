@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { test } from "node:test";
 import { initialPiStreamState, reducePiEvent, reducePiLine, stuckTool, type PiEffect, type PiStreamState } from "../server/pi-events.js";
 
@@ -80,7 +80,7 @@ test("a line that is not a Pi event marks the stream invalid and the rest still 
   assert.equal(state.protocolError, "Invalid Pi event stream");
   assert.equal(state.settled, true);
   assert.equal(state.aborted, false);
-  assert.deepEqual(effects, [{ type: "append", text: "Working." }, { type: "completeTurn" }]);
+  assert.deepEqual(effects, [{ type: "append", text: "Working." }, { type: "turnEnded", edited: false }, { type: "completeTurn" }]);
 });
 
 test("the reducer leaves the state it was given untouched", () => {
@@ -107,13 +107,14 @@ test("the reducer module and everything it imports do no I/O", () => {
   const visit = (file: string) => {
     if (seen.has(file)) return;
     seen.add(file);
-    const source = readFileSync(join(import.meta.dirname, "..", "server", file), "utf8");
-    for (const [, from] of source.matchAll(/^import\s[^;]*?from\s+"([^"]+)"/gm)) {
-      assert.match(from, /^\.\//, `${file} imports ${from}`);
-      visit(from.slice(2).replace(/\.js$/, ".ts"));
+    const source = readFileSync(join(import.meta.dirname, "..", file), "utf8");
+    for (const [, from] of source.matchAll(/^import\s[^;]*?(?:from\s+)?"([^"]+)"/gm)) {
+      // Siblings in server/, or shared/, which lint keeps free of Node built-ins.
+      assert.match(from, /^\.\/|^\.\.\/shared\//, `${file} imports ${from}`);
+      visit(posix.join(posix.dirname(file), from).replace(/\.js$/, ".ts"));
     }
     assert.doesNotMatch(source, /\bprocess\.|\b(?:require|fetch)\(|\bimport\(/, `${file} reaches outside itself`);
   };
-  visit("pi-events.ts");
-  assert.deepEqual([...seen].sort(), ["agent.ts", "failure-summary.ts", "pi-events.ts", "provider-failure.ts"]);
+  visit("server/pi-events.ts");
+  assert.deepEqual([...seen].sort(), ["server/agent.ts", "server/failure-summary.ts", "server/pi-events.ts", "server/provider-failure.ts", "shared/wire.ts"]);
 });

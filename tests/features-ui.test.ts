@@ -97,7 +97,7 @@ for (const [sentinels, pullRequests] of [
       if (!pullRequests)
         assert.match(
           await page.getByTestId("pull-requests-off-notice").innerText(),
-          /BAKERY_FEATURE_PULL_REQUESTS=1/,
+          /ALICE_FEATURE_PULL_REQUESTS=1/,
         );
     } finally {
       await browser.close();

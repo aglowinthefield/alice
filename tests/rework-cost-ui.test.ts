@@ -38,7 +38,7 @@ test("card details split the cost by kind and the tile marks cards where rework 
     const cheap = page.getByRole("button", { name: /cheap card/ });
     await cheap.waitFor();
     assert.equal(await cheap.getByTestId("rework-cost").count(), 0, "rework at a quarter of the cost shows no marker");
-    if (process.env.BAKERY_EVIDENCE_DIR) await page.locator('section[data-status="review"]').screenshot({ path: `${process.env.BAKERY_EVIDENCE_DIR}/rework-marker.png` });
+    if (process.env.ALICE_EVIDENCE_DIR) await page.locator('section[data-status="review"]').screenshot({ path: `${process.env.ALICE_EVIDENCE_DIR}/rework-marker.png` });
 
     await churned.click();
     await page.getByRole("tab", { name: /^Attempts/ }).click();
@@ -47,7 +47,7 @@ test("card details split the cost by kind and the tile marks cards where rework 
     assert.deepEqual(await split.getByRole("listitem").allTextContents(), ["First attempt: $0.75", "CI or hook fix: $1.50"]);
     assert.match((await page.getByText(/^Card total:/).textContent()) ?? "", /\$2\.25/);
     assert.deepEqual(await page.getByTestId("run-kind").allTextContents(), ["CI or hook fix"], "only runs after the first are labelled");
-    if (process.env.BAKERY_EVIDENCE_DIR) await page.getByRole("dialog").screenshot({ path: `${process.env.BAKERY_EVIDENCE_DIR}/cost-split.png` });
+    if (process.env.ALICE_EVIDENCE_DIR) await page.getByRole("dialog").screenshot({ path: `${process.env.ALICE_EVIDENCE_DIR}/cost-split.png` });
   } finally {
     await browser.close();
     await server.close();

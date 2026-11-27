@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium, type Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 
-// Approving a card on Bakery's own board merges into the checkout the dev server
+// Approving a card on Alice's own board merges into the checkout the dev server
 // serves. The open card must survive the resulting hot update or page reload.
 
 const card = (id: string, status: string, title: string) => ({
@@ -47,7 +47,7 @@ test("a page reload reopens the card this tab had open", async () => {
     const page = await browser.newPage();
     await openCard(server, page);
     // Another tab picking a different repo must not move this tab on reload.
-    await page.evaluate(() => localStorage.setItem("bakery-board", "other"));
+    await page.evaluate(() => localStorage.setItem("alice-board", "other"));
     await page.reload();
     await page.getByRole("dialog").getByText("Polish sidebar").waitFor();
     assert.match((await page.locator("h1").first().textContent()) ?? "", /repo/);

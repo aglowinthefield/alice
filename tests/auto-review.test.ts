@@ -22,6 +22,7 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
   git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
   const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
+  board.setAutoReview(repoBoard.id, false);
   const piBin = join(dir, "fake-pi");
   // The fake emits the same JSON events as --mode json; it never calls a model.
   writeFileSync(piBin, `#!/bin/sh\ncat <<'EVENTS'\n${settle(verdict)}EVENTS\n`); chmodSync(piBin, 0o755);

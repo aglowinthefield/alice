@@ -16,7 +16,7 @@ function fixture() {
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
   git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
   const board = new Board(join(dir, "board.sqlite")), integration = new Integration(board, data);
-  board.addRepo(repo);
+  board.setAutoReview(board.addRepo(repo).id, false);
   /** A card whose run reached Review, with or without a file change. */
   function reviewed(change: boolean) {
     const card = board.createCard({ repo, title: change ? "Implement" : "Investigate", body: "" });

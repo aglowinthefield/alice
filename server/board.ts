@@ -499,7 +499,8 @@ export class Board {
       return this.getBoard(existing.id)!;
     }
     const id = randomUUID();
-    this.db.prepare("INSERT INTO boards(id, repo) VALUES (?, ?)").run(id, repo);
+    // New boards start with auto-review on; the column default stays 0 so older rows are never flipped.
+    this.db.prepare("INSERT INTO boards(id, repo, autoReviewEnabled, autoReviewEnabledAt) VALUES (?, ?, 1, ?)").run(id, repo, now());
     return this.getBoard(id)!;
   }
   setAppearance(id: string, icon: string, color: string): RepoBoard {

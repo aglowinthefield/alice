@@ -123,11 +123,13 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.deepEqual(prefs((await request("/settings", "PATCH", { theme: "light" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.deepEqual(prefs((await request("/settings")).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
+    const addedAt = new Date().toISOString();
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync(alpha));
     assert.deepEqual([first.icon, first.color], ["sprinkle_donut", "violet"]);
     assert.equal(first.autoCollapseEmptySwimlanes, false);
-    assert.equal(first.autoReviewEnabled, false);
+    assert.equal(first.autoReviewEnabled, true, "a new board starts with auto-review on");
+    assert.ok(first.autoReviewEnabledAt && first.autoReviewEnabledAt <= addedAt, "auto-review is on from when the board was added");
     assert.equal(first.autoPickupEnabled, false);
     assert.equal(first.pickupConcurrency, 2);
     assert.equal(first.pickupDailyLimit, 6);
@@ -170,6 +172,8 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(settings.status, 200);
     assert.equal(settings.data.autoCollapseEmptySwimlanes, true);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: "yes" })).status, 400);
+    const off = (await request(`/boards/${second.id}/settings`, "PATCH", { autoReviewEnabled: false })).data;
+    assert.deepEqual([off.autoReviewEnabled, off.autoReviewEnabledAt], [false, null], "the per-board toggle still turns auto-review off");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true, autoCollapseEmptySwimlanes: true })).status, 400);
     const auto = await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true });
     assert.equal(auto.status, 200);
@@ -273,6 +277,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const restored = await request("/boards", "POST", { repo: gamma });
     assert.equal(restored.data.id, first.id);
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
+    assert.equal(restored.data.autoReviewEnabled, false, "re-adding an existing board keeps its auto-review setting");
     assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
   } finally {

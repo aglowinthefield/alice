@@ -5,19 +5,28 @@ import type {
   AgentModels,
   BoardAgentModels,
   ThinkingLevel,
-} from "../server/agent-models.js";
+} from "../shared/agent-models.js";
+import type { Card, CardPriority, CardStatus } from "../shared/wire.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
-import type { RunKind } from "./run-kinds.js";
 
-export type Status =
-  | "triage"
-  | "ready"
-  | "running"
-  | "review"
-  | "failed"
-  | "interrupted"
-  | "done"
-  | "archived";
+export type { Card, ReviewAction, ReviewWait, Run } from "../shared/wire.js";
+export {
+  agentApproved,
+  cardActivity,
+  needsYouLabels,
+  needsYouStatuses,
+  needsYourReview,
+  quietAfterMs,
+  reviewActionLabels,
+  reviewActionText,
+  reviewOrder,
+  reviewWaitLabels,
+  reviewWaitText,
+  searchRank,
+  todaySections,
+  waitingOn,
+} from "../shared/card-state.js";
+export type Status = CardStatus;
 export type Board = {
   id: string;
   repo: string;
@@ -42,13 +51,15 @@ export type Board = {
   integrationNote?: string;
   autoCollapseEmptySwimlanes: boolean;
   pushMainAfterMerge?: boolean;
-  /** Build caches card worktrees share with the main checkout (server/shared-caches.ts). */
+  /** Build caches card worktrees share with the main checkout (shared/shared-caches.ts). */
   sharedCaches?: string[];
   autoPullRequestEnabled?: boolean;
   autoReviewEnabled: boolean;
   autoReviewEnabledAt: string | null;
   /** Spend limits (daily starts, cost budget, review diff caps) apply only when on; off by default. */
   limitsEnabled?: boolean;
+  /** Days a card may sit in Review before it is marked stale (src/stale-review.ts); 0 is off. */
+  staleReviewDays?: number;
   autoReviewConcurrency?: number;
   autoReviewMaxFiles?: number;
   autoReviewMaxPatchChars?: number;
@@ -71,7 +82,19 @@ export type Board = {
   chatUnread?: number;
   /** Sentinel jobs that are running or queued to start. Done jobs never count. */
   sentinelsInProgress?: number;
+  /** Files that keep conflicting on this board and have not been dismissed since their last conflict. */
+  conflictHotspots?: ConflictHotspot[];
 };
+/** A file that conflicted on `cards` distinct cards within `conflictHotspotDays`. */
+export type ConflictHotspot = {
+  file: string;
+  cards: number;
+  cardIds: string[];
+  lastAt: string;
+};
+/** A file conflicting on this many cards within `conflictHotspotDays` gets a board notice. */
+export const conflictHotspotCards = 3;
+export const conflictHotspotDays = 14;
 export type AutoReviewJob = {
   cardId: string;
   runId: string;
@@ -147,8 +170,7 @@ export type ReviewDiff = {
   fingerprint: string;
   files: { path: string; patch: string }[];
 };
-// Mirrors server/board.ts: stored as an integer, higher is picked up first.
-export type Priority = number;
+export type Priority = CardPriority;
 export const PRIORITY_MIN = -100;
 export const PRIORITY_MAX = 100;
 export const priorityLabel = (value: number) =>
@@ -176,24 +198,6 @@ export const priorityTone = (value: number) =>
       : value > 0
         ? "text-amber-400"
         : "text-muted-foreground";
-/**
- * The search behind the command palette and the TUI's /: an item matches when its label and keywords hold every
- * word of the query. Labels that start with the first word come first; the rest keep their order.
- */
-export const searchRank = <T extends { label: string; keywords?: string }>(
-  items: T[],
-  query: string,
-) => {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return items;
-  const found = items.filter((item) => {
-    const text = `${item.label} ${item.keywords ?? ""}`.toLowerCase();
-    return terms.every((term) => text.includes(term));
-  });
-  const lead = (item: T) =>
-    item.label.toLowerCase().startsWith(terms[0]) ? 0 : 1;
-  return found.sort((a, b) => lead(a) - lead(b));
-};
 // Stable sort: equal priorities keep the server's existing order.
 export const byPriority = <T extends { priority?: number }>(items: T[]) =>
   [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -230,146 +234,11 @@ export const sortCards = <T extends Sortable>(items: T[], sort: CardSort) => {
   };
   return prioritized.sort(compare[sort]);
 };
-export type Card = {
-  id: string;
-  title: string;
-  body: string;
-  repo: string;
-  /** Where the card came from: ui, cli, plan, follow-up, sentinel, pr-comment, api, an agent name, or manual (unknown, older cards). */
-  source: string;
-  idempotencyKey?: string | null;
-  /** Set on a job card made by a sentinel: the sentinel, its run, and the finding's stable key. */
-  sentinelId?: string | null;
-  sentinelRunId?: string | null;
-  findingKey?: string | null;
-  /** Ids of the cards made from this card's plan; null until the plan is used. */
-  createdCardIds?: string[] | null;
-  status: Status;
-  priority: Priority;
-  createdAt: string;
-  updatedAt: string;
-  turns: number;
-  turnsIncomplete: number;
-  attempts: number;
-  reviewRounds: number;
-  runAgent: string;
-  reviewAgent: string;
-  /** The latest run ended with a `alice-plan` block: this card produced a plan, not code. */
-  planOnly?: boolean;
-  usageIncomplete?: number;
-  /** Spend on every run after the first attempt; null when there were none. */
-  reworkCost?: number | null;
-  /** Cards on the same board that must be Done or archived before this one starts. */
-  dependsOn?: string[];
-  /** True while any card in dependsOn is not Done or archived. */
-  blocked?: boolean;
-  /** A PR link attached by the operator; overrides the alice/<id> branch lookup. */
-  prOverrideUrl?: string | null;
-  prNumber?: number | null;
-  prUrl?: string | null;
-  prState?: "OPEN" | "CLOSED" | "MERGED" | null;
-  prChecks?: string | null;
-  prError?: string | null;
-  /**
-   * Local boards with a GitHub remote: whether this Done card's merge commit is on origin/main,
-   * as of the last fetch. "local" means merged into local main but not pushed.
-   */
-  originMain?: "pushed" | "local";
-  /** Times Alice sent this card back because its PR failed CI. */
-  ciReworks?: number;
-  /** Alice merged this card into local main (local integration), not through a PR. */
-  locallyMerged?: boolean;
-  /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
-  reviewWait?: ReviewWait | null;
-  /** For a card waiting on an agent review that has not started: its place in its board's queue. */
-  reviewQueue?: { position: number; of: number } | null;
-  /** On a Review card that is your turn: what the next step is, once the server knows; see `reviewActionLabels`. */
-  reviewAction?: ReviewAction | null;
-  /** A start is queued: asked for during a restart drain, or refused by the run limit (`startQueuedForSlot`). */
-  startQueued?: boolean;
-  /** The queued start waits for a run on the card's board to finish, not for a restart. */
-  startQueuedForSlot?: boolean;
-  /** Files attached to the card; the Attachments section only fetches the list when this is above 0. */
-  attachmentCount?: number;
-  /** A Failed card's reason in a few words; the latest attempt's error has the full text. */
-  failureSummary?: string | null;
-  /** Last time the latest run's agent reported anything. */
-  lastActivityAt?: string | null;
-  /** Automatic retries (of 3) spent after temporary provider failures since the card's last successful run. */
-  autoRetries?: number;
-  /** When auto-pickup retries this Ready card after a temporary provider failure; null when none is waiting. */
-  autoRetryAt?: string | null;
-  /**
-   * What the running agent is doing now: its latest tool, the turn it ran in, and when that tool started (ISO time).
-   * Null when no run is in progress or it has not used a tool yet. Only the card lists carry it.
-   */
-  live?: { tool: string; turn: number; since: string } | null;
-} & UsageFields;
 export type CountKey = Status | "reviewWaiting";
 /** The `cardCounts` bucket a card falls in. */
 export const countKey = (card: Card): CountKey =>
   card.status === "review" && card.reviewWait ? "reviewWaiting" : card.status;
-export type ReviewWait = "agent_review" | "ci_fix" | "github";
-/**
- * `agent_approved`: the agent reviewer approved the latest attempt and only your Approve is left.
- * `needs_you`: the agent reviewer handed the attempt to you with a finding or a failed check.
- */
-export type ReviewAction =
-  | "pr_ready"
-  | "accept_findings"
-  | "agent_approved"
-  | "needs_you";
-export const reviewActionLabels: Record<ReviewAction, string> = {
-  pr_ready: "PR ready",
-  accept_findings: "Accept findings",
-  agent_approved: "Agent approved",
-  needs_you: "Needs you",
-};
-/** An agent reviewer approved the card; it waits only for your Approve, not for you to fix something. */
-export const agentApproved = (card: Card) =>
-  needsYourReview(card) && card.reviewAction === "agent_approved";
-/** The next step on a Review card you can act on, or "" while it is waiting or the step is not known yet. */
-export const reviewActionText = (card: Card): string =>
-  needsYourReview(card) && card.reviewAction
-    ? reviewActionLabels[card.reviewAction]
-    : "";
-export const reviewWaitLabels: Record<ReviewWait, string> = {
-  agent_review: "Agent reviewing",
-  ci_fix: "CI fix queued",
-  github: "Waiting on GitHub",
-};
-/** The label for a Review card's wait; a queued agent review says where it stands. */
-export const reviewWaitText = (card: Card): string =>
-  card.reviewWait === "agent_review" && card.reviewQueue
-    ? `Waiting for agent review (#${card.reviewQueue.position} of ${card.reviewQueue.of})`
-    : card.reviewWait
-      ? reviewWaitLabels[card.reviewWait]
-      : "";
-/** A Review card you can act on now, rather than one an agent, CI or GitHub still has. */
-export const needsYourReview = (card: Card) =>
-  card.status === "review" && !card.reviewWait;
-/** A running agent silent for this long is shown as quiet. Long tool calls (a test suite) can be quiet too. */
-export const quietAfterMs = 5 * 60_000;
-/**
- * Whether work is happening on the card right now: an agent is `working`, the card is `waiting` on something
- * outside Alice, or a running agent has gone `quiet`. Null when nothing is in flight.
- */
-export function cardActivity(
-  card: Card,
-  now = Date.now(),
-  quietAfter = quietAfterMs,
-): "working" | "waiting" | "quiet" | null {
-  if (card.status === "running")
-    return card.lastActivityAt &&
-      now - Date.parse(card.lastActivityAt) > quietAfter
-      ? "quiet"
-      : "working";
-  if (card.status === "review" && card.reviewWait)
-    return card.reviewWait === "agent_review" && !card.reviewQueue
-      ? "working"
-      : "waiting";
-  return null;
-}
+
 /**
  * Lanes a board card can be dragged to. Mirrors the card's own buttons: Move to Ready or Triage,
  * Mark done (never-run cards only), Start or Run again, Archive, and Restore to Done. Moves that need
@@ -404,17 +273,6 @@ export const sharedDropTargets = (cards: Card[]): Status[] =>
         .reduce((shared, targets) =>
           shared.filter((status) => targets.includes(status)),
         );
-const finished = (status: Status) => status === "done" || status === "archived";
-/**
- * The cards this card still waits on, from the cards the page already has. Only Today's list
- * leaves cards out, and only archived (finished) ones, so a missing dependency is skipped.
- */
-export const waitingOn = (card: Card, cards: Card[]) =>
-  card.blocked
-    ? (card.dependsOn ?? [])
-        .map((id) => cards.find((item) => item.id === id))
-        .filter((item): item is Card => !!item && !finished(item.status))
-    : [];
 /**
  * The Triage cards that move to Ready along with a Triage card: everything it waits on that is still in
  * Triage, and what those wait on in turn. Cards already further along are left out and not followed.
@@ -435,26 +293,6 @@ export const readyCompanions = (card: Card, cards: Card[]): Card[] => {
     }
   return found;
 };
-export type Run = {
-  id: string;
-  attempt: number;
-  status: Status;
-  output: string;
-  error: string | null;
-  worktree: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-  startedBy: "manual" | "auto";
-  agent: string;
-  /** The agent's final message, in markdown. Null for runs that never replied. */
-  report: string | null;
-  /** Why a failed run's provider call failed (for example "invalid-history"), or null. */
-  failureKind?: string | null;
-  /** Id of the failed run whose rejected session this run replaced, or null. */
-  recoveryOf?: string | null;
-  /** Why the run happened; see src/run-kinds.ts. */
-  kind?: RunKind;
-} & UsageFields;
 
 /** A file attached to a card, or to one of its discussion messages (`messageId`). */
 export type Attachment = {
@@ -577,50 +415,3 @@ export type SentinelOverview = {
   runs: SentinelRun[];
   jobs: Card[];
 };
-
-// What each status asks of you on Today. Statuses not listed (Triage, Ready, Archived) stay on their boards.
-export const needsYouLabels: Partial<Record<Status, string>> = {
-  review: "Review",
-  failed: "Failed",
-  interrupted: "Interrupted",
-};
-export const needsYouStatuses = Object.keys(needsYouLabels) as Status[];
-const oldestFirst = (a: Card, b: Card) =>
-  a.updatedAt.localeCompare(b.updatedAt);
-
-/**
- * Review cards in the order the queue walks them: the longest-waiting first. Cards an agent, CI or GitHub
- * still has are left out until they need you.
- */
-export const reviewOrder = (cards: Card[]) =>
-  cards.filter(needsYourReview).sort(oldestFirst);
-
-/**
- * Today's lists across every board, for the web page and the terminal alike. `attention` needs you (Review, then
- * Failed and Interrupted, oldest first); `approved` waits only for your Approve, so it stays out of attention;
- * `running` is in flight, an agent's review included; `finished` is Done since `since`, newest first.
- */
-export function todaySections(cards: Card[], since: string) {
-  const attention = cards
-    .filter(
-      (card) =>
-        card.status in needsYouLabels &&
-        (card.status !== "review" ||
-          (needsYourReview(card) && !agentApproved(card))),
-    )
-    .sort(
-      (a, b) =>
-        needsYouStatuses.indexOf(a.status) -
-          needsYouStatuses.indexOf(b.status) || oldestFirst(a, b),
-    );
-  const approved = cards.filter(agentApproved).sort(oldestFirst);
-  const running = cards.filter(
-    (card) =>
-      card.status === "running" ||
-      (card.status === "review" && card.reviewWait),
-  );
-  const finished = cards
-    .filter((card) => card.status === "done" && card.updatedAt > since)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  return { attention, approved, running, finished };
-}

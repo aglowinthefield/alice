@@ -37,7 +37,7 @@ import { SentinelStore } from "./sentinel-store.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
-import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
+import { parseModelList, piModelArgs, validateAgentModels } from "../shared/agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
 import { PushNotifications } from "./push.js";
@@ -86,8 +86,8 @@ const readiness = new Readiness(board, integration, {
   sendBack: (card, error) => sendBackHookFailure(card, error),
 });
 /** Approve's push on a github-pr board: skips the pre-push hook for a commit that passed it at Review. */
-const openPullRequest = (card: Card, fingerprint: string, draft?: { title: string; body: string }, pushedBy?: "operator" | "ci-fix" | "agent-review" | "auto-pull-request") =>
-  integration.openPullRequest(card, fingerprint, github, draft, pushedBy, () => readiness.passedCommit(card.id));
+const openPullRequest = (card: Card, fingerprint: string, draft?: { title: string; body: string }, pushedBy?: "operator" | "ci-fix" | "agent-review" | "auto-pull-request", handoff?: string) =>
+  integration.openPullRequest(card, fingerprint, github, draft, pushedBy, () => readiness.passedCommit(card.id), handoff);
 board.onRun((event, run) => {
   if (event === "started") readiness.cancel(run.cardId);
   if (event === "finished" && run.worktree && board.boardForRepo(board.getCard(run.cardId)?.repo ?? "")?.sharedCaches.includes("turbo")) {
@@ -115,8 +115,8 @@ async function draftForPullRequest(card: Card, fingerprint: string, lead: string
   if (draft.problem) throw new Error(`${lead}: ${draft.problem}. Use Approve and open PR`);
   return draft;
 }
-async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request"): Promise<Card> {
-  const opened = await sendBackRefusedPush(card, () => openPullRequest(card, fingerprint, draft, pushedBy));
+async function pushDrafted(card: Card, fingerprint: string, draft: { title: string; body: string }, pushedBy: "agent-review" | "auto-pull-request", handoff?: string): Promise<Card> {
+  const opened = await sendBackRefusedPush(card, () => openPullRequest(card, fingerprint, draft, pushedBy, handoff));
   void githubSync.syncBoard(board.boardForRepo(card.repo)!.id);
   return opened;
 }
@@ -130,10 +130,11 @@ const autoReview = new AutoReview(board, integration, piBin, card => worker.star
     if (!fresh || fresh.status !== "review" || fresh.prOverrideUrl) throw new Error("The card changed or was linked to a pull request during drafting");
     return pushDrafted(fresh, fingerprint, draft, "agent-review");
   });
-// Without auto-review, a github-pr board can still open each card's pull request as soon as its run reaches Review.
+// A github-pr board can open each card's pull request as soon as its run reaches Review. With auto-review on, it waits
+// for the agent reviewer and then opens a draft for a card the reviewer left to a person.
 const autoPullRequest = new AutoPullRequest(board, card => integration.reviewFingerprint(card),
   (card, fingerprint) => draftForPullRequest(card, fingerprint, "The pull request draft needs a person"),
-  (card, fingerprint, draft) => pushDrafted(card, fingerprint, draft, "auto-pull-request"));
+  (card, fingerprint, draft, handoff) => pushDrafted(card, fingerprint, draft, "auto-pull-request", handoff));
 // Local boards: whether each Done card's merge is on origin/main, read from the last fetch.
 const originMain = new OriginMain(board);
 const autoPickup = new AutoPickup(board, worker);
@@ -388,7 +389,7 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), sentinels = board.sentinelInProgressCounts(); send(res, 200, board.listBoards().map(item => ({ ...item, cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0, sentinelsInProgress: sentinels[item.repo] ?? 0 }))); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), sentinels = board.sentinelInProgressCounts(), hotspots = board.conflictHotspots(); send(res, 200, board.listBoards().map(item => ({ ...item, conflictHotspots: hotspots[item.repo] ?? [], cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0, sentinelsInProgress: sentinels[item.repo] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
       // Every visible board's cards, for the Today view. Removed boards, archived cards and sentinel jobs stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
@@ -510,6 +511,10 @@ const server = createServer(async (req, res) => {
         if (keys.some(key => key !== "autoReviewMaxFiles" && key !== "autoReviewMaxPatchChars") || [input.autoReviewMaxFiles, input.autoReviewMaxPatchChars].some(value => value !== undefined && !Number.isSafeInteger(value))) throw new Error("Update autoReviewMaxFiles and autoReviewMaxPatchChars as integers (0 for no limit), separately from other board settings");
         send(res, 200, board.setAutoReviewDiffLimits(repoBoard.id, { maxFiles: input.autoReviewMaxFiles as number | undefined, maxPatchChars: input.autoReviewMaxPatchChars as number | undefined })); return;
       }
+      if ("staleReviewDays" in input) {
+        if (Object.keys(input).length !== 1) throw new Error("Update staleReviewDays separately from other board settings");
+        send(res, 200, board.setStaleReviewDays(repoBoard.id, input.staleReviewDays)); return;
+      }
       if ("limitsEnabled" in input) {
         if (Object.keys(input).length !== 1 || typeof input.limitsEnabled !== "boolean") throw new Error("Update limitsEnabled as a boolean, separately from other board settings");
         send(res, 200, board.setLimitsEnabled(repoBoard.id, input.limitsEnabled)); return;
@@ -554,6 +559,15 @@ const server = createServer(async (req, res) => {
       const repoBoard = board.getBoard(conflictsRoute[1]);
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
       send(res, 200, board.listMergeFailures(repoBoard.repo)); return;
+    }
+    const hotspotRoute = path.match(/^\/api\/boards\/([\w-]+)\/conflict-hotspots\/dismiss$/);
+    if (hotspotRoute && req.method === "POST") {
+      const repoBoard = board.getBoard(hotspotRoute[1]);
+      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
+      const { file } = await body(req);
+      if (typeof file !== "string" || !file || file.length > 4096) { send(res, 400, { error: "file must name the conflicting file" }); return; }
+      board.dismissConflictHotspot(repoBoard.repo, file);
+      send(res, 200, { ok: true }); return;
     }
     // Attachments stream as the raw request body (name in ?name=, type in Content-Type), never through JSON.
     const attachmentRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards\/([\w-]+)\/attachments(?:\/([\w-]+))?$/);
@@ -798,8 +812,13 @@ const server = createServer(async (req, res) => {
         if (req.method === "POST" && action === "start") {
           if (item.reviewWait === "github") throw new Error("Waiting on GitHub CI; run again once the checks finish");
           // During a restart drain, remember the start and replay it once the new server is up.
+          // "Run again on current main" (a stale Review card): the run first brings the work up to date with main.
+          const { currentMain } = req.headers["content-type"]?.startsWith("application/json") ? await body(req) : {};
+          if (currentMain !== undefined && typeof currentMain !== "boolean") throw new Error("currentMain must be a boolean");
+          if (currentMain && item.status !== "review") throw new Error("Only a Review card can run again on current main");
+          if (draining.on && currentMain) throw new Error("Alice is restarting to load code changes; run again on current main after the restart");
           if (draining.on) { board.queueStart(id); send(res, 202, { queued: true, cardId: id }); return; }
-          send(res, 202, worker.start(item, "manual", "", undefined, true)); return;
+          send(res, 202, worker.start(item, "manual", currentMain ? "on current main" : "", undefined, true, !!currentMain)); return;
         }
         if (req.method === "POST" && action === "recover") {
           // Same gates as /start, since a recovery is a paid run.

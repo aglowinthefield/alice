@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker, continuationMessage, sessionIntact } from "../server/worker.js";
+import { STUCK_MESSAGE } from "../server/stuck.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
 
 test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
@@ -1033,6 +1034,173 @@ test("the wrap-up extension steers only a busy session, once per message, so it 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const mode of ["local", "github-pr"] as const) {
+  test(`Run again on current main on a ${mode} board authorizes the card-branch update and nothing beyond it`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "alice-worker-"));
+    const repo = join(dir, "repo"), remote = join(dir, "origin.git"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), promptFile = join(dir, "prompt.txt");
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { encoding: "utf8" }).trim();
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main", repo]);
+      execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+      writeFileSync(join(repo, "README.md"), "initial\n");
+      git("add", "README.md");
+      git("commit", "-qm", "initial");
+      git("remote", "add", "origin", remote);
+      git("push", "-q", "origin", "main");
+      writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+      chmodSync(fakePi, 0o755);
+      const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
+      const repoBoard = board.addRepo(repo);
+      if (mode === "github-pr") { board.setRemoteUrl(repoBoard.id, "https://github.com/example/repo"); board.setIntegration(repoBoard.id, "github-pr"); }
+      const card = board.createCard({ title: "Stale work", body: "Keep it working", repo });
+      board.setStatus(card.id, "ready");
+      const first = worker.start(board.getCard(card.id)!);
+      await waitFor(() => board.getRun(first.id)?.status === "review");
+      const plain = readFileSync(promptFile, "utf8");
+      assert.match(plain, /Do not stage, commit, push, create a PR, merge, deploy, or post externally/, "an ordinary run keeps the blanket ban");
+      writeFileSync(join(repo, "NEW.md"), "main moved\n");
+      git("add", "NEW.md");
+      git("commit", "-qm", "main moves on");
+      git("push", "-q", "origin", "main");
+      const tip = git("rev-parse", "main");
+      const again = worker.start(board.getCard(card.id)!, "manual", "on current main", undefined, true, true);
+      await waitFor(() => board.getRun(again.id)?.status === "review");
+      const prompt = readFileSync(promptFile, "utf8");
+      assert.ok(prompt.startsWith(`Task from Alice card ${card.id}: Stale work\n\nKeep it working\n\nThis card sat in Review long enough`), "the catch-up task comes straight after the card");
+      assert.ok(prompt.includes(`(${tip})`), "names the main tip to catch up with");
+      assert.doesNotMatch(prompt, /Do not stage, commit/, "no rule contradicts the update it asks for");
+      assert.match(prompt, /Do not change main, push, create a PR, deploy, or post externally\./);
+      if (mode === "github-pr") {
+        assert.match(prompt, /merge origin\/main into the card branch and commit the merge there/);
+        assert.match(prompt, /authorized to merge origin\/main into the card branch and to stage and commit that merge, and your fixes on top of it, on the card branch only/);
+        assert.match(prompt, /pre-push hook/);
+      } else {
+        assert.match(prompt, /current local `main`/);
+        assert.match(prompt, /authorized to stash, rebase or merge local `main` into the card branch/);
+        assert.match(prompt, /leave the card's own work uncommitted/);
+      }
+      board.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
+// A fake Pi that loads the real wrap-up extension and works in turns. `loop` runs the same command every turn until it
+// is steered and the test has written `release`, then reports and settles. Each other mode settles after `turns`.
+// `append-untracked` and `rewrite-tracked` change files only through bash, with a different command each turn: the
+// first appends to one untracked file, the second rewrites README.md's one line, so the diff's line counts never move.
+// `long` reads a new file each turn and edits one every sixth turn, then settles.
+function stuckFixture(behaviour: "loop" | "long" | "append-untracked" | "rewrite-tracked", turns = 80) {
+  const dir = mkdtempSync(join(tmpdir(), "alice-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), script = join(dir, "pi-fake.mjs"), steers = join(dir, "steers.jsonl"), release = join(dir, "release");
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  // Each turn starts only once Alice has counted the one before, and with it checked the worktree, so a slow machine
+  // cannot fold several turns' file changes into one check.
+  writeFileSync(script, `import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
+const db = new DatabaseSync(${JSON.stringify(join(dir, "board.sqlite"))}, { readOnly: true });
+const counted = () => db.prepare("SELECT COALESCE(MAX(turns), 0) AS turns FROM runs").get().turns;
+const args = process.argv.slice(2), handlers = {};
+const emit = event => process.stdout.write(JSON.stringify(event) + "\\n");
+let steered = false, done = false, turn = 0;
+const pi = {
+  on: (name, handler) => { handlers[name] = handler; },
+  sendUserMessage: (text, options) => { steered = true; appendFileSync(${JSON.stringify(steers)}, JSON.stringify({ text, options }) + "\\n"); },
+};
+(await import(pathToFileURL(args[args.indexOf("-e") + 1]).href)).default(pi);
+emit({ type: "agent_start" }); handlers.agent_start?.();
+const tool = (id, toolName, toolArgs) => {
+  emit({ type: "tool_execution_start", toolCallId: id, toolName, args: toolArgs });
+  emit({ type: "tool_execution_end", toolCallId: id, isError: false });
+};
+const settle = text => {
+  emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } });
+  emit({ type: "agent_settled", aborted: false }); handlers.agent_settled?.();
+  // Exit only once stdout has drained; exiting at once can drop the last events when the pipe is full.
+  done = true; process.stdout.end(() => process.exit(0));
+};
+const step = () => {
+  if (done) return;
+  if (counted() < turn) { setTimeout(step, 5); return; }
+  turn++;
+  emit({ type: "turn_start" });
+  const mode = ${JSON.stringify(behaviour)};
+  if (mode === "loop") tool("t" + turn, "bash", { command: "npm test -- --grep flaky", timeout: 600 });
+  else if (mode === "append-untracked") { appendFileSync("notes.md", "step " + turn + "\\n"); tool("b" + turn, "bash", { command: "echo step " + turn + " >> notes.md" }); }
+  else if (mode === "rewrite-tracked") { writeFileSync("README.md", "fixture " + turn + "\\n"); tool("b" + turn, "bash", { command: "echo fixture " + turn + " > README.md" }); }
+  else {
+    tool("r" + turn, "read", { path: "src/module-" + turn + ".ts" });
+    if (turn % 6 === 0) { appendFileSync("notes.md", "step " + turn + "\\n"); tool("e" + turn, "edit", { path: "notes.md" }); tool("b" + turn, "bash", { command: "npm test" }); }
+  }
+  emit({ type: "turn_end" });
+  if (steered && existsSync(${JSON.stringify(release)})) settle("I was rerunning a flaky test; the failure is in the fixture, not the code.");
+  else if (turn >= ${turns}) settle("Done.");
+  setTimeout(step, 0);
+};
+step();
+`);
+  writeFileSync(fakePi, `#!/bin/sh\nexec "${process.execPath}" --no-warnings "${script}" "$@"\n`);
+  chmodSync(fakePi, 0o755);
+  const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+  const card = board.createCard({ title: "Maybe stuck", body: "", repo });
+  board.setStatus(card.id, "ready");
+  const delivered = () => existsSync(steers) ? readFileSync(steers, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+  return { dir, board, worker, card, delivered, release: () => writeFileSync(release, ""), cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("a run repeating one command is shown as maybe stuck and steered once to step back", async () => {
+  const f = stuckFixture("loop");
+  try {
+    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => !!f.board.getCard(f.card.id)?.stuck, 10_000);
+    assert.equal(f.board.getCard(f.card.id)?.stuck, "repeated the same bash call 5 times in its last 5 tool calls");
+    assert.equal(f.board.getCard(f.card.id)?.status, "running");
+    f.release();
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running", 10_000);
+    const finished = f.board.getRun(run.id)!;
+    assert.equal(finished.status, "review", finished.error ?? "");
+    assert.match(finished.stuck ?? "", /repeated the same bash call/);
+    assert.equal(f.board.getCard(f.card.id)?.stuck, null, "only a running card shows the flag");
+    assert.deepEqual(f.delivered(), [{ text: STUCK_MESSAGE, options: { deliverAs: "steer" } }], "steered once");
+    assert.equal(finished.output.match(/This run may be stuck: it repeated the same bash call 5 times/g)?.length, 1);
+    assert.match(finished.output, /asked Pi to step back/);
+  } finally { f.cleanup(); }
+});
+
+test("a normal long run that keeps changing files is not flagged", async () => {
+  const f = stuckFixture("long");
+  try {
+    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
+    const finished = f.board.getRun(run.id)!;
+    assert.equal(finished.status, "review", finished.error ?? "");
+    assert.ok(finished.turns >= 80, `ran ${finished.turns} turns`);
+    assert.equal(finished.stuck, null);
+    assert.deepEqual(f.delivered(), []);
+    assert.doesNotMatch(finished.output, /may be stuck/);
+  } finally { f.cleanup(); }
+});
+
+for (const behaviour of ["append-untracked", "rewrite-tracked"] as const) {
+  test(`a run whose bash commands keep changing files is not flagged (${behaviour})`, async () => {
+    // Well past the 25-turn idle limit, so a fingerprint blind to these changes would flag the run.
+    const f = stuckFixture(behaviour, 40);
+    try {
+      const run = f.worker.start(f.board.getCard(f.card.id)!);
+      await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
+      const finished = f.board.getRun(run.id)!;
+      assert.equal(finished.status, "review", finished.error ?? "");
+      assert.ok(finished.turns >= 40, `ran ${finished.turns} turns`);
+      assert.equal(finished.stuck, null);
+      assert.deepEqual(f.delivered(), []);
+      assert.doesNotMatch(finished.output, /may be stuck/);
+    } finally { f.cleanup(); }
+  });
+}
 
 // A fake Pi that loads the real Alice extension, keeps its session in a file the way Pi does (header line, then
 // conversation), and per call either hangs until Alice kills it, settles cleanly, or has its history rejected.

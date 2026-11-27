@@ -1,10 +1,11 @@
 import { BrandIcon } from "./brand-icon";
-import { sharedCaches } from "../server/shared-caches.js";
+import { sharedCaches } from "../shared/shared-caches.js";
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   CircleCheck,
   CirclePause,
+  Repeat,
   CircleX,
   Eye,
   Inbox,
@@ -19,6 +20,7 @@ import {
   GitMerge,
   GitPullRequest,
   Hourglass,
+  CalendarClock,
   Pencil,
   Plus,
   RotateCcw,
@@ -47,6 +49,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
+import { ConflictHotspots } from "./conflict-hotspots.js";
 import {
   Dialog,
   DialogContent,
@@ -67,7 +70,7 @@ import {
   type AgentPhase,
   type BoardAgentModels,
   type ThinkingLevel,
-} from "../server/agent-models.js";
+} from "../shared/agent-models.js";
 import { AgentBadge, reworkSummary } from "./attempts.js";
 import { reworkHeavy } from "./run-kinds.js";
 import { formatCost } from "./usage.js";
@@ -82,6 +85,12 @@ import { Statistics } from "./statistics.js";
 import { LocalMerges } from "./local-merges.js";
 import { RepoBadge } from "./repo-badge.js";
 import { Today } from "./today.js";
+import {
+  defaultStaleReviewDays,
+  isStaleReview,
+  maxStaleReviewDays,
+  reviewAgeDays,
+} from "./stale-review.js";
 import { markdownToPlainText } from "./markdown.js";
 import {
   repoColors,
@@ -145,7 +154,11 @@ import {
   type PaletteItem,
 } from "./command-palette.js";
 import { themeNames, themes } from "./themes.js";
-import { ReadyCheckHost, checkBeforeReady } from "./ready-check.js";
+import {
+  ReadyCheckHost,
+  checkBeforeReady,
+  turnIntoPlans,
+} from "./ready-check.js";
 
 // The database is authoritative. Storage only avoids a palette flash on repeat visits.
 // Case-insensitive match on title, description, or card ID prefix.
@@ -1539,10 +1552,15 @@ export function App() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead.
+  // Flags Triage cards that may churn before they move to Ready; Edit opens the first flagged one instead, and Turn into
+  // a plan rewrites the wide ones as planning cards before the move.
   const readyAfterCheck = async (moving: Card[]) => {
     const check = await checkBeforeReady(moving);
     if (check.choice === "edit") setEditing(check.card);
+    if (check.choice === "plan")
+      return (
+        !!boardId && (await action(() => turnIntoPlans(boardId, check.cards)))
+      );
     return check.choice === "ready";
   };
   const moveSelected = async () => {
@@ -2174,6 +2192,44 @@ export function App() {
               setReviewQueue(queue);
               setSelected(queue[0] ?? null);
             }}
+            onApprove={(item) => {
+              setReviewQueue([item.id]);
+              setSelected(item.id);
+            }}
+            onRunAgain={async (item) => {
+              const target = boards.find((entry) => entry.repo === item.repo);
+              if (
+                !target ||
+                (settings?.confirmRunStart &&
+                  !(await confirmAction(
+                    `Start Pi on "${item.title}" on current main? This run may use paid model tokens and can edit its Git worktree.`,
+                  )))
+              )
+                return;
+              void action(() =>
+                api(`/boards/${target.id}/cards/${item.id}/start`, {
+                  method: "POST",
+                  body: JSON.stringify({ currentMain: true }),
+                }),
+              );
+            }}
+            onClose={async (item) => {
+              const target = boards.find((entry) => entry.repo === item.repo);
+              if (
+                !target ||
+                !(await confirmAction(
+                  `Close "${item.title}" without merging? Its worktree and branch stay, and Reopen brings it back.`,
+                  { confirmLabel: "Close without merging" },
+                ))
+              )
+                return;
+              void action(() =>
+                api(`/boards/${target.id}/cards/${item.id}/close`, {
+                  method: "POST",
+                  body: "{}",
+                }),
+              );
+            }}
             onCapture={(board, title) =>
               action(() =>
                 api(`/boards/${board.id}/cards`, {
@@ -2724,6 +2780,28 @@ export function App() {
             </Button>
           </div>
         )}
+        {!selected && currentBoard && view === "board" && (
+          <ConflictHotspots
+            key={currentBoard.id}
+            hotspots={currentBoard.conflictHotspots ?? []}
+            busy={busy}
+            onDismiss={(file) => {
+              const target = currentBoard;
+              void action(async () => {
+                await api(`/boards/${target.id}/conflict-hotspots/dismiss`, {
+                  method: "POST",
+                  body: JSON.stringify({ file }),
+                });
+                updateBoard({
+                  ...target,
+                  conflictHotspots: (target.conflictHotspots ?? []).filter(
+                    (item) => item.file !== file,
+                  ),
+                });
+              });
+            }}
+          />
+        )}
         {moveNotice && (
           <div
             role="status"
@@ -3033,6 +3111,11 @@ export function App() {
                                     card={item}
                                     activity={activity}
                                   />
+                                  {isStaleReview(
+                                    item,
+                                    currentBoard?.staleReviewDays ??
+                                      defaultStaleReviewDays,
+                                  ) && <StaleBadge card={item} />}
                                   {item.status === "failed" &&
                                     item.failureSummary && (
                                       <span
@@ -3659,6 +3742,59 @@ export function App() {
                   </span>
                 </label>
               )}
+              <label className="mt-4 flex items-start gap-2 text-xs">
+                <input
+                  key={`${editingBoard.id}-${editingBoard.staleReviewDays}`}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={maxStaleReviewDays}
+                  aria-label="Days in Review before a card is stale"
+                  defaultValue={
+                    editingBoard.staleReviewDays ?? defaultStaleReviewDays
+                  }
+                  disabled={busy}
+                  onBlur={(event) => {
+                    const staleReviewDays = Number(event.target.value);
+                    const current =
+                      editingBoard.staleReviewDays ?? defaultStaleReviewDays;
+                    if (
+                      event.target.value.trim() === "" ||
+                      !Number.isSafeInteger(staleReviewDays) ||
+                      staleReviewDays < 0 ||
+                      staleReviewDays > maxStaleReviewDays ||
+                      staleReviewDays === current
+                    ) {
+                      event.target.value = String(current);
+                      return;
+                    }
+                    void action(async () => {
+                      const updated = await api<Board>(
+                        `/boards/${editingBoard.id}/settings`,
+                        {
+                          method: "PATCH",
+                          body: JSON.stringify({ staleReviewDays }),
+                        },
+                      );
+                      setBoards((previous) =>
+                        previous.map((item) =>
+                          item.id === updated.id ? updated : item,
+                        ),
+                      );
+                      setEditingBoard(updated);
+                    });
+                  }}
+                  step={1}
+                  className="w-16 rounded-md border border-border bg-background px-2 py-1 tabular-nums"
+                />
+                <span>
+                  Days in Review before a card is stale
+                  <span className="block text-muted-foreground">
+                    Stale cards get a mark on the board and a daily push digest.
+                    0 turns this off.
+                  </span>
+                </span>
+              </label>
               {Object.entries(sharedCaches).map(([name, cache]) => (
                 <label
                   key={name}
@@ -3735,8 +3871,10 @@ export function App() {
                       Pushes the card branch and opens its pull request when a
                       run reaches Review, without waiting for Approve. Only runs
                       that finish after you turn this on are pushed. With
-                      auto-review on, the agent reviewer&apos;s approval opens
-                      it instead.
+                      auto-review on, the agent reviewer goes first: its
+                      approval opens the pull request, a card it sends back
+                      reruns, and a card it hands to a person (or that is out of
+                      reruns) gets a draft pull request with its findings.
                     </span>
                   </span>
                 </label>
@@ -4069,9 +4207,11 @@ export function App() {
                 worktrees and runs the repository's checks itself. It can send a
                 card back to its implementer. When it approves, a pull-request
                 board opens the pull request; on a local board the card waits
-                for your Approve. Nothing merges into main without you.
-                Auto-review alone does not start Ready cards; enable Auto pickup
-                above.
+                for your Approve. Nothing merges into main without you. With
+                automatic pull requests on, a card the reviewer hands to a
+                person still gets a draft pull request with its findings, and
+                the reviewer never blocks it. Auto-review alone does not start
+                Ready cards; enable Auto pickup above.
               </p>
               <label className="mt-3 flex items-center gap-2 text-xs">
                 Agent reviews at the same time
@@ -4439,7 +4579,7 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
     </span>
   );
 }
-/** Says a Review card is your turn, who has it if not, or how long a running agent has been quiet. */
+/** Says a Review card is your turn, who has it if not, or that a running agent may be stuck or has been quiet. */
 function ActivityBadge({
   card,
   activity,
@@ -4502,6 +4642,17 @@ function ActivityBadge({
         {reviewActionText(card) || "Your turn"}
       </span>
     );
+  if (card.status === "running" && card.stuck)
+    return (
+      <span
+        data-testid="activity-badge"
+        title={`The run ${card.stuck}. Alice asked the agent to step back; check the attempt log, and stop the run if it keeps going in circles.`}
+        className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
+      >
+        <Repeat size={10} aria-hidden />
+        May be stuck
+      </span>
+    );
   if (activity !== "quiet" || !card.lastActivityAt) return null;
   const minutes = Math.round(
     (Date.now() - Date.parse(card.lastActivityAt)) / 60_000,
@@ -4514,6 +4665,21 @@ function ActivityBadge({
     >
       <CirclePause size={10} aria-hidden />
       Quiet {minutes}m
+    </span>
+  );
+}
+
+/** A Review card that has sat past its board's threshold, so its work has likely drifted from main. */
+function StaleBadge({ card }: { card: Card }) {
+  const days = reviewAgeDays(card) ?? 0;
+  return (
+    <span
+      data-testid="stale-badge"
+      title={`In Review for ${days} ${days === 1 ? "day" : "days"}, so main has likely moved on. Approve it, run it again on current main, or close it.`}
+      className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
+    >
+      <CalendarClock size={10} aria-hidden />
+      Stale {days}d
     </span>
   );
 }

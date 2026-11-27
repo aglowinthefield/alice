@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import { createServer } from "vite";
-import { emptyAgentModels } from "../server/agent-models.js";
+import { emptyAgentModels } from "../shared/agent-models.js";
 
 test("a repository's Card retries model is saved with its other models and is not in global Settings", async () => {
   const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
@@ -49,6 +49,8 @@ test("a repository's Card retries model is saved with its other models and is no
     await save.click();
     await page.waitForFunction(() => (document.querySelector("button[type=submit]:disabled")));
     assert.deepEqual(patches, [{ agentModels: { ...emptyAgentModels(), work: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, retry: { model: "anthropic/claude-opus-4-1", thinking: "high" } } }]);
+    // The saved, trimmed value re-renders after the save settles; under load that is after the button disables.
+    await page.waitForFunction(input => (input as HTMLInputElement).value === "anthropic/claude-opus-4-1", await retry.elementHandle()).catch(() => undefined);
     assert.equal(await retry.inputValue(), "anthropic/claude-opus-4-1");
   } finally {
     await browser?.close();

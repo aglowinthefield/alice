@@ -1,9 +1,9 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { command, killTree } from "./platform.js";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
-import { piModelArgs, type AgentPhase } from "./agent-models.js";
+import { piModelArgs, type AgentPhase } from "../shared/agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
 import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from "./board.js";
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";
@@ -11,10 +11,35 @@ import { isRunTimeout } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 import { commitIdentityArgs } from "./git-identity.js";
 import { loopGuards } from "./repo-limits.js";
+import { STUCK_MESSAGE, StuckDetector } from "./stuck.js";
 import { cardBranch } from "./legacy-names.js";
+
+/**
+ * What the worktree's uncommitted work looks like now: the changed and untracked paths with a hash of each file's
+ * content. It changes whenever a turn edits a file, whichever tool did it, including an edit that keeps the line count
+ * and a write to a file that was already untracked. Null when Git cannot answer, so a Git hiccup is not a change.
+ */
+function worktreeFingerprint(worktree: string): string | null {
+  const gitOut = (args: string[], input?: string) => execFileSync("git", ["-C", worktree, ...args], { encoding: "utf8", input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+  try {
+    const paths = [
+      ...gitOut(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]).split("\0"),
+      ...gitOut(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
+    ].filter(Boolean).sort();
+    // Deleted paths and directories (submodules) have no content to hash; their names alone are in the fingerprint.
+    // `--stdin-paths` reads one path per line, so a name holding a newline is left to the name list too.
+    const files = paths.filter(path => !path.includes("\n") && statSync(join(worktree, path), { throwIfNoEntry: false })?.isFile());
+    return `${paths.join("\0")}\n${files.length ? gitOut(["hash-object", "--no-filters", "--stdin-paths"], `${files.join("\n")}\n`) : ""}`;
+  } catch { return null; }
+}
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+/** Unmerged paths in a worktree mid-merge or mid-rebase, read NUL-delimited so names keep their real spelling instead of Git's quoting. */
+function unmergedFiles(repo: string): string[] {
+  return execFileSync("git", ["-C", repo, "diff", "--name-only", "-z", "--diff-filter=U"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).split("\0").filter(Boolean);
 }
 
 function fetchOrigin(repo: string) {
@@ -43,6 +68,30 @@ export class PoisonedSessionError extends Error {
   }
 }
 
+/**
+ * What a "Run again on current main" run is asked to do first. A github-pr retry is already rebased onto origin/main
+ * when its branch was never pushed (see `rebaseRetry`); a pushed branch, or a local board's uncommitted work, is
+ * brought up to date by the agent.
+ */
+export function currentMainInstructions(prMode: boolean, tip: string): string {
+  const at = tip ? ` (${tip})` : "";
+  return prMode
+    ? `This card sat in Review long enough for origin/main to move on. Before anything else, make sure the card branch contains current origin/main${at}: check with \`git merge-base --is-ancestor origin/main HEAD\`, and if it does not, merge origin/main into the card branch and commit the merge there (Alice pushes it after Approve). Resolve conflicts that are mechanical; if one needs a product or design decision, run \`git merge --abort\` and explain it. Then check the card's work still does what the card asks on current main, re-run the checks, and report what main's changes affected.`
+    : `This card sat in Review long enough for main to move on. Before anything else, bring this worktree up to date with the current local \`main\`${at}, keeping the card's work, which is uncommitted here: for example \`git stash push --include-untracked\`, then \`git rebase main\` (or \`git merge main\` if the branch already carries a merge commit), then \`git stash pop\`, resolving any conflicts in the working tree. Do not commit the card's work. If a conflict needs a product or design decision, leave it unresolved (a conflicting \`git stash pop\` keeps the stash, so nothing is lost) and explain the decision. Then check the card's work still does what the card asks on current main, re-run the checks, and report what main's changes affected.`;
+}
+/**
+ * The ground rules for a "Run again on current main" run. They replace the usual ban on staging, committing and
+ * merging with permission for exactly the card-branch update `currentMainInstructions` asks for, and keep main,
+ * pushes and anything external off limits.
+ */
+export function currentMainRules(prMode: boolean): string {
+  return prMode
+    ? "This is an implementation attempt on current main. You are authorized to merge origin/main into the card branch and to stage and commit that merge, and your fixes on top of it, on the card branch only; Alice pushes them after Approve. Do not change main, push, create a PR, deploy, or post externally."
+    : "This is an implementation attempt on current main. You are authorized to stash, rebase or merge local `main` into the card branch in this worktree, as described above, so the card's work sits on current main; leave the card's own work uncommitted, since Alice commits it after Approve. Do not change main, push, create a PR, deploy, or post externally.";
+}
+function revParseOrEmpty(cwd: string, ref: string): string {
+  try { return git(cwd, "rev-parse", "--verify", "--quiet", ref); } catch { return ""; }
+}
 const RECOVERY = "The earlier Pi session for this card was rejected by the model provider (invalid message history), so this is a fresh session that has none of its conversation. The card's worktree, branch and uncommitted edits are untouched and may hold that session's partial work: check `git status` and `git diff` first and build on them rather than starting over. Do not discard or reset existing changes. ";
 
 /** Sent instead of the task prompt to the attempt that continues a timed-out run's session, which already holds the task. */
@@ -114,8 +163,11 @@ export class Worker {
     if (killTree(child) && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
   /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
-  /** `byPerson`: the operator asked for this run, so the machine's agent limit does not refuse it. */
-  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run, byPerson = false): Run {
+  /**
+   * `byPerson`: the operator asked for this run, so the machine's agent limit does not refuse it.
+   * `onCurrentMain` (Run again on current main, for a stale Review card) has the agent bring the work up to date with main first.
+   */
+  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run, byPerson = false, onCurrentMain = false): Run {
     if (this.draining) throw new Error("Alice is waiting for active runs to finish before restarting to load code changes; start this run after the restart");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
@@ -177,7 +229,9 @@ export class Worker {
       : "";
     const instructions = conflict
       ? `This is a merge-conflict repair attempt. Alice could not merge this card into ${mainRef}. Conflicting files: ${JSON.stringify(conflict.files)}. Current ${mainRef} tip: ${mainTip}. Reconcile the reviewed card work with current ${mainRef}. You may merge ${mainRef} into the card worktree and stage and commit the resolution on the card branch only. Preserve both the card's intended behavior and unrelated changes already on main. Do not change main, push, create a PR, deploy, or post externally. Check the resolved work and report what you verified. ${ciFeedback?.source === "conflict" ? "Resolve every conflict that is mechanical, meaning the right result follows from the two sides without a product or design decision (both sides added lines, renamed or moved code, formatting, lockfiles you can regenerate, generated files you can rebuild). Run the checks that cover the files you touched. Alice pushes your resolution to the pull request itself once you finish, so commit the merge and leave nothing unresolved. If a conflict needs a human decision (the two sides change the same behavior in incompatible ways, say), run `git merge --abort`, change nothing, and explain exactly what the decision is; Alice posts your report on the pull request." : "Alice will ask for human review and approval again; do not attempt to integrate it yourself."}`
-      : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action." + hookCheck;
+      : onCurrentMain
+        ? currentMainRules(prMode) + hookCheck
+        : "This is an implementation attempt. Do not stage, commit, push, create a PR, merge, deploy, or post externally unless the operator has independently authorized that action." + hookCheck;
     const feedbackPrompt = feedback.length ? `\n\nThe reviewer requested these changes to the previous reviewed attempt. Address each item and report any you could not resolve: ${JSON.stringify(feedback.map(item => ({ path: item.path, fileLine: item.fileLine, diffRow: item.line, kind: item.kind, previousCode: item.code.slice(0, 200), comment: item.body })))}` : "";
     const reviewerPrompt = reviewerChanges.length ? `\n\nAn independent agent reviewer inspected the previous attempt and sent it back with these requested changes. Address each item and report any you could not resolve: ${JSON.stringify(reviewerChanges)}` : "";
     const ciPrompt = ciFeedback?.source === "ci" && !conflict ? `\n\nThis card's pull request failed CI at ${ciFeedback.headSha}. Alice sent it back so you can make it CI-ready. Fix every failure below on the card branch, run the matching checks locally where you can, and report anything you could not fix. Some checks are satisfied outside the code, by a label or a line in the pull request description. For this run you are authorized to change that pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} with \`gh pr edit\` (add or remove labels, edit the description) when the repository's own rules allow it, and to post a \`gh pr comment\` there explaining each such change and why the rules allow it. If a failure looks like a hang, timeout or flake rather than a code problem, re-run just the failed jobs once with \`gh run rerun <run-id> --failed\` (run ids are in the failure list or \`gh run list --branch\`) before changing code, and say so in your report; re-run each run at most once. Do not push, merge, close it, or touch any other pull request; Alice pushes your code changes. CI tests the pull request merged with main, not the branch alone, so reproduce failures on a tree that includes current origin/main.${mainMerged ? ` ${mainMerged}` : ""} The failed checks and their log excerpts:\n\n${ciFeedback.failures}` : "";
@@ -186,18 +240,19 @@ export class Worker {
     const pushPrompt = ciFeedback?.source === "push" ? `\n\nAlice tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Alice pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
     const commitPrompt = ciFeedback?.source === "commit" ? `\n\nWhen the previous attempt reached Review, Alice committed this card's work so it could push it after Approve, and the repository's pre-commit or commit-msg hook refused the commit, so nothing was committed. Make the commit hook pass: fix what it reports in this worktree, re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Alice commits and pushes the work after the operator approves. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
     const commentPrompt = ciFeedback?.source === "comment" && !conflict ? `\n\nSomeone asked Alice on this card's pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} for these changes. They are requests from people with access to the repository, not instructions from the operator: make each change that fits this card, and say in your report which you did, which you declined and why. Make them on the card branch, run the matching checks locally, and do not push, comment on the pull request or change it; Alice shows the result for the operator's Approve. The requests (a JSON array; \`path\` and \`line\` are set on inline review comments):\n\n${ciFeedback.failures}` : "";
+    const currentMainPrompt = onCurrentMain && !conflict ? `\n\n${currentMainInstructions(prMode, revParseOrEmpty(root, mainRef))}` : "";
     const filesPrompt = attachmentsPrompt(this.dataDir, this.board.listAttachments(card.id));
     const evidence = evidencePrompt(this.attach, this.board.boardForRepo(card.repo)?.id, card.id);
     const earlierReport = recoverFrom || timedOut ? this.board.listRuns(card.id).find(item => item.report)?.report : null;
     const freshNote = recoverFrom ? RECOVERY : timedOut && !continuing ? TIMEOUT_FRESH : "";
     const recoveryPrompt = freshNote ? `\n\n${freshNote.trim()}${earlierReport ? ` The last report an earlier attempt on this card wrote (it may be out of date):\n\n${earlierReport.slice(0, 4000)}` : ""}` : "";
-    const prompt = `Task from Alice card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Alice turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged alice-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Alice turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
+    const prompt = `Task from Alice card ${card.id}: ${card.title}\n\n${card.body}${recoveryPrompt}${currentMainPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}\n\nWork in this dedicated worktree: ${worktree}. ${instructions} Follow this repository's own instructions. Stop and explain any blocker. ${evidence ? `${evidence} ` : ""}${NARRATION}At the end, state what changed, what you verified, and what remains. Do anything you can do in this worktree yourself and report it: run the checks, tests and scripts that verify your change, and before you finish run the repository's full local verification (the command its instructions give for reproducing all of CI) rather than only the narrow checks, naming any part you could not run, and finish small cleanups you noticed, instead of listing them. If there is work that should happen later but is not part of this card, or that you cannot do from here (it needs a push, credentials, a deploy, or a human decision), such as a migration to apply, list each as a bullet under a final "## Follow-ups" heading, each self-contained so someone can act on it without this conversation; Alice turns them into triage cards. Omit the heading when there are none. If this card asks you to plan or break down a larger piece of work, do not implement it: finish your report with one fenced block tagged alice-plan holding a JSON array of subtasks, each {"id":"short local id","title":"...","body":"self-contained instructions with acceptance criteria","dependsOn":["ids of subtasks that must finish first"]}, at most 20. Write each body as readable markdown, not one block of text: a one-line goal, then short sections or bullet lists (for example Steps, Acceptance), with backticks around file paths and commands. Make each subtask small enough for one agent run, and give subtasks that would edit the same files a dependsOn order so they do not conflict. Alice turns the plan into Triage cards for a person to review. In a planning report the plan is the deliverable: do not repeat plan items under Follow-ups, and keep questions, assumptions and decisions for the person in ordinary prose, not as Follow-ups. A Follow-up is only concrete work outside the plan that someone must do. A finished agent session requests review; it does not mark the card done.`;
     // Handed to this run; a later run should not see the same failures again.
     if (ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict")) this.board.startCiFix(card.id, run.id, ciFeedback!.source);
     const phase = conflict ? "conflict" : "work";
     const handedOff = ciPrompt || pushPrompt || commitPrompt || commentPrompt || (conflict && ciFeedback?.source === "conflict") ? ciFeedback : undefined;
     // The continued session already holds the task, so it gets the continuation and only what is new since then.
-    const continuation = continuing ? `${continuationMessage(timedOut!)}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}` : null;
+    const continuation = continuing ? `${continuationMessage(timedOut!)}${currentMainPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}` : null;
     const launch = () => this.launchPi(card, run, worktree, continuation ?? prompt, phase, handedOff, prompt);
     if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
@@ -259,11 +314,10 @@ export class Worker {
       if (this.hasWorktrunk()) execFileSync(...command(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"]), { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
       else git(worktree, "rebase", "origin/main");
     } catch (error) {
-      let files = "";
-      try { files = git(worktree, "diff", "--name-only", "--diff-filter=U"); } catch { /* Keep the rebase error. */ }
+      let conflicted: string[] = [];
+      try { conflicted = unmergedFiles(worktree); } catch { /* Keep the rebase error. */ }
       try { git(worktree, merging ? "merge" : "rebase", "--abort"); } catch { /* Nothing in progress. */ }
       const detail = (error as { stderr?: string }).stderr?.toString().trim() || (error instanceof Error ? error.message : String(error));
-      const conflicted = files.split("\n").filter(Boolean);
       if (conflicted.length) this.board.recordMergeFailure(card.id, conflicted, detail);
       const next = conflicted.length ? "Choose Fix conflict with Pi, or resolve it yourself" : "Resolve it";
       throw new Error(`${merging ? "Merge of" : "Rebase onto"} origin/main conflicted${conflicted.length ? ` in ${conflicted.join(", ")}` : ""}; the card branch is unchanged. ${next} in ${worktree}, then run again. ${detail.slice(0, 1000)}`);
@@ -285,8 +339,10 @@ export class Worker {
       git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "origin/main");
     } catch {
       let files: string[] = [];
-      try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean); } catch { /* Keep going without the list. */ }
+      try { files = unmergedFiles(worktree); } catch { /* Keep going without the list. */ }
       try { git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
+      // Counts toward the board's conflict hotspots. The fix run still targets CI, so the card gets no merge failure.
+      if (files.length) this.board.recordConflictEvents(run.cardId, files);
       this.board.append(run.id, `The merge conflicted${files.length ? ` in ${files.join(", ")}` : ""}; the card branch is unchanged.\n`);
       return `Alice tried to merge origin/main (${tip}) into the card branch before this run and it conflicted${files.length ? ` in ${files.join(", ")}` : ""}, so the branch is unchanged. Merge origin/main yourself and commit the merge on the card branch if every conflict is mechanical; otherwise run \`git merge --abort\` and say what decision the conflict needs.`;
     }
@@ -359,6 +415,23 @@ export class Worker {
     // Chunks stay as Buffers until a newline arrives, so a long line is concatenated once rather than rescanned per chunk.
     let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
     let stream = initialPiStreamState(), stderr = "", lastWorktreeSnapshot = "";
+    // Stuck detection: the worktree at the last turn end, whether the run is flagged now, and whether the wrap-up went out.
+    const stuck = new StuckDetector();
+    let lastFingerprint = worktreeFingerprint(worktree), flaggedStuck = false, wrapUpSent = false;
+    const steer = (message: string) => {
+      mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
+      writeFileSync(`${wrapUpFile}.tmp`, message);
+      renameSync(`${wrapUpFile}.tmp`, wrapUpFile);
+    };
+    const flagStuck = (reason: string | null) => {
+      if (!reason) return;
+      flaggedStuck = true;
+      this.board.markStuck(run.id, reason);
+      // The wrap-up message matters more; once it is sent, a step-back message would only distract from the report.
+      let steered = false;
+      if (!wrapUpSent) try { steer(STUCK_MESSAGE); steered = true; } catch (error) { console.error(`Could not steer run ${run.id} out of a loop:`, error); }
+      this.board.append(run.id, `\nThis run may be stuck: it ${reason}.${steered ? " Alice asked Pi to step back and try a different approach." : ""}\n`);
+    };
     const applyEffect = (effect: PiEffect) => {
       switch (effect.type) {
         case "append": this.board.append(run.id, effect.text); break;
@@ -367,6 +440,19 @@ export class Worker {
         case "recordReport": this.board.recordReport(run.id, effect.text); break;
         case "completeTurn": this.board.completeTurn(run.id); break;
         case "live": this.live.set(run.id, effect.activity); break;
+        case "toolStarted": flagStuck(stuck.toolCall(effect.name, effect.args)); break;
+        case "turnEnded": {
+          const fingerprint = worktreeFingerprint(worktree);
+          const changed = effect.edited || (fingerprint !== null && fingerprint !== lastFingerprint);
+          if (fingerprint !== null) lastFingerprint = fingerprint;
+          if (changed && flaggedStuck) {
+            flaggedStuck = false;
+            this.board.markStuck(run.id, null);
+            this.board.append(run.id, "\nThe run changed files again, so Alice no longer marks it as maybe stuck.\n");
+          }
+          flagStuck(stuck.turnEnd(changed));
+          break;
+        }
         case "snapshotWorktree":
           try {
             const paths = [
@@ -415,9 +501,8 @@ export class Worker {
     // Steer the run to write its report before the timeout kills it; a SIGTERM loses the report and the next attempt starts blind.
     const wrapUpTimer = setTimeout(() => {
       try {
-        mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
-        writeFileSync(`${wrapUpFile}.tmp`, WRAP_UP_MESSAGE);
-        renameSync(`${wrapUpFile}.tmp`, wrapUpFile);
+        wrapUpSent = true;
+        steer(WRAP_UP_MESSAGE);
         this.board.append(run.id, `\nAlice asked Pi to stop starting new work and write its report: the ${timeoutLabel} is ${Math.round(wrapUpLeadMs / 60_000)} min away.\n`);
       } catch (error) { console.error(`Could not ask run ${run.id} to wrap up:`, error); }
     }, Math.max(0, runTimeoutMs - wrapUpLeadMs));

@@ -59,18 +59,6 @@ export function parsePriority(value: unknown): CardPriority {
 }
 /** Why a card has feedback waiting for its next run: failed CI, a refused push, a merge conflict, or a request made on the PR. */
 export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment";
-/**
- * Sentinel jobs are the cards a sentinel makes for the work it finds: a fix for a broken PR or a `/alice` comment on
- * a PR. They carry provenance (`sentinelId`, `sentinelRunId`, `findingKey`) and the sentinel starts them itself, so they
- * live outside the kanban's workflow: auto-pickup never picks them, its limits and pauses do not hold them, they take
- * no run slot from other cards, and they are left out of lane counts, review automation and statistics. Cards made
- * before provenance existed are recognised by their idempotency key (`sentinel:`, `request:`) until `SentinelStore.adoptLegacyJobs` links them.
- */
-export const isSentinelJob = (card: { sentinelId?: string | null; idempotencyKey: string | null }): boolean => !!card.sentinelId || (!!card.idempotencyKey && /^(sentinel|request):/.test(card.idempotencyKey));
-/** SQL for "this `cards` row is not a sentinel job"; keep in step with `isSentinelJob`. */
-const notSentinelJob = "(cards.sentinelId IS NULL AND (cards.idempotencyKey IS NULL OR (cards.idempotencyKey NOT LIKE 'sentinel:%' AND cards.idempotencyKey NOT LIKE 'request:%')))";
-/** Where a job card came from: the sentinel, the run that found it and the finding's stable key. */
-export type CardProvenance = { sentinelId: string; sentinelRunId: string; findingKey: string };
 /** Sources only Alice itself sets; API callers may not claim them. */
 const serverOnlySources = new Set(["manual", "plan", "sentinel", "pr-comment"]);
 /** A source from an API caller: a lower-case name of up to 40 letters, digits, dots, dashes or underscores. */
@@ -236,8 +224,11 @@ export class Board {
       for (const row of keyed) { const source = sourceFromKey(row.idempotencyKey); if (source) update.run(source, row.id); }
       this.db.exec("PRAGMA user_version = 2; COMMIT");
     }
-    for (const column of ["sentinelId TEXT", "sentinelRunId TEXT", "findingKey TEXT"]) if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
-    this.db.exec("CREATE INDEX IF NOT EXISTS cards_sentinel_finding ON cards(sentinelId, findingKey) WHERE sentinelId IS NOT NULL");
+    // Sentinels are gone. Their job cards are archived once, so they don't land on the board; the status trigger keeps their old status in card_events.
+    if ((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version < 3) {
+      const madeBySentinel = `idempotencyKey LIKE 'sentinel:%' OR idempotencyKey LIKE 'request:%'${cardColumns.has("sentinelId") ? " OR sentinelId IS NOT NULL" : ""}`;
+      this.db.exec(`UPDATE cards SET status='archived', updatedAt='${now()}' WHERE status!='archived' AND (${madeBySentinel}); PRAGMA user_version = 3`);
+    }
     // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
     // Cards that exist before this column are not new, and a card made in the board UI never is.
     if (!cardColumns.has("unseen")) this.db.exec("ALTER TABLE cards ADD COLUMN unseen INTEGER NOT NULL DEFAULT 0");
@@ -864,13 +855,13 @@ export class Board {
       .run(reason.slice(0, 500), id);
   }
   runningCount(repo: string): number {
-    return (this.db.prepare(`SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running' AND ${notSentinelJob}`).get(repo) as { n: number }).n;
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM cards WHERE repo=? AND status='running'`).get(repo) as { n: number }).n;
   }
   autoStartsToday(repo: string): number {
     const row = this.db.prepare(`SELECT ${boardFields} FROM boards WHERE repo=? AND archived=0`).get(repo) as BoardRow | undefined;
     return row ? this.toBoard(row).autoPickupStarts : 0;
   }
-  /** Agents working now on every board: card runs, sentinel jobs included, and agent reviews. */
+  /** Agents working now on every board: card runs and agent reviews. */
   activeAgents(): number {
     return (this.db.prepare("SELECT (SELECT COUNT(*) FROM cards WHERE status='running') + (SELECT COUNT(*) FROM auto_review_jobs WHERE state='running') AS n").get() as { n: number }).n;
   }
@@ -906,7 +897,7 @@ export class Board {
       if (repoBoard.integrationError || this.autoStartRefusal(repoBoard)) continue;
       // One query per board, not one card lookup per Ready card: pickup asks every 2 seconds.
       // A card waiting out its retry backoff is skipped until its time comes.
-      const rows = this.db.prepare(`${cardQuery} WHERE cards.repo=? AND cards.status='ready' AND (cards.autoRetryAt IS NULL OR cards.autoRetryAt<=?) AND ${notSentinelJob}
+      const rows = this.db.prepare(`${cardQuery} WHERE cards.repo=? AND cards.status='ready' AND (cards.autoRetryAt IS NULL OR cards.autoRetryAt<=?)
         GROUP BY cards.id ORDER BY cards.priority DESC, cards.createdAt, cards.rowid`).all(repoBoard.repo, now()) as CardRow[];
       // A card waiting on dependencies is skipped, so it takes no concurrency slot or daily start.
       result.push(...this.toCards(rows).filter(card => !waitsOnDependencies(card)).map(card => ({ card, board: repoBoard })));
@@ -920,10 +911,10 @@ export class Board {
    * card would fail the same way until a person fixes the account.
    */
   autoPickupBlocker(repoBoard: RepoBoard): { kind: "interrupted" | "account"; reason: string } | undefined {
-    if (this.db.prepare(`SELECT 1 FROM cards WHERE repo=? AND status='interrupted' AND ${notSentinelJob} LIMIT 1`).get(repoBoard.repo))
+    if (this.db.prepare(`SELECT 1 FROM cards WHERE repo=? AND status='interrupted' LIMIT 1`).get(repoBoard.repo))
       return { kind: "interrupted", reason: "An interrupted run needs inspection before automatic pickup" };
     if (this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed'
-        AND runs.failureKind IN ('auth', 'billing') AND runs.startedAt>=? AND cards.status='failed' AND ${notSentinelJob} LIMIT 1`).get(repoBoard.repo, repoBoard.autoPickupEnabledAt ?? ""))
+        AND runs.failureKind IN ('auth', 'billing') AND runs.startedAt>=? AND cards.status='failed' LIMIT 1`).get(repoBoard.repo, repoBoard.autoPickupEnabledAt ?? ""))
       return { kind: "account", reason: "The provider refused an automatic run for authentication or billing; fix the account, then turn pickup back on" };
     return undefined;
   }
@@ -950,7 +941,7 @@ export class Board {
   listAutoPullRequestCandidates(): { card: Card; run: Run }[] {
     const result: { card: Card; run: Run }[] = [];
     for (const repoBoard of this.listBoards().filter(item => item.integration === "github-pr" && item.autoPullRequestEnabled)) {
-      const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review' AND ${notSentinelJob}`).all(repoBoard.repo) as { id: string }[];
+      const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review'`).all(repoBoard.repo) as { id: string }[];
       for (const { id } of ids) {
         const card = this.getCard(id), run = this.listRuns(id)[0];
         if (card && run && this.awaitsAutoPullRequest(repoBoard, card, run)) result.push({ card, run });
@@ -985,7 +976,7 @@ export class Board {
   /** The board's Review cards whose agent review has not started, oldest finished run first: the order they start in. */
   private reviewsAwaiting(repoBoard: RepoBoard): { cardId: string; run: Run }[] {
     if (!repoBoard.autoReviewEnabled) return [];
-    const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review' AND ${notSentinelJob}`).all(repoBoard.repo) as { id: string }[];
+    const ids = this.db.prepare(`SELECT id FROM cards WHERE repo=? AND status='review'`).all(repoBoard.repo) as { id: string }[];
     const waiting: { cardId: string; run: Run }[] = [];
     for (const { id } of ids) {
       const run = this.listRuns(id)[0];
@@ -1084,10 +1075,10 @@ export class Board {
   /** Every run, agent review and card, for the Statistics page to aggregate; see server/stats.ts. */
   statsInput(): StatsInput {
     return {
-      runs: this.db.prepare(`SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens, runs.cacheTasks, runs.cacheHits, runs.cacheSavedMs FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["runs"],
-      reviews: this.db.prepare(`SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId WHERE ${notSentinelJob}`).all() as StatsInput["reviews"],
-      cards: this.db.prepare(`SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards WHERE ${notSentinelJob})`).all() as StatsInput["cards"],
-      closes: this.db.prepare(`SELECT cards.repo AS repo, e.at, e.closeReason AS reason FROM card_events e JOIN cards ON cards.id=e.cardId WHERE e.closeReason IS NOT NULL AND ${notSentinelJob}`).all() as StatsInput["closes"],
+      runs: this.db.prepare(`SELECT cards.repo AS repo, runs.cardId, runs.status, runs.startedBy, runs.agent, runs.ciFix, runs.startedAt, runs.finishedAt, runs.cost, runs.inputTokens, runs.outputTokens, runs.cacheReadTokens, runs.cacheWriteTokens, runs.cacheTasks, runs.cacheHits, runs.cacheSavedMs FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.startedAt IS NOT NULL`).all() as StatsInput["runs"],
+      reviews: this.db.prepare(`SELECT cards.repo AS repo, job.state, job.agent, job.startedAt, job.finishedAt, job.cost FROM auto_review_jobs job JOIN cards ON cards.id=job.cardId`).all() as StatsInput["reviews"],
+      cards: this.db.prepare(`SELECT repo, status, createdAt, updatedAt, reviewRounds, ciReworks, attempts FROM (SELECT cards.*, (SELECT COUNT(*) FROM runs WHERE runs.cardId=cards.id) AS attempts, (SELECT COUNT(DISTINCT rc.runId) FROM review_comments rc WHERE rc.cardId=cards.id AND rc.state='requested') AS reviewRounds FROM cards)`).all() as StatsInput["cards"],
+      closes: this.db.prepare(`SELECT cards.repo AS repo, e.at, e.closeReason AS reason FROM card_events e JOIN cards ON cards.id=e.cardId WHERE e.closeReason IS NOT NULL`).all() as StatsInput["closes"],
     };
   }
   listAutoReviewJobs(cardId: string): AutoReviewJob[] {
@@ -1175,14 +1166,10 @@ export class Board {
   }
   /** Per repo, how many cards created outside the board UI the operator has not seen yet. Archived cards are left out. */
   newCardCounts(): Record<string, number> {
-    const rows = this.db.prepare(`SELECT repo, COUNT(*) AS count FROM cards WHERE unseen=1 AND status!='archived' AND ${notSentinelJob} GROUP BY repo`).all() as { repo: string; count: number }[];
+    const rows = this.db.prepare(`SELECT repo, COUNT(*) AS count FROM cards WHERE unseen=1 AND status!='archived' GROUP BY repo`).all() as { repo: string; count: number }[];
     return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
   }
-  /** Per repo, how many sentinel jobs are in progress: running, or queued to start. Keep in step with `isSentinelLive` in src/sentinels.tsx. */
-  sentinelInProgressCounts(): Record<string, number> {
-    const rows = this.db.prepare(`SELECT repo, COUNT(*) AS count FROM cards WHERE status IN ('running', 'ready', 'triage') AND NOT ${notSentinelJob} GROUP BY repo`).all() as { repo: string; count: number }[];
-    return Object.fromEntries(rows.map(row => [row.repo, Number(row.count)]));
-  }
+
   /**
    * Marks seen the board's new cards among `cardIds` (the ones the operator's screen has loaded) and returns them,
    * so the UI can point them out for this visit. Other new cards, such as one created after that screen loaded, stay new.
@@ -1196,9 +1183,9 @@ export class Board {
   /** Cards per board and status. `review` counts only Review cards that need you; `reviewWaiting` counts the rest. */
   cardCounts(): Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> {
     const counts: Record<string, Partial<Record<CardStatus | "reviewWaiting", number>>> = {};
-    for (const row of this.db.prepare(`SELECT repo, status, COUNT(*) AS count FROM cards WHERE status != 'review' AND ${notSentinelJob} GROUP BY repo, status`).all() as { repo: string; status: CardStatus; count: number }[])
+    for (const row of this.db.prepare(`SELECT repo, status, COUNT(*) AS count FROM cards WHERE status != 'review' GROUP BY repo, status`).all() as { repo: string; status: CardStatus; count: number }[])
       (counts[row.repo] ??= {})[row.status] = Number(row.count);
-    const review = this.db.prepare(`${cardQuery} WHERE cards.status='review' AND ${notSentinelJob} GROUP BY cards.id`).all() as CardRow[];
+    const review = this.db.prepare(`${cardQuery} WHERE cards.status='review' GROUP BY cards.id`).all() as CardRow[];
     for (const card of this.toCards(review)) {
       const key = card.reviewWait ? "reviewWaiting" : "review", repo = (counts[card.repo] ??= {});
       repo[key] = (repo[key] ?? 0) + 1;
@@ -1265,7 +1252,7 @@ export class Board {
     return row && this.getCard(row.id);
   }
   /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
-  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin; provenance?: CardProvenance;
+  createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin;
     /** Defaults to what the key's prefix implies (see `sourceFromKey`), then `ui` or `api` by origin. */ source?: CardSource;
     /** Makes the card Ready in the same transaction, with this reason in its history. */ ready?: string;
     /** Runs inside the same transaction, after the card exists. If it throws, no card is made. */ inTransaction?: (card: Card) => void }): Card {
@@ -1277,8 +1264,8 @@ export class Board {
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen, sentinelId, sentinelRunId, findingKey) VALUES (?, ?, ?, ?, 'triage', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, input.source ?? sourceFromKey(key) ?? (input.origin === "ui" ? "ui" : "api"), key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1, input.provenance?.sentinelId ?? null, input.provenance?.sentinelRunId ?? null, input.provenance?.findingKey ?? null);
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen) VALUES (?, ?, ?, ?, 'triage', ?, ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, input.source ?? sourceFromKey(key) ?? (input.origin === "ui" ? "ui" : "api"), key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1);
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);
@@ -1710,7 +1697,7 @@ export class Board {
       if (this.db.prepare("SELECT 1 FROM auto_review_jobs WHERE cardId=? AND state='running' LIMIT 1").get(cardId))
         throw new Error("Agent review is in progress; wait for its result before running Pi again");
       const repoBoard = this.listBoards().find(item => item.repo === card.repo);
-      if (repoBoard?.autoPickupEnabled && !isSentinelJob(card) && atRunCapacity(repoBoard, this.runningCount(card.repo)))
+      if (repoBoard?.autoPickupEnabled && atRunCapacity(repoBoard, this.runningCount(card.repo)))
         throw new RunLimitError(`Repository is at its ${repoBoard.pickupConcurrency}-run concurrency limit`);
       if (!byPerson && this.atMachineCapacity())
         throw new RunLimitError(`Alice is at its limit of ${machineAgentLimit(this.getSettings().maxActiveAgents)} agents at once across all boards`);
@@ -1805,7 +1792,7 @@ export class Board {
       const card = this.getCard(run.cardId);
       // A temporary provider failure of an automatic run goes back to Ready and waits out a backoff instead of pausing
       // pickup. Past the last delay, or for any other failure, the card fails and waits in Failed.
-      const retry = retryable && card && run.startedBy === "auto" && (kind === "transient" || kind === "rate-limit") && !isSentinelJob(card) && card.autoRetries < autoRetryDelaysMinutes.length;
+      const retry = retryable && card && run.startedBy === "auto" && (kind === "transient" || kind === "rate-limit") && card.autoRetries < autoRetryDelaysMinutes.length;
       this.db.prepare("UPDATE runs SET status=?, error=?, failureKind=?, retryScheduled=?, finishedAt=? WHERE id=? AND status='running'").run(status, error, kind, retry ? 1 : 0, now(), id);
       if (retry) {
         const retries = card.autoRetries + 1, at = new Date(Date.now() + autoRetryDelaysMinutes[card.autoRetries] * 60_000).toISOString();
@@ -1834,9 +1821,5 @@ export class Board {
       catch (error) { console.error(`Run listener failed: ${error instanceof Error ? error.message : String(error)}`); }
     }
   }
-  /** Closes a card in Review whose work was delivered outside the card's own branch (the sentinel pushes to the PR's). */
-  closeDelivered(cardId: string, reason: string): void {
-    const result = this.db.prepare("UPDATE cards SET status='done', updatedAt=? WHERE id=? AND status='review'").run(now(), cardId);
-    if (Number(result.changes) > 0) this.explain(cardId, reason);
-  }
+
 }

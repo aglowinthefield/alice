@@ -127,6 +127,33 @@ test("a card records where it came from, and older cards get the source their ke
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("job cards left by the removed sentinels are archived once, keeping their old status in history", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const board = new Board(path);
+    const ids = ["sentinel:4:abc:def", "request:c1", null, "plan:x:y"].map(key => board.createCard({ title: String(key), body: "", repo: dir, idempotencyKey: key }).id);
+    const [fix, request, linked, plain] = ids;
+    board.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("ALTER TABLE cards ADD COLUMN sentinelId TEXT; PRAGMA user_version = 2");
+    raw.prepare("UPDATE cards SET status='review' WHERE id IN (?, ?)").run(fix, plain);
+    raw.prepare("UPDATE cards SET status='failed', sentinelId=NULL WHERE id=?").run(request);
+    raw.prepare("UPDATE cards SET status='done', sentinelId='sentinel-1' WHERE id=?").run(linked);
+    raw.close();
+    const migrated = new Board(path);
+    assert.deepEqual(ids.map(id => migrated.getCard(id)!.status), ["archived", "archived", "archived", "review"]);
+    assert.equal(migrated.listCardEvents(fix).at(-1)?.fromStatus, "review");
+    migrated.close();
+    const restore = new DatabaseSync(path);
+    restore.prepare("UPDATE cards SET status='review' WHERE id=?").run(fix);
+    restore.close();
+    const reopened = new Board(path);
+    assert.equal(reopened.getCard(fix)!.status, "review", "the migration runs once, so a card restored afterwards stays restored");
+    reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("settings default to notifications off and persist across restarts", () => {
   const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {

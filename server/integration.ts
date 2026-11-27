@@ -4,7 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Board, type Card } from "./board.js";
-import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub } from "./github.js";
+import { boardGithubRepo, fetchOrigin, type GitHub, updatePullRequestStatus } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubRepo } from "./github-url.js";
@@ -574,15 +574,14 @@ export class Integration {
 
   /**
    * The open PR from `bakery/<id>`, or a new one with `content` (default: the card title and body) plus the footer and
-   * run summary. `pushed` is what Bakery just pushed, commented on an open PR; null when nothing was pushed.
+   * run summary. `pushed` is what Bakery just pushed, added to an open PR's status comment; null when nothing was pushed.
    */
   private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string } | null, content?: { title: string; body: string }): Promise<{ number: number; url: string }> {
     const branch = `bakery/${card.id}`;
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
     const summary = (output || "").trim().slice(-3000);
-    const details = summary ? `\n\n<details><summary>Run summary</summary>\n\n${summary}\n\n</details>` : "";
-    if (existing && url && pushed) await commentOnPullRequest(github, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.${details}`);
+    if (existing && url && pushed) await updatePullRequestStatus(github, this.board, card.id, slug, existing.number, `Bakery pushed ${pushed.sha.slice(0, 12)}: ${pushed.why}.`, summary || undefined);
     if (!url) {
       url = await github.create(slug, branch, content?.title ?? cardTitle(card), pullRequestBody(content?.body ?? card.body, card, { output }));
       this.delivered("pr", undefined);

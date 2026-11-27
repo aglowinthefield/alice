@@ -10,7 +10,7 @@ import { Board } from "../server/board.js";
 import { Worker } from "../server/worker.js";
 import { Integration, PushHookError, type CommitHookError } from "../server/integration.js";
 import { Readiness } from "../server/readiness.js";
-import { GitHub, GitHubSync, bakeryRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, type PullRequest } from "../server/github.js";
+import { GitHub, GitHubSync, bakeryRequests, checksState, detectGithubIntegration, fastForwardMain, fixableFailures, hasWorktrunk, linkedPullRequest, maxCiReworks, trimFailedLog, updatePullRequestStatus, type PullRequest } from "../server/github.js";
 import { githubRepo, parsePullRequestUrl } from "../server/github-url.js";
 import { diffSummary, draftPrompt, draftPullRequest, maxDraftPatchChars, readPullRequestRules, type PullRequestRules } from "../server/pr-draft.js";
 import type { Card, Run } from "../server/board.js";
@@ -65,6 +65,17 @@ if (args[0] === "api" && args[1] === "graphql") {
   console.log(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : JSON.stringify({ data: { repository: { pullRequest: { comments: { nodes: [] }, reviews: { nodes: [] } } } } }));
   process.exit(0);
 }
+// Issue comments made through the REST API (Bakery's status comment) live in issue-comments.json; comment-error fails them too.
+if (args[0] === "api" && /\\/issues\\/(\\d+\\/comments|comments\\/\\d+)$/.test(args.find(arg => arg.startsWith("repos/")) ?? "")) {
+  if (fs.existsSync(path.join(dir, "comment-error"))) { console.error("comment failed"); process.exit(1); }
+  const store = path.join(dir, "issue-comments.json"), comments = fs.existsSync(store) ? JSON.parse(fs.readFileSync(store, "utf8")) : [];
+  const endpoint = args.find(arg => arg.startsWith("repos/")), method = flag("-X") ?? "GET", body = (flag("-f") ?? "").replace(/^body=/, "");
+  const created = endpoint.match(/\\/issues\\/(\\d+)\\/comments$/), found = comments.find(item => endpoint.endsWith("/issues/comments/" + item.id));
+  if (created && method === "POST") { const id = 9000 + comments.length; comments.push({ id: String(id), number: Number(created[1]), body }); fs.writeFileSync(store, JSON.stringify(comments)); console.log(id); process.exit(0); }
+  if (!found) { console.error("gh: Not Found (HTTP 404)"); process.exit(1); }
+  if (method === "PATCH") { found.body = body; fs.writeFileSync(store, JSON.stringify(comments)); console.log("{}"); process.exit(0); }
+  console.log(found.body); process.exit(0);
+}
 if (args[0] === "api") {
   const read = name => fs.existsSync(path.join(dir, name)) ? fs.readFileSync(path.join(dir, name), "utf8") : undefined;
   if (args[1].endsWith("/rules/branches/main")) { console.log(read("rules.json") ?? "[]"); process.exit(0); }
@@ -106,6 +117,14 @@ function fixture(wtBin?: string, integration: "github-pr" | "default" = "github-
   const prs = () => (existsSync(join(ghDir, "prs.json")) ? JSON.parse(readFileSync(join(ghDir, "prs.json"), "utf8")) : []) as (PullRequest & { title: string; body: string; base: string })[];
   const setPrs = (value: unknown[]) => writeFileSync(join(ghDir, "prs.json"), JSON.stringify(value));
   const comments = () => existsSync(join(ghDir, "comments.log")) ? readFileSync(join(ghDir, "comments.log"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { number: number; body: string }) : [];
+  /** Comments posted through the REST API: Bakery's status comments. */
+  const statusComments = () => (existsSync(join(ghDir, "issue-comments.json")) ? JSON.parse(readFileSync(join(ghDir, "issue-comments.json"), "utf8")) : []) as { id: string; number: number; body: string }[];
+  /** The timeline lines of the PR's one status comment, without their timestamps. */
+  const status = (number = 100) => {
+    const found = statusComments().filter(item => item.number === number);
+    assert.ok(found.length <= 1, `one status comment on #${number}, not ${found.length}`);
+    return (found[0]?.body ?? "").split("\n").filter(line => line.startsWith("- ")).map(line => line.replace(/^- \d{4}-\d\d-\d\d \d\d:\d\d UTC: /, ""));
+  };
   const calls = () => existsSync(join(ghDir, "calls.log")) ? readFileSync(join(ghDir, "calls.log"), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]) : [];
   /** Lands a commit on origin/main from another clone, as other merged work would. */
   const landUpstream = (name: string) => {
@@ -121,7 +140,7 @@ function fixture(wtBin?: string, integration: "github-pr" | "default" = "github-
     return git(upstream, "rev-parse", "HEAD");
   };
   const cleanup = () => { board.close(); process.env.PATH = previousPath; delete process.env.FAKE_GH_DIR; rmSync(dir, { recursive: true, force: true }); };
-  return { dir, ghDir, origin, repo, upstream, data, fakePi, board, repoBoard, github, sync, prs, setPrs, calls, comments, landUpstream, squashMerge, cleanup };
+  return { dir, ghDir, origin, repo, upstream, data, fakePi, board, repoBoard, github, sync, prs, setPrs, calls, comments, statusComments, status, landUpstream, squashMerge, cleanup };
 }
 type Fixture = ReturnType<typeof fixture>;
 
@@ -229,7 +248,7 @@ test("github-pr: Approve catches up with commits someone pushed to the PR branch
     const worktree = join(f.data, "worktrees", card.id);
     const branch = `bakery/${card.id}`;
     await approve(f, card.id);
-    const commentsAfterFirstPush = f.comments().length;
+    const commentsAfterFirstPush = f.status().length;
     /** Pushes a commit onto the PR branch from another clone, as merging main into the PR on GitHub would. */
     const pushToPr = (name: string) => {
       git(f.upstream, "fetch", "-q", "origin", branch);
@@ -245,7 +264,7 @@ test("github-pr: Approve catches up with commits someone pushed to the PR branch
     await approve(f, card.id);
     assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs, "origin's branch is untouched");
     assert.equal(git(worktree, "rev-parse", "HEAD"), theirs, "the card worktree caught up with origin");
-    assert.equal(f.comments().length, commentsAfterFirstPush, "nothing pushed, nothing announced");
+    assert.equal(f.status().length, commentsAfterFirstPush, "nothing pushed, nothing announced");
 
     // Both sides moved: origin's commit is merged in, nothing is pushed, and the merged result needs a new approval.
     const again = pushToPr("again.txt");
@@ -809,7 +828,7 @@ test("github-pr: a draft PR failing CI is not sent back until it is marked ready
       { __typename: "CheckRun", name: "Mergify Merge Protections", status: "COMPLETED", conclusion: "FAILURE", startedAt: done, completedAt: done },
       { __typename: "CheckRun", name: "ci-heavy", workflowName: "CI", status: "COMPLETED", conclusion: "SKIPPED", startedAt: done, completedAt: done },
     ];
-    const comments = f.comments().length;
+    const comments = f.comments().length + f.status().length;
     f.setPrs([{ ...pr, isDraft: true, headRefOid: pushed, statusCheckRollup: rollup }]);
     await sync.syncBoard(f.repoBoard.id);
     let current = f.board.getCard(card.id)!;
@@ -817,7 +836,7 @@ test("github-pr: a draft PR failing CI is not sent back until it is marked ready
     assert.equal(current.ciReworks, 0);
     assert.equal(current.reviewWait, null);
     assert.match(current.prError ?? "", /draft PR.*mark the PR ready/);
-    assert.equal(f.comments().length, comments, "nothing is posted on the draft");
+    assert.equal(f.comments().length + f.status().length, comments, "nothing is posted on the draft");
 
     f.setPrs([{ ...pr, isDraft: false, headRefOid: pushed, statusCheckRollup: rollup }]);
     await sync.syncBoard(f.repoBoard.id);
@@ -862,8 +881,9 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     assert.match(prompt, /authorized to change that pull request \(#100, https:\/\/github.com\/acme\/widgets\/pull\/100\) with `gh pr edit`/);
     assert.match(prompt, /gh run rerun <run-id> --failed/);
     assert.match(prompt, /Do anything you can do in this worktree yourself/);
-    assert.deepEqual(f.comments().map(c => c.number), [100]);
-    assert.match(f.comments()[0].body, new RegExp(`^CI failed at ${pushed.slice(0, 12)}: \`CI / lint\`\\. Bakery sent this back .*automatic fix run 1 of 3`));
+    assert.deepEqual(f.comments(), [], "routine progress is not a new comment");
+    assert.equal(f.status().length, 1);
+    assert.match(f.status()[0], new RegExp(`^CI failed at ${pushed.slice(0, 12)}: \`CI / lint\`\\. Bakery sent this back .*automatic fix run 1 of 3`));
     assert.match(prompt, /### CI \/ lint: failure\nhttps:\/\/github.com\/acme\/widgets\/actions\/runs\/1\/job\/55\n\n```\nfeature.txt: missing newline\n```/);
     assert.doesNotMatch(prompt, /CI \/ test/, "passing checks are left out");
     let current = f.board.getCard(card.id)!;
@@ -881,7 +901,7 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     assert.equal(updated.prNumber, 100);
     assert.equal(f.prs().length, 1, "the open PR was reused");
     const fixed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
-    assert.match(f.comments().at(-1)!.body, new RegExp(`^Bakery pushed ${fixed.slice(0, 12)}: changes the operator reviewed and approved`));
+    assert.match(f.status().at(-1)!, new RegExp(`^Bakery pushed ${fixed.slice(0, 12)}: changes the operator reviewed and approved`));
     assert.notEqual(fixed, pushed);
     f.setPrs([{ ...pr, headRefOid: fixed, statusCheckRollup: [lint] }]);
     await sync.syncBoard(f.repoBoard.id);
@@ -889,7 +909,58 @@ test("github-pr: a PR failing CI goes back to the agent with the failures, once 
     await waitFor(() => f.board.getCard(card.id)!.status === "review");
     current = f.board.getCard(card.id)!;
     assert.equal(current.ciReworks, 2);
+    // Send-back, push and the second send-back are three lines on one status comment, not three comments.
+    const timeline = f.status();
+    assert.equal(timeline.length, 3);
+    assert.match(timeline[2], new RegExp(`^CI failed at ${fixed.slice(0, 12)}: .*automatic fix run 2 of 3`));
+    assert.equal(current.prStatusComment, `acme/widgets#100:${f.statusComments()[0].id}`);
+    assert.deepEqual(f.comments(), [], "none of it was a new comment");
   } finally { f.cleanup(); }
+});
+
+test("status comment: routine lines append to one comment per PR, a deleted one is posted again, and failures are only logged", async () => {
+  const comments = new Map<string, { number: number; body: string }>();
+  let nextId = 1, failing = false;
+  const fake = {
+    async createComment(_repo: string, number: number, body: string) { if (failing) throw new Error("HTTP 502"); const id = String(nextId++); comments.set(id, { number, body }); return id; },
+    async getComment(_repo: string, id: string) { if (failing) throw new Error("HTTP 502"); return comments.get(id)?.body ?? null; },
+    async editComment(_repo: string, id: string, body: string) { if (failing) throw new Error("HTTP 502"); comments.get(id)!.body = body; },
+  } as unknown as GitHub;
+  let stored: string | null = null;
+  const store = { getCard: () => ({ prStatusComment: stored }), setPrStatusComment: (_id: string, value: string) => { stored = value; } };
+  const lines = (id: string) => comments.get(id)!.body.split("\n").filter(line => line.startsWith("- ")).map(line => line.replace(/^- .*? UTC: /, ""));
+  const update = (line: string, number = 7, summary?: string) => updatePullRequestStatus(fake, store, "card-1", "acme/widgets", number, line, summary);
+
+  await update("CI failed at abc. Sent back.");
+  await update("Bakery pushed def: a fix.", 7, "ran the tests\n\nall green");
+  // Two updates at once (a sync pass and a push) each land, on the same comment.
+  await Promise.all([update("Conflict repair 1 of 3 started."), update("Bakery pushed ghi:\nmulti-line\nwhy.")]);
+  assert.equal(comments.size, 1);
+  assert.equal(stored, "acme/widgets#7:1");
+  assert.deepEqual(lines("1"), ["CI failed at abc. Sent back.", "Bakery pushed def: a fix.", "Conflict repair 1 of 3 started.", "Bakery pushed ghi: multi-line why."]);
+  assert.match(comments.get("1")!.body, /Latest run summary<\/summary>\n\nran the tests\n\nall green\n\n<\/details>/, "the run summary is kept across edits");
+  assert.match(comments.get("1")!.body, /Posted by Bakery$/);
+
+  // Someone deleted it: the next line starts a new comment, and its id replaces the old one.
+  comments.delete("1");
+  await update("CI failed at jkl. Sent back.");
+  assert.equal(stored, "acme/widgets#7:2");
+  assert.deepEqual(lines("2"), ["CI failed at jkl. Sent back."]);
+
+  // A new pull request for the card gets its own status comment.
+  await update("Bakery pushed mno: reopened.", 8);
+  assert.equal(stored, "acme/widgets#8:3");
+  assert.equal(comments.get("3")!.number, 8);
+
+  // GitHub failing is logged and never thrown, and leaves the stored comment alone.
+  failing = true;
+  const errors: string[] = [], original = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  try { await update("lost line", 8); } finally { console.error = original; }
+  assert.match(errors.join("\n"), /Could not update Bakery's status comment on acme\/widgets#8: HTTP 502/);
+  assert.equal(stored, "acme/widgets#8:3");
+  await update("no PR yet", 0);
+  assert.equal(comments.size, 2);
 });
 
 test("github-pr: a CI fix run starts from origin/main merged in, and hears about checks that were cancelled", async () => {
@@ -1015,7 +1086,7 @@ test("github-pr: a CI fix run is pushed to the PR without Approve, but a run the
     await sync.syncBoard(f.repoBoard.id);
     const fixed = git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
     assert.notEqual(fixed, pushed, "the fix was pushed without Approve");
-    assert.match(f.comments().at(-1)!.body, /: a fix for the failing CI, pushed automatically without human review\./);
+    assert.match(f.status().at(-1)!, /: a fix for the failing CI, pushed automatically without human review\./);
     assert.equal(f.prs().length, 1, "to the same PR");
     assert.equal(f.board.getCard(card.id)!.status, "review", "the card waits for the PR to merge");
     const pushes = () => git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`);
@@ -1093,7 +1164,7 @@ test("github-pr: a small documentation conflict with main is repaired and pushed
     await sync.syncBoard(f.repoBoard.id);
     await waitFor(() => f.board.getCard(card.id)!.status === "review" && f.board.listRuns(card.id)[0].attempt === 2 && f.board.listRuns(card.id)[0].status === "review");
     assert.equal(f.board.listRuns(card.id)[0].ciFix, 2, "a conflict repair run");
-    assert.equal(f.comments().filter(c => /conflicts with main at .* in `docs\/notes\.md`/.test(c.body)).length, 1);
+    assert.equal(f.status().filter(line => /conflicts with main at .* in `docs\/notes\.md`/.test(line)).length, 1);
     assert.equal(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), pushed, "nothing pushed while the run was going");
 
     await sync.syncBoard(f.repoBoard.id);
@@ -1103,7 +1174,7 @@ test("github-pr: a small documentation conflict with main is repaired and pushed
     assert.equal(f.prs().length, 1, "to the same PR");
     f.setPrs([{ ...pr, headRefOid: fixed, mergeable: "MERGEABLE", statusCheckRollup: [] }]);
     await sync.syncBoard(f.repoBoard.id);
-    assert.equal(f.comments().filter(c => /conflicts with main at/.test(c.body)).length, 1, "said once");
+    assert.equal(f.status().filter(line => /conflicts with main at/.test(line)).length, 1, "said once");
     assert.equal(git(f.origin, "rev-parse", `refs/heads/bakery/${card.id}`), fixed);
   } finally { f.cleanup(); }
 });
@@ -1119,7 +1190,7 @@ test("github-pr: any conflict is attempted, and an agent that leaves it alone sa
     const { card } = await conflictingPr(f, "feature.txt", "main version\n");
     await sync.syncBoard(f.repoBoard.id);
     await waitFor(() => f.board.listRuns(card.id)[0].attempt === 2 && f.board.listRuns(card.id)[0].status === "review");
-    assert.equal(f.comments().filter(c => /conflicts with main at .* in `feature\.txt`/.test(c.body)).length, 1, "attempted although it is not a documentation file");
+    assert.equal(f.status().filter(line => /conflicts with main at .* in `feature\.txt`/.test(line)).length, 1, "attempted although it is not a documentation file");
     await sync.syncBoard(f.repoBoard.id);
     await sync.syncBoard(f.repoBoard.id);
     const said = f.comments().filter(c => /made no change, so nothing was pushed/.test(c.body));
@@ -1517,7 +1588,7 @@ test("github-pr: an /bakery comment on the PR sends the card back once, and its 
     assert.match(prompt, /rename feature\.txt to feature\.md/);
     assert.doesNotMatch(prompt, /delete everything/);
     assert.equal(f.board.getCiFeedback(card.id), undefined, "the request went to that run");
-    assert.match(f.comments().at(-1)!.body, /^Bakery sent this back to its coding agent with the request above/);
+    assert.match(f.status().at(-1)!, /^Sent back to the coding agent with 1 requested change from sam\. Its changes will wait/);
     const reactions = f.calls().filter(call => call.some(arg => arg.includes("addReaction")));
     assert.deepEqual(reactions.map(call => call.find(arg => arg.startsWith("id="))), ["id=3"], "only the trusted request got a reaction, once");
     assert.equal(f.board.listRuns(card.id)[0].ciFix, 0, "not an automatic CI push");
@@ -1590,14 +1661,14 @@ test("github-pr: Approve merges a diverged PR branch into the worktree, keeps bo
   const f = fixture();
   try {
     const { card, worktree, branch, theirs } = await divergedCard(f);
-    const pushesBefore = f.comments().length;
+    const pushesBefore = f.status().length;
     await assert.rejects(approve(f, card.id), new RegExp(`Merged 1 commit from origin/${branch}.*Nothing was pushed.*verification and review run on it again`));
     assert.equal(git(worktree, "rev-parse", "HEAD^2"), theirs, "origin's tip is the merge's second parent");
     assert.equal(git(worktree, "show", "HEAD:local.txt"), "local");
     assert.equal(git(worktree, "show", "HEAD:remote.txt"), "remote");
     assert.equal(git(worktree, "status", "--porcelain"), "");
     assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), theirs, "the merge pushed nothing");
-    assert.equal(f.comments().length, pushesBefore);
+    assert.equal(f.status().length, pushesBefore);
     // The old fingerprint no longer matches the merged tree, so the earlier approval cannot push it.
     await approve(f, card.id);
     assert.equal(git(f.origin, "rev-parse", `refs/heads/${branch}`), git(worktree, "rev-parse", "HEAD"), "the fresh approval fast-forwards origin");

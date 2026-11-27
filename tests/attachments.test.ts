@@ -100,8 +100,8 @@ test("a multi-MB upload streams to disk, lists, downloads intact, and its path r
     const sent = await json(`/boards/${boardId}/cards/${card.id}/discussion`, "POST", { message: "what is in it?", attachmentIds: [saved.id] });
     assert.equal(sent.status, 202);
     assert.deepEqual(sent.data.attachments.map((item: { id: string }) => item.id), [saved.id]);
-    await waitFor(() => existsSync(promptFile));
-    assert.ok(readFileSync(promptFile, "utf8").includes(onDisk));
+    // The fake Pi creates the file before printf finishes writing it, so wait for the content, not the file.
+    await waitFor(() => existsSync(promptFile) && readFileSync(promptFile, "utf8").includes(onDisk));
     const thread = (await json(`/boards/${boardId}/cards/${card.id}/discussion`)).data;
     assert.equal(thread.messages[0].attachments[0].id, saved.id);
     // The same file cannot be sent twice, and unknown ids are refused.

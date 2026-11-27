@@ -1,6 +1,7 @@
 import type { Board, Card, Run } from "./board.js";
 import { CommitHookError, PushHookError, type Integration } from "./integration.js";
 import type { PullRequestDraft } from "./pr-draft.js";
+import type { ActiveWork } from "./metrics.js";
 import { loopGuards } from "./repo-limits.js";
 
 /**
@@ -32,8 +33,11 @@ export class Readiness {
   private repoQueues = new Map<string, Promise<void>>();
   private drafting = 0;
   private draftWaiters: (() => void)[] = [];
+  /** Drafts being written now, from taking a slot until they settle. */
+  private drafts = new Set<ActiveWork>();
   constructor(private board: Board, private integration: Integration, private deps: {
-    draft: (card: Card, run: Run, onProgress: (step: string) => void) => Promise<PullRequestDraft>;
+    /** `signal` aborts when a newer attempt replaces the run, and should stop the drafting agent. */
+    draft: (card: Card, run: Run, onProgress: (step: string) => void, signal: AbortSignal) => Promise<PullRequestDraft>;
     /** Sends a refused hook's output to the agent as a new run. False when no run can start yet. */
     sendBack: (card: Card, error: PushHookError | CommitHookError) => boolean;
   }) {}
@@ -98,11 +102,18 @@ export class Readiness {
   private startDraft(card: Card, run: Run, job: Job): Promise<PullRequestDraft> {
     const pending = (async () => {
       await this.draftSlot();
+      const { signal } = job.abort;
+      // A superseded draft leaves Running now at once, so a card never shows two drafts while its Pi exits.
+      const drafting: ActiveWork = { kind: "pr_draft", repo: card.repo, cardId: card.id, title: card.title, startedAt: Date.now() };
+      const forget = () => this.drafts.delete(drafting);
       try {
-        const draft = await this.deps.draft(card, run, text => this.step(job, text));
+        if (signal.aborted) throw new Error("A newer attempt replaced this run before its draft started");
+        this.drafts.add(drafting);
+        signal.addEventListener("abort", forget, { once: true });
+        const draft = await this.deps.draft(card, run, text => this.step(job, text), signal);
         if (draft.source === "agent" || !draft.problem) this.save(run, { draft });
         return draft;
-      } finally { this.releaseDraftSlot(); }
+      } finally { signal.removeEventListener("abort", forget); forget(); this.releaseDraftSlot(); }
     })();
     job.draft = pending;
     // A failed or unkept draft is retried by the next request.
@@ -110,6 +121,8 @@ export class Readiness {
       () => { if (job.draft === pending) job.draft = undefined; });
     return pending;
   }
+  /** The drafts being written now, for the metrics' Running now table. */
+  get activeWork(): ActiveWork[] { return [...this.drafts]; }
   private async draftSlot(): Promise<void> {
     if (this.drafting < draftConcurrency) { this.drafting++; return; }
     await new Promise<void>(resolve => this.draftWaiters.push(resolve));

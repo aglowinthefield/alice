@@ -23,7 +23,7 @@ If Bakery binds to another address with `BAKERY_HOST`, scrape that address. Its 
 
 Each scrape reads the runs, agent reviews and cards in Bakery's database, so the totals survive restarts. A run counts once it finishes, with its cost, tokens and duration.
 
-Sentinel jobs are left out, as on the Statistics page. Deleting a card removes its runs from the totals, which Prometheus reads as a counter reset.
+Sentinel jobs are left out of the totals, as on the Statistics page, but the gauges of work going now include them. Deleting a card removes its runs from the totals, which Prometheus reads as a counter reset.
 
 ## Every metric
 
@@ -46,7 +46,8 @@ Labels: `repo` is the board's repository path. `agent` is the run's models as Ba
 | `bakery_cards` | gauge | `repo`, `status` | Cards per lane |
 | `bakery_active_runs` | gauge | none | Agent runs going now |
 | `bakery_active_agent_reviews` | gauge | none | Agent reviews going now |
-| `bakery_active_pull_request_drafts` | gauge | none | Pull request drafts going now |
+| `bakery_active_pull_request_drafts` | gauge | none | Automatic pull requests being drafted or pushed now |
+| `bakery_active_run_started_seconds` | gauge | `repo`, `card`, `title`, `kind` | Start time in Unix seconds, one series per run, agent review or pull request draft going now. `card` is the card id, `title` its first 80 characters, `kind` is `run`, `agent_review` or `pr_draft`. A `pr_draft` series lasts while Pi writes the title and body, for any card, and not while a draft waits for a slot or is pushed |
 
 ## Example queries
 
@@ -56,6 +57,9 @@ sum by (repo) (increase(bakery_run_cost_dollars_total[1d]))
 
 # Failure rate per model over the last week
 sum by (agent) (increase(bakery_runs_total{status="failed"}[7d])) / sum by (agent) (increase(bakery_runs_total[7d]))
+
+# What is running now, and for how long
+time() - bakery_active_run_started_seconds
 
 # p95 run time per repository
 histogram_quantile(0.95, sum by (repo, le) (rate(bakery_run_duration_seconds_bucket[1d])))

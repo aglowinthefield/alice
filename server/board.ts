@@ -14,7 +14,8 @@ import { featureOffMessage, readFeatures, type Features } from "../src/features.
 import { parsePlan } from "../src/plan.js";
 import { classifyRuns, type RunKind } from "../src/run-kinds.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
-import type { StatsInput } from "./stats.js";
+import { parseTime, type StatsInput } from "./stats.js";
+import type { ActiveWork } from "./metrics.js";
 
 export type CardStatus = "triage" | "ready" | "running" | "review" | "failed" | "interrupted" | "done" | "archived";
 export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationConfigured: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[] };
@@ -904,6 +905,13 @@ export class Board {
   /** Agents working now on every board: card runs, sentinel jobs included, and agent reviews. */
   activeAgents(): number {
     return (this.db.prepare("SELECT (SELECT COUNT(*) FROM cards WHERE status='running') + (SELECT COUNT(*) FROM auto_review_jobs WHERE state='running') AS n").get() as { n: number }).n;
+  }
+  /** The card and start time of each of these runs, for the metrics' Running now table. Reads no transcripts. */
+  runsGoingNow(runIds: string[]): ActiveWork[] {
+    if (!runIds.length) return [];
+    const rows = this.db.prepare(`SELECT runs.cardId, runs.startedAt, cards.repo, cards.title FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.id IN (${runIds.map(() => "?").join(",")})`)
+      .all(...runIds) as { cardId: string; startedAt: string; repo: string; title: string }[];
+    return rows.map(row => ({ kind: "run", repo: row.repo, cardId: row.cardId, title: row.title, startedAt: parseTime(row.startedAt) ?? Date.now() }));
   }
   /** The machine's agent slots: the limit in force and how many are taken. */
   machineCapacity(): { limit: number; active: number; setting: number } {

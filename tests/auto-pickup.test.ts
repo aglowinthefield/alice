@@ -370,7 +370,7 @@ test("a refused push held by the run limit shows in running as a queued run, not
     item.board.recordPushFailure(refused.id, "abc123", "Unused exports (1)");
     assert.equal(item.worker.startHookFix(item.board.getCard(refused.id)!), false, "at the limit the fix waits");
     assert.equal(item.board.getCard(refused.id)!.startQueued, false, "a hook fix is not a queued start");
-    const work = () => runningWork(item.board, { runs: item.worker.activeRuns(), reviews: [], drafts: [], opening: new Map(), pullRequests: false });
+    const work = () => runningWork(item.board, { runs: item.worker.activeRuns(), reviews: [], drafts: [], opening: new Map() });
     assert.deepEqual(work().map(entry => [entry.kind, entry.title, entry.queued]), [["run", "Busy", false], ["run", "Refused push", true]]);
     const view = runningView(work(), item.board.listCards(), item.board.listBoards());
     assert.deepEqual(view.waiting, [], "the refused card is the agent's next, not yours");
@@ -454,26 +454,6 @@ test("any run that claims the card uses up its queued send-back, so pickup never
     item.pickup.tick();
     assert.equal(item.board.listRuns(card.id).length, 2, "a failed attempt used it up too");
     assert.equal(item.board.isStartQueued(card.id), false);
-  } finally { await item.close(); }
-});
-
-test("sentinel jobs live outside auto-pickup: never picked, never limited, never taking a slot", async () => {
-  const item = fixture();
-  try {
-    const job = (key: string) => item.board.setStatus(item.board.createCard({ title: key, body: "Fix it", repo: item.repo, idempotencyKey: key }).id, "ready");
-    const fix = job("sentinel:1:head:main"), request = job("request:c1");
-    // About the board's slots: room on the machine for all three, whatever the runner's core count.
-    item.board.updateSettings({ maxActiveAgents: 8 });
-    item.board.setAutoPickup(item.repoBoard.id, true, 1);
-    item.pickup.tick();
-    assert.equal(item.board.listRuns(fix.id).length + item.board.listRuns(request.id).length, 0, "the sentinel starts its own jobs");
-    item.worker.start(fix, "manual", "by Alice's sentinel");
-    item.worker.start(request, "manual", "by Alice's sentinel");
-    const plain = item.card("Plain");
-    item.pickup.tick();
-    assert.equal(item.board.listRuns(plain.id)[0]?.status, "running", "two running jobs take no slot at the 1-run limit");
-    item.release();
-    await waitFor(() => [fix.id, request.id, plain.id].every(id => item.board.getCard(id)?.status === "review"));
   } finally { await item.close(); }
 });
 

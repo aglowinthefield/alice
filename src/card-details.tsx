@@ -1016,15 +1016,6 @@ export function CardDetails({
                   </div>
                 )}
                 <CardHistory entries={history} />
-                {card?.sentinelId && (
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span>Found by a sentinel</span>
-                    <code className="select-all break-all font-mono text-foreground">
-                      {card.findingKey}
-                    </code>
-                    <span>run {card.sentinelRunId?.slice(0, 8)}</span>
-                  </div>
-                )}
                 {card?.idempotencyKey && (
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>Idempotency key</span>

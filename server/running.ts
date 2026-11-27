@@ -11,8 +11,6 @@ export type RunningSources = {
   drafts: { cardId: string; since: number | null; step: string }[];
   /** Automatic pull request openings in progress, by card, with when each started. */
   opening: ReadonlyMap<string, number>;
-  /** Whether the build has pull requests; without them nothing opens one automatically. */
-  pullRequests: boolean;
 };
 
 /**
@@ -21,7 +19,7 @@ export type RunningSources = {
  * Queued: hook fixes waiting for a run slot, PR drafts waiting for a drafting slot, and cards waiting to have their PR
  * opened automatically. `tool` is the agent's latest tool call or a draft's latest step, "" before the first.
  */
-export function runningWork(board: Board, { runs, reviews, drafts, opening, pullRequests }: RunningSources): RunningItem[] {
+export function runningWork(board: Board, { runs, reviews, drafts, opening }: RunningSources): RunningItem[] {
   const boards = new Map(board.listBoards().map(item => [item.repo, item.id]));
   const iso = (ms: number | null) => ms === null ? null : new Date(ms).toISOString();
   const item = (kind: RunningItem["kind"], cardId: string, startedAt: string | null, tool: string): RunningItem[] => {
@@ -38,6 +36,6 @@ export function runningWork(board: Board, { runs, reviews, drafts, opening, pull
     ...[...opening].flatMap(([cardId, since]) => item("pr", cardId, iso(since), openingStep(cardId))),
     ...drafts.filter(draft => !opening.has(draft.cardId)).flatMap(draft => item("draft", draft.cardId, iso(draft.since), draft.step)),
     ...board.listWaitingHookFixes().flatMap(card => item("run", card.id, null, "")),
-    ...(pullRequests ? board.listAutoPullRequestCandidates().filter(({ card }) => !opening.has(card.id)).flatMap(({ card }) => item("pr", card.id, null, "")) : []),
+    ...board.listAutoPullRequestCandidates().filter(({ card }) => !opening.has(card.id)).flatMap(({ card }) => item("pr", card.id, null, "")),
   ];
 }

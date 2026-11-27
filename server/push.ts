@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { generateVAPIDKeys, sendNotification } from "web-push";
-import { isSentinelJob, reviewActionLabels, type Board, type Card } from "./board.js";
+import { reviewActionLabels, type Board, type Card } from "./board.js";
 import { isStaleReview, reviewAgeDays } from "../src/stale-review.js";
 
 // Web Push: browsers that turned notifications on in Settings get one when a card becomes your turn (in Review, with
@@ -82,7 +82,7 @@ export class PushNotifications {
     const stale: Card[] = [];
     for (const repoBoard of this.board.listBoards())
       for (const card of this.board.listCards(repoBoard.repo))
-        if (!isSentinelJob(card) && isStaleReview(card, repoBoard.staleReviewDays, now)) stale.push(card);
+        if (isStaleReview(card, repoBoard.staleReviewDays, now)) stale.push(card);
     return stale.sort((a, b) => (a.reviewSince ?? "").localeCompare(b.reviewSince ?? ""));
   }
 

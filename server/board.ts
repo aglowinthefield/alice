@@ -706,14 +706,19 @@ export class Board {
     this.db.prepare("INSERT OR IGNORE INTO ci_feedback(cardId, headSha, failures, createdAt, source) VALUES (?, ?, ?, ?, ?)").run(cardId, feedback.headSha, feedback.failures, now(), feedback.source);
   }
   clearCiFeedback(cardId: string): void { this.db.prepare("DELETE FROM ci_feedback WHERE cardId=?").run(cardId); }
-  /** Review cards on a github-pr board, which the PR poller links and checks. */
-  listPullRequestCards(repo: string): Card[] { return this.listCards(repo).filter(card => card.status === "review" && card.attempts > 0); }
+  /**
+   * Review cards on a github-pr board, which the PR poller links and checks, and Failed cards that still have a PR:
+   * a person may fix and merge that PR on GitHub, and the card is then Done.
+   */
+  listPullRequestCards(repo: string): Card[] {
+    return this.listCards(repo).filter(card => card.attempts > 0 && (card.status === "review" || (card.status === "failed" && card.prNumber !== null)));
+  }
   /** The PR merged and its merge commit is on origin/main: the card is Done. */
   recordPullRequestMerge(cardId: string, candidate: string, mergeCommit: string): Card {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const card = this.getCard(cardId), run = this.listRuns(cardId)[0];
-      if (card?.status !== "review" || !run || this.wasIntegrated(cardId)) throw new Error("Card changed during pull request reconciliation");
+      if ((card?.status !== "review" && card?.status !== "failed") || !run || this.wasIntegrated(cardId)) throw new Error("Card changed during pull request reconciliation");
       this.db.prepare("INSERT INTO external_integrations(cardId, runId, candidate, mergeCommit, integratedAt) VALUES (?, ?, ?, ?, ?)")
         .run(cardId, run.id, candidate, mergeCommit, now());
       this.db.prepare("UPDATE cards SET status='done', prState='MERGED', prError=NULL, updatedAt=? WHERE id=?").run(now(), cardId);

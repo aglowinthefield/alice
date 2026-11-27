@@ -647,6 +647,27 @@ test("github-pr: when the batched PR list times out, each Review card is still l
   } finally { f.cleanup(); }
 });
 
+test("github-pr: a Failed card whose PR merges on GitHub is Done, and its open PR starts no runs", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f, "Failed with a PR");
+    await approve(f, card.id);
+    const db = new DatabaseSync(join(f.dir, "board.sqlite"));
+    try { db.prepare("UPDATE cards SET status='failed' WHERE id=?").run(card.id); } finally { db.close(); }
+    const [pr] = f.prs();
+    const runs = f.board.listRuns(card.id).length;
+    f.setPrs([{ ...pr, mergeable: "CONFLICTING", statusCheckRollup: [{ conclusion: "FAILURE" }] }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(card.id)?.status, "failed");
+    assert.equal(f.board.listRuns(card.id).length, runs, "no conflict repair or CI fix run on a Failed card");
+    const merge = f.landUpstream("fixed-by-hand.txt");
+    f.setPrs([{ ...pr, state: "MERGED", mergedAt: new Date().toISOString(), mergeCommit: { oid: merge }, statusCheckRollup: [] }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(card.id)?.status, "done");
+    assert.equal(externalRow(f, card.id)?.mergeCommit, merge);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: a PR closed without merging sends the card to Needs you with the reason", async () => {
   const f = fixture();
   try {

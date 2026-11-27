@@ -906,9 +906,9 @@ test("the chat list measures its labels again once Inter loads, so the maximum f
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
     await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
-    // The browser asks for Inter once it lays out text in it; until then its face is still "unloaded", not "loading".
+    // The browser asks for Inter once it lays out text in it. A face's status at this point differs by platform (macOS
+    // Chromium doesn't report it as loading), so the held request is the precondition.
     await fontRequested;
-    assert.ok(await page.evaluate(() => [...document.fonts].some(face => face.family === "Inter" && face.status === "loading")), "Inter is still loading");
     release();
     // Nothing else on the page changes, and the list polls only every few seconds, so a maximum still measured in the
     // fallback font would stay as it was.

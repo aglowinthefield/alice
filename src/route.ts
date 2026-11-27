@@ -44,7 +44,7 @@ export function formatRoute({ view, boardId, cardId, section }: Route): string {
   return cardId ? `${base}/card/${encodeURIComponent(cardId)}` : base;
 }
 
-/** Inverse of formatRoute; null for paths Bakery does not own. */
+/** Inverse of formatRoute; null for paths Alice does not own. */
 export function parseRoute(path: string): Route | null {
   const parts = path.split("/").filter(Boolean).map(safeDecode);
   if (parts.length === 0) return null;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import type { LogEntry } from "../server/logs.js";
+import type { LogEntry } from "../shared/wire.js";
 
 const levels = [
   { value: "debug", label: "Debug and up" },
@@ -85,7 +85,7 @@ export function Logs() {
         <div>
           <h1 className="text-[27px] font-semibold tracking-[-.05em]">Logs</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            This Bakery server's output
+            This Alice server's output
             {startedAt &&
               ` since it started ${new Date(startedAt).toLocaleString()}`}
             . The last 2,000 lines are kept.

@@ -59,7 +59,7 @@ test("rework is heavy only when runs after the first cost over half the card", (
 });
 
 test("a card with a first attempt and a CI fix shows both costs, summing to the card total", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-run-kinds-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-run-kinds-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Ship it", body: "", repo: dir });

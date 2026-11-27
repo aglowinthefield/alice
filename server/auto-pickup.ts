@@ -1,5 +1,6 @@
 import { RunLimitError, type Board } from "./board.js";
 import { atRunCapacity } from "./repo-limits.js";
+import { sendBackReason } from "./auto-review.js";
 import type { Worker } from "./worker.js";
 
 // The database claim is the final concurrency/cap guard. This timer only chooses eligible Ready cards, and Review
@@ -35,7 +36,10 @@ export class AutoPickup {
       } catch (error) {
         if (error instanceof RunLimitError) continue;
         this.board.cancelQueuedStart(card.id);
-        this.board.noteCard(card.id, `Bakery could not start the queued attempt: ${error instanceof Error ? error.message : String(error)}. Run it again, or review it yourself.`);
+        // A reviewer send-back that cannot start becomes a handoff, so the card's draft pull request carries the findings.
+        const runId = this.board.listRuns(card.id)[0]?.id;
+        if (why === sendBackReason && card.status === "review" && runId) this.board.handOffSendBack(runId, "no rerun could be started");
+        this.board.noteCard(card.id, `Alice could not start the queued attempt: ${error instanceof Error ? error.message : String(error)}. Run it again, or review it yourself.`);
       }
     }
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {

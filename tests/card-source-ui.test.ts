@@ -9,7 +9,7 @@ test("a follow-up added from a run report is created with source follow-up, and 
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    const card = { id: "card", title: "Ship the importer", body: "", repo: "/tmp/repo", source: "manual", status: "done", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false, idempotencyKey: "bakery-local-1234" };
+    const card = { id: "card", title: "Ship the importer", body: "", repo: "/tmp/repo", source: "manual", status: "done", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false, idempotencyKey: "alice-local-1234" };
     const run = { id: "run", cardId: "card", attempt: 1, status: "review", report: "Done.\n\n## Follow-ups\n- Add an index on `cards.repo`", output: "", error: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, startedBy: "manual", agent: "", lastActivityAt: null, ciFix: 0, failureKind: null, recoveryOf: null, retryScheduled: 0, changedFiles: null };
     const data: Record<string, unknown> = {
       "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
@@ -46,6 +46,6 @@ test("a follow-up added from a run report is created with source follow-up, and 
     await page.getByRole("tab", { name: "Details" }).click();
     const source = page.getByTestId("card-source");
     await source.waitFor();
-    assert.equal((await source.textContent())?.trim(), "Sourcemanual(made before Bakery recorded sources)");
+    assert.equal((await source.textContent())?.trim(), "Sourcemanual(made before Alice recorded sources)");
   } finally { await browser.close(); await server.close(); }
 });

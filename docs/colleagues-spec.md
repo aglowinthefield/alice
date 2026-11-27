@@ -1,6 +1,6 @@
 # Persistent colleagues and rooms
 
-Status: draft product spec, not authorization for implementation runs. Product direction is agreed; proposals and open decisions below are not implementation requirements yet.
+Status: parked on 2026-11-27. Alice stays a runner (cards, worktrees, the review gate and cost) until a concrete failure needs colleagues that a domain Persona and a Pi session can't cover. This spec is not authorization for implementation runs.
 
 ## Purpose
 
@@ -26,7 +26,7 @@ Identity is independent of repositories and models. A colleague can specialize e
 
 Reviewer and implementer are assignments, not necessarily separate identities.
 
-Bakery owns identity, conversations, assignments, and execution context. Impression owns saved knowledge and retrieval. Bakery remains authoritative for card and run status.
+Alice owns identity, conversations, assignments, and execution context. Impression owns saved knowledge and retrieval. Alice remains authoritative for card and run status.
 
 ## Agreed MVP scope
 
@@ -43,7 +43,7 @@ Bakery owns identity, conversations, assignments, and execution context. Impress
 
 Do not require team creation before opening a room. Rooms have their own membership and explicit project context; they are not limited to one board's roster.
 
-Deferred: team hierarchies, automatic work allocation, scheduled standups, autonomous ongoing discussions, automatic memory extraction by Bakery, and a second memory database/editor in Bakery.
+Deferred: team hierarchies, automatic work allocation, scheduled standups, autonomous ongoing discussions, automatic memory extraction by Alice, and a second memory database/editor in Alice.
 
 ## Agreed conversation behavior
 
@@ -86,7 +86,7 @@ Stop cancels the current round and pauses the queue. Steer now replaces the curr
 
 Run standup is manual in the MVP. Each colleague reports completed work, active work and blockers, and proposed next work, with card/run references. Proposed work is distinct from assigned work. No activity means no activity, not an invented update.
 
-Bakery supplies current task evidence; Impression supplies background. The standup ends after the combined summary. It does not start work, change assignments, or launch a debate.
+Alice supplies current task evidence; Impression supplies background. The standup ends after the combined summary. It does not start work, change assignments, or launch a debate.
 
 ## Agreed creation policy
 
@@ -120,7 +120,7 @@ Bring linked needs-input and review updates back to the source room, without str
 
 ## Memory and access boundaries
 
-Proposed initial scopes are operator/user knowledge and project knowledge in Impression; colleague instructions remain in Bakery. Conversation transcripts remain room-local unless deliberately attached or extracted. Do not introduce private colleague experience stores in the MVP: a useful project fact should be discoverable by another authorized colleague.
+Proposed initial scopes are operator/user knowledge and project knowledge in Impression; colleague instructions remain in Alice. Conversation transcripts remain room-local unless deliberately attached or extracted. Do not introduce private colleague experience stores in the MVP: a useful project fact should be discoverable by another authorized colleague.
 
 Every explicit save needs a chosen scope and source reference. Retrieval should expose memory identifiers and staleness warnings. Current repository evidence outranks old memory. Memory never grants permission.
 
@@ -128,22 +128,22 @@ Project association and room participation do not automatically grant repository
 
 ## Integration evidence
 
-Inspected local Bakery commit `fa38120` and local Impression commit `3509cd0`. These observations describe those checkouts, not deployed capabilities.
+Inspected local Alice commit `fa38120` and local Impression commit `3509cd0`. These observations describe those checkouts, not deployed capabilities.
 
 | Current owner | Observation and consequence |
 | --- | --- |
 | `server/board.ts`, `Chat`, `ChatMessage` | Chats have a board ID and model settings. Messages have user/agent/error roles, without colleague attribution. Rooms need explicit participant and speaker identities. |
 | `server/chat.ts`, `ChatRunner.send` | One Pi session per chat; a concurrent send throws `The agent is still answering the previous message`. Room rounds and durable queued messages need new behavior. |
 | `server/chat.ts`, `chatSystemPrompt` | Prompts assume a single board and the repository's main checkout. Do not extend that assumption into unrestricted multi-project execution. |
-| `server/agent-models.ts` | Work/conflict/review/draft model settings already exist, with repository/global inheritance and per-chat choices. Colleague defaults must integrate with these rather than replace them silently. |
+| `shared/agent-models.ts` | Work/conflict/review/draft model settings already exist, with repository/global inheritance and per-chat choices. Colleague defaults must integrate with these rather than replace them silently. |
 | `server/worker.ts` | Card implementation already has dedicated worktrees and sessions. Reuse that execution lifecycle rather than turning a room into an implementation workspace. |
 | Impression `packages/mcp/src/server.ts` | Search and add tools exist. Both infer project from cwd; search accepts query/limit, and add accepts content and project/user scope. Multi-project selection is not an MCP parameter today. |
-| Impression `packages/shared/src/project.ts` | Project identity normalizes git remotes and falls back to paths. Map Bakery boards to this identity rather than inventing another memory namespace. |
+| Impression `packages/shared/src/project.ts` | Project identity normalizes git remotes and falls back to paths. Map Alice boards to this identity rather than inventing another memory namespace. |
 | Impression `README.md` | Documents HTTP search filters, anchors/staleness, and extraction hooks. README descriptions are not proof of deployed authorization or availability. |
 
-The MCP add tool does not expose a structured room/message source parameter. Verify the HTTP contract before choosing structured provenance or a source link in content. Bakery must not claim that this adapter is already implemented.
+The MCP add tool does not expose a structured room/message source parameter. Verify the HTTP contract before choosing structured provenance or a source link in content. Alice must not claim that this adapter is already implemented.
 
-Impression's optional Pi extension performs automatic session capture. Explicit-only Bakery saving requires checking the effective hook configuration; omitting a Bakery extraction feature alone does not disable installed hooks.
+Impression's optional Pi extension performs automatic session capture. Explicit-only Alice saving requires checking the effective hook configuration; omitting an Alice extraction feature alone does not disable installed hooks.
 
 No live Impression API request or access-boundary test was performed for this draft. No integration code has changed.
 
@@ -172,4 +172,4 @@ No live Impression API request or access-boundary test was performed for this dr
 
 ## Next design artifact
 
-The [proposed UI flow](colleagues-ui-flow.md) sketches colleague setup, room membership/context, the composer with visible lead, queued-message steering, standups, context-used inspection, and card handoff. Check this flow against existing Bakery UI before creating implementation cards. Keep this spec's agreed behavior separate from unresolved proposals during that pass.
+The [proposed UI flow](colleagues-ui-flow.md) sketches colleague setup, room membership/context, the composer with visible lead, queued-message steering, standups, context-used inspection, and card handoff. Check this flow against existing Alice UI before creating implementation cards. Keep this spec's agreed behavior separate from unresolved proposals during that pass.

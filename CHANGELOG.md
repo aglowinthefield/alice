@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bakery is now Alice. The repository moves to github.com/aglowinthefield/alice.
+  - New names: the `alice` CLI, `ALICE_*` variables, `alice/<card>` branches, `alice_*` Prometheus metrics with the same labels, `alice.*` telemetry, the `/alice` PR comment, `alice.service` and `alice-update.timer`, and launchd `dev.alice.*`.
+  - For one release the old names still work: `bakery-cli` and `bakery` run the CLI, `BAKERY_*` fills any unset `ALICE_*`, and `/bakery` comments still count.
+  - Cards on `bakery/<card>` branches keep their PRs. The service reads `~/.config/bakery/bakery.env` when `~/.config/alice/alice.env` doesn't exist.
+  - An existing `~/.local/share/bakery` data directory and its `bakery.sqlite` stay where they are.
+  - Dashboards and alerts that query `bakery_*` metrics need the new names.
 - `bakery-cli tui` now looks like the web board and fills the terminal: lanes side by side, one tile per card with its title and one live fact, a spinner on running cards, and the card opening as a dialog over the board with its description and attempts. A sidebar numbers the boards (`1`–`9` open one) and `0` opens Today across every board; the header shows the board's spend and merge conflicts, and failure reasons and Needs you sit on coloured pills. It redraws only the rows that change, and takes the mouse: click a card to select it and again to open it, click boards, Today rows, tabs and footer keys, and scroll with the wheel. `r` moves a card to Ready without asking, even with pickup on; only a card the text check flags still asks. `/` finds a card by title or id, on the board or, from Today, on every board, and enter opens it.
 - The attempt after a run timeout continues the timed-out Pi session with a short message ("You ran out of time on the previous attempt…") asking it to finish the remaining work and write its report, instead of sending the whole task again, so the agent picks up where it stopped. If the session file is gone it starts a fresh session with the whole task.
 - A machine-wide limit on agents at once covers card runs and agent reviews on every board. It defaults to a quarter of the CPU cores, and you set it in **Settings > General** or with `bakery-cli agents N|auto`. Automatic work waits for a slot; a run you start yourself always starts. Boards within their own concurrency could together run 11 agents and their test suites, which stalled the machine and the server.

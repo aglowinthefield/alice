@@ -16,7 +16,7 @@ after(async () => { await browser?.close(); await server?.close(); });
 
 test("cached theme colors the first paint while the database request is pending", async () => {
   const page = await browser.newPage();
-  await page.addInitScript(() => localStorage.setItem("bakery-theme", "light"));
+  await page.addInitScript(() => localStorage.setItem("alice-theme", "light"));
   let reply!: () => void;
   const pending = new Promise<void>(resolve => { reply = resolve; });
   await page.route("**/api/**", async route => {
@@ -36,7 +36,7 @@ test("cached theme colors the first paint while the database request is pending"
     })), { theme: "light", background: "rgb(245, 243, 238)", rendered: 0 });
     reply();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default");
-    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
+    assert.equal(await page.evaluate(() => localStorage.getItem("alice-theme")), "default");
   } finally { reply(); await page.close(); }
 });
 
@@ -124,7 +124,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("radio", { name: "Light", exact: true }).check();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
-    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
+    assert.equal(await page.evaluate(() => localStorage.getItem("alice-theme")), "default");
     await page.goBack();
     // Going back reopens the card this screen left; close it so the next click opens it fresh.
     await page.keyboard.press("Escape");
@@ -139,7 +139,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.notEqual(light.sidebar, dark.sidebar);
     assert.notEqual(light.details, dark.details);
     releasePatch();
-    await page.waitForFunction(() => localStorage.getItem("bakery-theme") === "light");
+    await page.waitForFunction(() => localStorage.getItem("alice-theme") === "light");
     // The reload reopens the card this tab had open.
     await page.reload();
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
@@ -150,7 +150,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("group", { name: "Mode" }).getByRole("radio", { name: "Dark" }).check();
-    await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("bakery-theme") === "default");
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("alice-theme") === "default");
     await page.goBack();
     // Going back reopens the card this screen left; close it so the next click opens it fresh.
     await page.keyboard.press("Escape");
@@ -171,6 +171,6 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     assert.deepEqual(await palette(), dark);
-    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-theme")), "default");
+    assert.equal(await page.evaluate(() => localStorage.getItem("alice-theme")), "default");
   } finally { releasePatch(); await page.close(); }
 });

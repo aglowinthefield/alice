@@ -21,7 +21,7 @@ const line = (seq: number, level: string, message: string) => ({ seq, at, level,
 test("Logs shows the server's output, polls for new lines, and filters by level and text", async () => {
   const page = await browser.newPage();
   const queries: string[] = [];
-  let batches = [[line(1, "info", "Bakery listening on http://127.0.0.1:4317"), line(2, "debug", "GET /api/x -> 404: Not found")], [line(3, "error", "GitHub sync for /code/alpha: gh failed")]];
+  let batches = [[line(1, "info", "Alice listening on http://127.0.0.1:4317"), line(2, "debug", "GET /api/x -> 404: Not found")], [line(3, "error", "GitHub sync for /code/alpha: gh failed")]];
   await page.route("**/api/**", async route => {
     const request = new URL(route.request().url());
     if (request.pathname === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" } });
@@ -37,7 +37,7 @@ test("Logs shows the server's output, polls for new lines, and filters by level 
     await page.goto(url);
     await page.getByRole("button", { name: "Logs" }).click();
     await page.getByRole("heading", { name: "Logs" }).waitFor();
-    await page.getByText("Bakery listening on http://127.0.0.1:4317").waitFor();
+    await page.getByText("Alice listening on http://127.0.0.1:4317").waitFor();
     await page.getByText("gh failed").waitFor();
     assert.deepEqual(queries.slice(0, 2), ["?after=0", "?after=2"]);
     assert.equal(new URL(page.url()).pathname, "/logs");

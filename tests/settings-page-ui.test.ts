@@ -38,7 +38,7 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
     assert.equal(new URL(page.url()).pathname, "/settings/updates");
     assert.equal(await page.getByTestId("settings-version").textContent(), "0.1.0");
     await page.getByText("e3c5357", { exact: true }).first().waitFor();
-    assert.match(await page.getByTestId("settings-footer-version").textContent() ?? "", /Bakery 0\.1\.0\s*e3c5357/);
+    assert.match(await page.getByTestId("settings-footer-version").textContent() ?? "", /Alice 0\.1\.0\s*e3c5357/);
     await page.getByText("Add the settings page").waitFor();
     await page.getByRole("button", { name: "Update and restart" }).click();
     await page.waitForFunction(() => true);

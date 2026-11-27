@@ -15,7 +15,7 @@ function fixture(cards: object[], options: Options = {}) {
   const opened: string[] = [];
   const api = async (method: string, path: string, input?: unknown) => {
     calls.push([method, path, input]);
-    if (options.fail && path.endsWith(options.fail)) throw new Error("Bakery 409: Card is already running");
+    if (options.fail && path.endsWith(options.fail)) throw new Error("Alice 409: Card is already running");
     if (path === "/api/boards") return options.boards ?? {};
     if (path.endsWith("/conflicts")) return path.startsWith("/api/boards/b1/") ? options.conflicts ?? [] : [];
     const boardCards = /^\/api\/boards\/([\w-]+)\/cards$/.exec(path);
@@ -23,10 +23,10 @@ function fixture(cards: object[], options: Options = {}) {
     if (path === "/api/cards") return cards;
     if (path.endsWith("/ready-check") && options.flags) return { flags: options.flags };
     if (path.endsWith("/review")) return options.review ?? { files: [{ path: "a.ts" }], fingerprint: "f".repeat(64) };
-    if (path.endsWith("/runs")) return [{ attempt: 2, status: "failed", agent: "pi", error: "Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout", report: null }];
+    if (path.endsWith("/runs")) return [{ attempt: 2, status: "failed", agent: "pi", error: "Pi exited (143); Alice sent SIGTERM: 60-minute run timeout", report: null }];
     return {};
   };
-  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: options.columns ?? 100, rows: options.rows ?? 12 }), open: (url: string) => opened.push(url), today: options.today, webUrl: (id: string, boardId: string) => `http://bakery/board/${boardId}/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
+  const tui = createTui({ api, board: { ...board, ...options.board }, size: () => ({ columns: options.columns ?? 100, rows: options.rows ?? 12 }), open: (url: string) => opened.push(url), today: options.today, webUrl: (id: string, boardId: string) => `http://alice/board/${boardId}/card/${id}`, now: () => Date.parse("2026-11-24T10:00:00Z") });
   const posts = () => calls.filter(([method]) => method === "POST");
   const screen = () => tui.render().map((line: string) => line.replace(/\x1b\[[\d;?]*[a-zA-Z]/g, "")).join("\n");
   return { tui, calls, posts, opened, screen };
@@ -112,7 +112,7 @@ test("approve reads the review: findings, a new PR in the browser, an open PR, o
   assert.equal(newPr.posts().length, 0);
   assert.match(newPr.screen(), /Press o to finish it in the browser/);
   await newPr.tui.key("o");
-  assert.deepEqual(newPr.opened, ["http://bakery/board/b1/card/m-0000"]);
+  assert.deepEqual(newPr.opened, ["http://alice/board/b1/card/m-0000"]);
 
   const openPr = fixture([card("m", "review", { prState: "OPEN", prNumber: 9 })], { board: { integration: "github-pr" } });
   await openPr.tui.refresh();
@@ -134,7 +134,7 @@ test("a refused action shows the server's reason", async () => {
   await f.tui.refresh();
   await f.tui.key("s");
   await f.tui.key("y");
-  assert.match(f.screen(), /Bakery 409: Card is already running/);
+  assert.match(f.screen(), /Alice 409: Card is already running/);
 });
 
 test("lanes sit side by side; j and k move within a lane, h and l between lanes", async () => {
@@ -190,7 +190,7 @@ test("enter opens the card as a dialog with its latest attempt; tab shows every 
   assert.match(overview, /• run npm test/, "the body's markdown keeps its bullets");
   assert.match(overview, /⇩ 2 attachments/);
   assert.match(overview, /Latest attempt +2 · failed/);
-  assert.match(overview, /Pi exited \(143\); Bakery sent SIGTERM: 60-minute run timeout/);
+  assert.match(overview, /Pi exited \(143\); Alice sent SIGTERM: 60-minute run timeout/);
   await f.tui.key("tab");
   assert.match(f.screen(), /Attempt 2 · failed · pi/);
   await f.tui.key("escape");

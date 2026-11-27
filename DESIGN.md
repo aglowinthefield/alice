@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: Bakery
+name: Alice
 description: A dense, quiet board for running coding agents across repos, used all day on desktop, web and iOS.
 colors:
   primary: "#d4ccb4"
@@ -108,9 +108,9 @@ components:
     rounded: "{rounded.md}"
 ---
 
-# Bakery design
+# Alice design
 
-Bakery follows the `house-style` skill. This file records Bakery's values and the places it goes beyond or departs from that skill. Source of truth for the values is `src/style.css`; update both together.
+Alice follows the `house-style` skill. This file records Alice's values and the places it goes beyond or departs from that skill. Source of truth for the values is `src/style.css`; update both together.
 
 ## Overview
 
@@ -146,7 +146,7 @@ The Cmd+K (Ctrl+K) command palette is a dialog with the same motion, placed high
 
 ## Do's and Don'ts
 
-- Do keep live progress motion: the orbit on a card whose agent is working, the slow breathe on one waiting, the pulse on cards that move along during a drag. These are Bakery's spinner equivalents and stop under reduced motion.
+- Do keep live progress motion: the orbit on a card whose agent is working, the slow breathe on one waiting, the pulse on cards that move along during a drag. These are Alice's spinner equivalents and stop under reduced motion.
 - Don't add new looping motion beyond progress indicators.
 - Do keep the sidebar at its fixed sizes when changing density.
 - Don't use type below 11px.

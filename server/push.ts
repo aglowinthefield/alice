@@ -5,7 +5,7 @@ import { generateVAPIDKeys, sendNotification } from "web-push";
 import { reviewActionLabels, type Board, type Card } from "./board.js";
 
 // Web Push: browsers that turned notifications on in Settings get one when a card becomes your turn (in Review, with
-// nothing else, such as the agent reviewer or GitHub CI, still holding it) or fails, even with no Bakery tab open.
+// nothing else, such as the agent reviewer or GitHub CI, still holding it) or fails, even with no Alice tab open.
 // A timer compares the cards against the set it last saw, which is stored, so a restart neither repeats nor drops
 // notifications and turning them on does not replay cards that already needed you.
 
@@ -16,8 +16,8 @@ type Kind = "turn" | "failed";
 export type Send = (subscription: PushSubscriptionInput, notice: Notice, keys: VapidKeys) => Promise<void>;
 export type VapidKeys = { publicKey: string; privateKey: string };
 
-// Push services ask for a contact; Bakery has no operator address, so this names the project.
-const subject = "https://github.com/aglowinthefield/bakery";
+// Push services ask for a contact; Alice has no operator address, so this names the project.
+const subject = "https://github.com/aglowinthefield/alice";
 const sendWebPush: Send = async (subscription, notice, keys) => {
   await sendNotification(subscription, JSON.stringify(notice), { vapidDetails: { subject, ...keys }, TTL: 24 * 60 * 60, urgency: "high" });
 };

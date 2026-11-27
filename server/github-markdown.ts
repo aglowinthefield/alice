@@ -1,10 +1,10 @@
 /**
- * Bakery's own markdown links (`![shot.png](/api/boards/…/attachments/ID)` from `bakery-cli attach`, chat images) are
- * relative to the local Bakery server, so GitHub cannot load them: they render as broken images or dead links. Screenshots
+ * Alice's own markdown links (`![shot.png](/api/boards/…/attachments/ID)` from `alice attach`, chat images) are
+ * relative to the local Alice server, so GitHub cannot load them: they render as broken images or dead links. Screenshots
  * stay on this machine by design, never uploaded to GitHub or any other service, so before text goes into a pull request
- * body or comment each such link becomes plain text naming the file and saying it is kept in Bakery.
+ * body or comment each such link becomes plain text naming the file and saying it is kept in Alice.
  *
- * Only Bakery's stored-file URL shapes are rewritten (card attachments and chat images); other links, such as
+ * Only Alice's stored-file URL shapes are rewritten (card attachments and chat images); other links, such as
  * `/api/users`, are left alone. Links written entirely inside code or a fenced block are left alone, but a code span
  * inside a link's label is part of that link.
  */
@@ -23,7 +23,7 @@ export function githubMarkdown(text: string): string {
     if (label === undefined) return match; // Code.
     const name = label.replace(/\x60/g, "").trim() || (image ? "image" : "file");
     return image
-      ? `_Screenshot ${name}: kept in Bakery as a card attachment, not published to GitHub_`
-      : `${name} (kept in Bakery as a card attachment, not published to GitHub)`;
+      ? `_Screenshot ${name}: kept in Alice as a card attachment, not published to GitHub_`
+      : `${name} (kept in Alice as a card attachment, not published to GitHub)`;
   });
 }

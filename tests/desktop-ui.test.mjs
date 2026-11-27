@@ -64,7 +64,7 @@ async function open({
             if (command === "connect") {
               await new Promise((resolve) => setTimeout(resolve, 100));
               if (connectError)
-                throw "Cannot reach Bakery. Check the address and your Tailnet connection.";
+                throw "Cannot reach Alice. Check the address and your Tailnet connection.";
               return null;
             }
             throw new Error(`Unexpected command: ${command}`);
@@ -80,13 +80,13 @@ async function open({
 }
 
 test("the launcher restores the address and connects without duplicate submissions", async () => {
-  const page = await open({ saved: "https://bakery.example.ts.net/" });
+  const page = await open({ saved: "https://alice.example.ts.net/" });
   try {
     const input = page.getByLabel("Server address");
     await page.waitForFunction(
       () => document.querySelector("input").value !== "",
     );
-    assert.equal(await input.inputValue(), "https://bakery.example.ts.net/");
+    assert.equal(await input.inputValue(), "https://alice.example.ts.net/");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     assert.equal(
       await page.getByRole("button", { name: "Connecting…" }).isDisabled(),
@@ -94,7 +94,7 @@ test("the launcher restores the address and connects without duplicate submissio
     );
     await page
       .getByRole("status")
-      .filter({ hasText: "Bakery is open" })
+      .filter({ hasText: "is open in its own window" })
       .waitFor();
     assert.equal(
       await page
@@ -112,7 +112,7 @@ test("a failed connection leaves the address editable and explains recovery", as
   try {
     await page
       .getByLabel("Server address")
-      .fill("https://bakery.example.ts.net");
+      .fill("https://alice.example.ts.net");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await page
       .getByRole("alert")
@@ -141,7 +141,7 @@ test("a damaged settings file does not prevent entering a new address", async ()
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await page
       .getByRole("status")
-      .filter({ hasText: "Bakery is open" })
+      .filter({ hasText: "is open in its own window" })
       .waitFor();
   } finally {
     await page.close();

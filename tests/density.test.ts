@@ -26,7 +26,7 @@ const measure = () => {
 
 test("density picker rescales spacing and type, saves, and paints the cached density before settings load", async () => {
   const page = await browser.newPage();
-  await page.addInitScript(() => localStorage.setItem("bakery-view", "board"));
+  await page.addInitScript(() => localStorage.setItem("alice-view", "board"));
   let density = "default", hold = false, release: (() => void) | undefined, held!: () => void;
   const heldRequest = new Promise<void>(resolve => { held = resolve; });
   await page.route("**/api/**", async route => {
@@ -51,7 +51,7 @@ test("density picker rescales spacing and type, saves, and paints the cached den
     assert.ok(compact.space < base.space && compact.text < base.text, JSON.stringify(compact));
 
     await group.getByRole("radio", { name: "Cozy" }).check();
-    await page.waitForFunction(() => localStorage.getItem("bakery-density") === "cozy");
+    await page.waitForFunction(() => localStorage.getItem("alice-density") === "cozy");
     assert.equal(density, "cozy");
     const cozy = await page.evaluate(measure);
     assert.ok(cozy.space > base.space && cozy.text > base.text, JSON.stringify(cozy));
@@ -66,7 +66,7 @@ test("density picker rescales spacing and type, saves, and paints the cached den
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("group", { name: "Density" }).getByRole("radio", { name: "Default" }).check();
-    await page.waitForFunction(() => document.documentElement.dataset.density === undefined && localStorage.getItem("bakery-density") === "default");
+    await page.waitForFunction(() => document.documentElement.dataset.density === undefined && localStorage.getItem("alice-density") === "default");
     assert.deepEqual(await page.evaluate(measure), base);
   } finally { release?.(); await page.close(); }
 });

@@ -896,13 +896,18 @@ test("the chat list measures its labels again once Inter loads, so the maximum f
     // Inter is held back, so the labels are first laid out in the fallback font, and then it swaps in.
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
-    await page.route("**/*.woff2", async route => { await held; await route.continue(); });
+    let requested!: () => void;
+    const fontRequested = new Promise<void>(resolve => { requested = resolve; });
+    await page.route("**/*.woff2", async route => { requested(); await held; await route.continue(); });
     await unreadHarness(page, [{ id: "c1", topic: "WWWWWW multi word title", unread: 2 }, { id: "c2", topic: "Short", unread: 0 }]);
-    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    // WebKit holds the load event until the page's fonts arrive, so waiting for "load" here would wait on the held font.
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`, { waitUntil: "domcontentloaded" });
     const nav = page.getByRole("navigation", { name: "Chats" });
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
     await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
+    // The browser asks for Inter once it lays out text in it; until then its face is still "unloaded", not "loading".
+    await fontRequested;
     assert.ok(await page.evaluate(() => [...document.fonts].some(face => face.family === "Inter" && face.status === "loading")), "Inter is still loading");
     release();
     // Nothing else on the page changes, and the list polls only every few seconds, so a maximum still measured in the

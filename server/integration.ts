@@ -197,9 +197,9 @@ export type PushProgress = { step: string; log: string[]; startedAt: string; fin
 const progressLogLines = 400;
 
 /**
- * `git push` without blocking the server, streaming stdout and stderr together, in order, into `onLine`. A
- * pre-push hook's own stdout is part of the push output, so a failure message carries everything it printed, not
- * only stderr. `\r` progress redraws replace the line they redraw.
+ * `git push` without blocking the server, streaming stdout and stderr together into `onLine`. A pre-push hook's own
+ * stdout is part of the push output, so a failure message carries everything it printed, not only stderr. Git passes
+ * the hook's stdout to its stdout, a separate pipe, so each stream's lines stay in order but the two interleave as read. `\r` progress redraws replace the line they redraw.
  */
 /** A failed `git push`. `hookFailed` when a pre-push hook refused it, as opposed to the remote or the network. */
 export class PushError extends Error {

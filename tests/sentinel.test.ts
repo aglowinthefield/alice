@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -180,16 +180,118 @@ test("a run locks its card's PR while it works, and releases it when it finishes
     const card = f.board.createCard({ title: "Feature", body: "x", repo: f.repo });
     f.board.setStatus(card.id, "ready");
     f.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
-    const settle = () => new Promise(resolve => setTimeout(resolve, 50));
     const run = f.board.claim(card.id);
-    await settle();
+    await runLocks.idle();
     assert.equal(lockStatus(parseLock(f.comments.get(pr.number)![0].body)!, Date.parse("2026-01-01T00:01:00Z")), "active");
     f.board.finish(run.id, "review");
-    await settle();
-    assert.match(f.comments.get(pr.number)![0].body, /released/);
+    await runLocks.idle();
+    assert.ok(parseLock(f.comments.get(pr.number)![0].body)?.releasedAt, "the lock is released");
     assert.equal(f.comments.get(pr.number)!.length, 1, "the same comment is edited, not duplicated");
     runLocks.shutdown();
   } finally { f.cleanup(); }
+});
+
+/** A Ready card with an open PR and a RunLocks watching it. `acquires()` counts lock takes and refreshes. */
+function lockedCard(f: ReturnType<typeof fixture>) {
+  const runLocks = new RunLocks(f.board, f.locks, f.store);
+  const pr = f.addPr({ mergeable: "MERGEABLE" });
+  const card = f.board.createCard({ title: "Feature", body: "x", repo: f.repo });
+  f.board.setStatus(card.id, "ready");
+  f.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
+  let acquires = 0;
+  const acquire = f.locks.acquire.bind(f.locks);
+  f.locks.acquire = (...args) => { acquires++; return acquire(...args); };
+  const merge = () => f.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "MERGED" });
+  return { runLocks, pr, card, acquires: () => acquires, merge };
+}
+
+test("a run whose PR merges while it works still stops refreshing and releases the lock", async () => {
+  const f = fixture();
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const { runLocks, pr, card, acquires, merge } = lockedCard(f);
+    const run = f.board.claim(card.id);
+    await runLocks.idle();
+    mock.timers.tick(10 * 60_000);
+    assert.equal(acquires(), 2, "the lock is taken, then refreshed while the run works");
+    merge();
+    f.board.finish(run.id, "review");
+    await runLocks.idle();
+    assert.ok(parseLock(f.comments.get(pr.number)![0].body)?.releasedAt, "the lock is released");
+    mock.timers.tick(30 * 60_000);
+    assert.equal(acquires(), 2, "no refresh after the run finished");
+    runLocks.shutdown();
+  } finally { mock.timers.reset(); f.cleanup(); }
+});
+
+test("a run that finishes while a refresh is still editing the comment releases after that edit", async () => {
+  const f = fixture();
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const { runLocks, pr, card, acquires, merge } = lockedCard(f);
+    const run = f.board.claim(card.id);
+    await runLocks.idle();
+    const edit = f.github.editComment.bind(f.github);
+    let reached!: () => void, open!: () => void;
+    const editing = new Promise<void>(resolve => { reached = resolve; }), gate = new Promise<void>(resolve => { open = resolve; });
+    // Only the refresh's edit waits at the gate; the release's edit goes straight through.
+    f.github.editComment = async (...args) => { f.github.editComment = edit; reached(); await gate; return edit(...args); };
+    mock.timers.tick(10 * 60_000);
+    await editing;
+    mock.timers.tick(10 * 60_000);
+    assert.equal(acquires(), 2, "a refresh still in flight is not started again");
+    merge();
+    f.board.finish(run.id, "review");
+    open();
+    await runLocks.idle();
+    assert.ok(parseLock(f.comments.get(pr.number)![0].body)?.releasedAt, "the release lands after the refresh's edit");
+    assert.equal(f.store.getLock("acme/widgets", pr.number)?.state, "released");
+    runLocks.shutdown();
+  } finally { mock.timers.reset(); f.cleanup(); }
+});
+
+test("a retry that starts while the finished attempt's refresh is in flight keeps its lock", async () => {
+  const f = fixture();
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const { runLocks, pr, card } = lockedCard(f);
+    const first = f.board.claim(card.id);
+    await runLocks.idle();
+    const edit = f.github.editComment.bind(f.github);
+    let reached!: () => void, open!: () => void;
+    const editing = new Promise<void>(resolve => { reached = resolve; }), gate = new Promise<void>(resolve => { open = resolve; });
+    f.github.editComment = async (...args) => { f.github.editComment = edit; reached(); await gate; return edit(...args); };
+    mock.timers.tick(10 * 60_000);
+    await editing;
+    f.board.finish(first.id, "failed", "boom");
+    f.board.claim(card.id);
+    open();
+    await runLocks.idle();
+    const lock = parseLock(f.comments.get(pr.number)![0].body)!;
+    assert.equal(lock.releasedAt, undefined, "the first attempt's release landed before the retry took the lock");
+    assert.equal(lock.holder, card.id);
+    assert.equal(f.store.getLock("acme/widgets", pr.number)?.state, "held");
+    runLocks.shutdown();
+  } finally { mock.timers.reset(); f.cleanup(); }
+});
+
+test("after shutdown a run's lock is no longer refreshed, and a later finish still releases it", async () => {
+  const f = fixture();
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const { runLocks, pr, card, acquires, merge } = lockedCard(f);
+    const run = f.board.claim(card.id);
+    runLocks.shutdown();
+    await runLocks.idle();
+    mock.timers.tick(30 * 60_000);
+    assert.equal(acquires(), 1, "a lock still being taken at shutdown gets no refresh timer");
+    merge();
+    f.board.finish(run.id, "review");
+    await runLocks.idle();
+    assert.ok(parseLock(f.comments.get(pr.number)![0].body)?.releasedAt, "the lock is released");
+    mock.timers.tick(30 * 60_000);
+    assert.equal(acquires(), 1);
+  } finally { mock.timers.reset(); f.cleanup(); }
 });
 
 test("after a sentinel run Bakery pushes the rebased branch with a lease", async () => {

@@ -4,6 +4,9 @@ import { monitorsGithub } from "./sentinel.js";
 import type { PrLocks } from "./pr-locks.js";
 import type { SentinelStore } from "./sentinel-store.js";
 
+type Target = { repo: string; number: number; holder: string };
+type Held = { target: Target; pending?: Promise<void>; timer?: ReturnType<typeof setInterval> };
+
 /** Lock refresh interval. Well inside the 30-minute lifetime, so a long run keeps its lock. */
 const refreshMs = 10 * 60_000;
 
@@ -13,15 +16,27 @@ const refreshMs = 10 * 60_000;
  * signal the sentinel waits for. Cards without a PR yet (a first feature run) take no lock.
  */
 export class RunLocks {
-  private timers = new Map<string, ReturnType<typeof setInterval>>();
-  private taking = new Map<string, Promise<void>>();
+  /** Each locked run's target, captured at start so the release still finds it after the PR merges or closes. */
+  private held = new Map<string, Held>();
+  private handling = new Set<Promise<void>>();
+  private stopped = false;
   constructor(private readonly board: Board, private readonly locks: PrLocks, private readonly store: SentinelStore, private readonly enabled = true) {
-    if (enabled) board.onRun((event, run) => this.handle(event, run));
+    if (enabled) board.onRun((event, run) => {
+      const job = this.handle(event, run).finally(() => this.handling.delete(job));
+      this.handling.add(job);
+      return job;
+    });
   }
-  shutdown(): void { for (const timer of this.timers.values()) clearInterval(timer); this.timers.clear(); }
+  /** Resolves once every start and finish handled so far has settled. */
+  async idle(): Promise<void> { while (this.handling.size) await Promise.allSettled(this.handling); }
+  /** Stops refreshing. Targets are kept, so runs that finish during shutdown still release their locks. */
+  shutdown(): void {
+    this.stopped = true;
+    for (const held of this.held.values()) clearInterval(held.timer);
+  }
 
   /** Where the run's lock goes: the PR, and who holds it. A sentinel card's PR comes from its attempt record. */
-  private target(run: Run): { repo: string; number: number; holder: string } | undefined {
+  private target(run: Run): Target | undefined {
     const card = this.board.getCard(run.cardId);
     const repoBoard = card && this.board.listBoards().find(item => item.repo === card.repo);
     if (!card || !repoBoard || !monitorsGithub(repoBoard)) return undefined;
@@ -32,21 +47,31 @@ export class RunLocks {
     return undefined;
   }
 
+  /** Takes or refreshes the lock. A call while one is still in flight joins it, so refreshes never overlap. */
+  private take(held: Held): Promise<void> {
+    if (held.pending) return held.pending;
+    const { repo, number, holder } = held.target;
+    const pending = this.locks.acquire(repo, number, holder).then(() => undefined).finally(() => { if (held.pending === pending) held.pending = undefined; });
+    held.pending = pending;
+    return pending;
+  }
+
   private async handle(event: "started" | "finished", run: Run): Promise<void> {
     try {
-      const target = this.target(run);
-      if (!target) return;
       if (event === "started") {
-        const taking = this.locks.acquire(target.repo, target.number, target.holder).then(() => undefined);
-        this.taking.set(run.id, taking);
-        await taking;
-        this.timers.set(run.id, setInterval(() => void this.locks.acquire(target.repo, target.number, target.holder).catch(() => undefined), refreshMs));
+        const target = this.target(run);
+        if (!target) return;
+        const held: Held = { target };
+        this.held.set(run.id, held);
+        await this.take(held);
+        if (this.held.get(run.id) === held && !this.stopped) held.timer = setInterval(() => void this.take(held).catch(() => undefined), refreshMs);
       } else {
-        // A run can finish while its lock is still being taken. Wait, so the release comes after it.
-        await this.taking.get(run.id)?.catch(() => undefined);
-        this.taking.delete(run.id);
-        if (this.timers.has(run.id)) { clearInterval(this.timers.get(run.id)); this.timers.delete(run.id); }
-        await this.locks.release(target.repo, target.number, target.holder);
+        const held = this.held.get(run.id);
+        if (!held) return;
+        this.held.delete(run.id);
+        clearInterval(held.timer);
+        // Called before any await: PrLocks runs it after a take or refresh still in flight, and before a retry's take.
+        await this.locks.release(held.target.repo, held.target.number, held.target.holder);
       }
     } catch (error) { console.error(`PR lock for run ${run.id}: ${error instanceof Error ? error.message : String(error)}`); }
   }

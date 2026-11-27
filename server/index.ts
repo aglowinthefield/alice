@@ -920,7 +920,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
   server.close(); server.closeAllConnections(); clearInterval(updateTimer); push.stop(); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
-  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
+  worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => runLocks.idle()).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so
 // integrating one card into this checkout does not kill other cards' Pi runs.
 const startDrain = (onDrained: () => void) => {

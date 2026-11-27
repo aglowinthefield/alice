@@ -98,6 +98,9 @@ const wrapUpLeadMinutes = 10;
 const wrapUpExtension = join(import.meta.dirname, "..", "scripts", "pi-wrap-up.mjs");
 export const WRAP_UP_MESSAGE = `Bakery: this run is stopped in ${wrapUpLeadMinutes} minutes when it hits its ${runTimeoutMinutes}-minute limit, and anything unreported then is lost. Stop starting new work and commit nothing. Write your final report now: what is done, what remains, and what the next attempt should do first. Attach any screenshots, logs or other evidence as card attachments as your instructions describe, and name them in the report.`;
 
+/** How long a child's pipes may stay open after it exits: long enough to read what it wrote before exiting. */
+const exitPipeGraceMs = 2_000;
+
 export class Worker {
   private active = new Map<string, ChildProcess>();
   /** In memory only, keyed by run id; cleared when the run ends. */
@@ -109,6 +112,17 @@ export class Worker {
   timing = { runTimeoutMs: runTimeoutMinutes * 60_000, wrapUpLeadMs: wrapUpLeadMinutes * 60_000 };
   /** `wtBin` enables Worktrunk hooks for new card worktrees; omit it to skip hooks entirely. */
   constructor(private board: Board, private dataDir: string, private piBin = "pi", private wtBin?: string, private attach?: { cli: string; env: NodeJS.ProcessEnv }) {}
+  /**
+   * Tracks `child` as the run's process. A descendant that inherited its pipes would hold off "close", and with it
+   * the run's finish, after the child exits, so pipes still open a moment after exit are closed.
+   */
+  private own(runId: string, child: ChildProcess) {
+    this.active.set(runId, child);
+    child.once("exit", () => {
+      const timer = setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); }, exitPipeGraceMs);
+      child.once("close", () => clearTimeout(timer));
+    });
+  }
   private terminate(id: string, child: ChildProcess, reason: string) {
     if (child.kill("SIGTERM") && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
@@ -310,7 +324,7 @@ export class Worker {
   private runWorktrunkHooks(run: Run, repo: string, root: string, worktree: string, branch: string, launch: () => Run) {
     this.board.append(run.id, "Running Worktrunk pre-start hooks…\n");
     const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
-    this.active.set(run.id, child);
+    this.own(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
     let output = "", done = false;
     const collect = (chunk: Buffer) => { output = (output + chunk.toString("utf8")).slice(-4000); };
@@ -351,7 +365,7 @@ export class Worker {
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt));
       child = spawn(...command(this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, BAKERY_WRAP_UP_FILE: wrapUpFile, BAKERY_SESSION_RECORD: sessionRecord } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
-    this.active.set(run.id, child);
+    this.own(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);
     const startedAt = Date.now();
     // Pi writes each event as one JSON line, and a line holding a screenshot can run to several MB.
@@ -526,11 +540,11 @@ export class Worker {
   }
   /** Refuse new runs without waiting for the active ones, so a shutdown can finish pushes that might start a hook-fix run. */
   stopStarts(): void { this.draining = true; }
+  /** Stops every active child and resolves once each one's "close" handler has finished its run. */
   async shutdown(reason = "server shutdown") {
     await Promise.all([...this.active].map(([id, child]) => new Promise<void>(resolve => {
-      if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
       child.once("close", () => resolve());
-      this.terminate(id, child, reason);
+      if (child.exitCode === null && child.signalCode === null) this.terminate(id, child, reason);
     })));
   }
 }

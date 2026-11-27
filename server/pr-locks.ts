@@ -7,12 +7,35 @@ import type { SentinelStore } from "./sentinel-store.js";
  * the order is what makes the pair safe: the row is written first as `pending`, then the comment is posted or
  * edited, then the row is confirmed. A crash in between leaves a `pending` row, and `reconcile` settles it from
  * what is actually on the PR.
+ *
+ * Takes and releases of one PR run one at a time, in the order they were called. Without that, a finished run's
+ * release could land after its retry took the lock (both hold it as the same card) and leave the retry unlocked.
  */
 export class PrLocks {
+  private queues = new Map<string, Promise<void>>();
   constructor(private readonly store: SentinelStore, private readonly github: GitHub, private readonly now: () => number = Date.now) {}
 
   /** Takes the lock for `holder`, or returns the live lock somebody else holds. */
-  async acquire(repo: string, number: number, holder: string): Promise<{ acquired: true } | { acquired: false; lock: PrLock }> {
+  acquire(repo: string, number: number, holder: string): Promise<{ acquired: true } | { acquired: false; lock: PrLock }> {
+    return this.serial(repo, number, () => this.take(repo, number, holder));
+  }
+
+  /** Marks the lock released if `holder` holds it. Anyone else's lock is left alone. */
+  release(repo: string, number: number, holder: string): Promise<void> {
+    return this.serial(repo, number, () => this.drop(repo, number, holder));
+  }
+
+  /** Runs `edit` once every earlier take or release of the same PR has settled. */
+  private serial<T>(repo: string, number: number, edit: () => Promise<T>): Promise<T> {
+    const key = `${repo}#${number}`;
+    const result = (this.queues.get(key) ?? Promise.resolve()).then(edit);
+    const tail = result.then(() => undefined, () => undefined);
+    this.queues.set(key, tail);
+    void tail.then(() => { if (this.queues.get(key) === tail) this.queues.delete(key); });
+    return result;
+  }
+
+  private async take(repo: string, number: number, holder: string): Promise<{ acquired: true } | { acquired: false; lock: PrLock }> {
     const current = await this.current(repo, number);
     if (current && current.status === "active" && current.lock.holder !== holder) { console.log(`[lock ${repo}#${number}] ${holder} refused: held by ${current.lock.holder} since ${current.lock.startedAt}`); return { acquired: false, lock: current.lock }; }
     const lock: PrLock = { holder, startedAt: new Date(this.now()).toISOString() };
@@ -28,8 +51,7 @@ export class PrLocks {
     return { acquired: true };
   }
 
-  /** Marks the lock released if `holder` holds it. Anyone else's lock is left alone. */
-  async release(repo: string, number: number, holder: string): Promise<void> {
+  private async drop(repo: string, number: number, holder: string): Promise<void> {
     const row = this.store.getLock(repo, number);
     if (!row?.commentId || row.holder !== holder || row.state === "released") return;
     const releasedAt = new Date(this.now()).toISOString();

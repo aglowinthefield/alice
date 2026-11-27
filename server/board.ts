@@ -62,8 +62,9 @@ export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment"
 /**
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
  * `prCiPending` is set while Bakery holds a CI failure to send back to Pi (waiting for the other checks to settle).
+ * `prClosedNumber` is the closed PR the card ran again past; sync ignores it, so Approve opens a new one.
  */
-export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number; conflictRepairs: number; conflictRepairKey: string | null; prCommentsSeen: string | null };
+export type CardPullRequest = { prOverrideUrl: string | null; prNumber: number | null; prUrl: string | null; prState: "OPEN" | "CLOSED" | "MERGED" | null; prChecks: string | null; prError: string | null; ciReworks: number; ciReworkSha: string | null; prPushedRunId: string | null; prCiPending: number; conflictRepairs: number; conflictRepairKey: string | null; prCommentsSeen: string | null; prClosedNumber: number | null };
 /**
  * Why a Review card is not waiting for a person: an agent is reviewing it (or is about to), Bakery is about to send
  * its failing CI back to Pi, or its PR is waiting on GitHub (checks, merge queue, the merge reaching main).
@@ -291,7 +292,7 @@ export class Board {
     // 1 for a card made outside the board UI (CLI, chat, agents, scripts, plans) until the operator opens the board.
     // Cards that exist before this column are not new, and a card made in the board UI never is.
     if (!cardColumns.has("unseen")) this.db.exec("ALTER TABLE cards ADD COLUMN unseen INTEGER NOT NULL DEFAULT 0");
-    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT", "prCommentsSeen TEXT", "autoRetries INTEGER NOT NULL DEFAULT 0", "autoRetryAt TEXT"])
+    for (const column of ["prOverrideUrl TEXT", "prNumber INTEGER", "prUrl TEXT", "prState TEXT", "prChecks TEXT", "prError TEXT", "ciReworks INTEGER NOT NULL DEFAULT 0", "ciReworkSha TEXT", "prPushedRunId TEXT", "prCiPending INTEGER NOT NULL DEFAULT 0", "createdCardIds TEXT", "conflictRepairs INTEGER NOT NULL DEFAULT 0", "conflictRepairKey TEXT", "prCommentsSeen TEXT", "prClosedNumber INTEGER", "autoRetries INTEGER NOT NULL DEFAULT 0", "autoRetryAt TEXT"])
       if (!cardColumns.has(column.split(" ")[0])) this.db.exec(`ALTER TABLE cards ADD COLUMN ${column}`);
     if (!cardColumns.has("prPushedRunId")) {
       // Before this column, a PR was opened from the latest run unless a CI fix run came after it. When a fix run may
@@ -967,7 +968,7 @@ export class Board {
    * Review cards whose pull request Bakery should open without Approve, oldest finished run first. See
    * `setAutoPullRequest`. With auto-review on, the agent reviewer's approval opens the PR instead, so this stays out.
    * Only a card's first PR is opened this way: updating a pushed PR still takes Approve (CI fixes excepted, which
-   * GitHub sync pushes). Each run is tried once, and a card at most `loopGuards.autoPullRequestPushes` times, so a pre-push
+   * GitHub sync pushes), and so does replacing a PR that closed unmerged. Each run is tried once, and a card at most `loopGuards.autoPullRequestPushes` times, so a pre-push
    * hook that keeps refusing the agent's fixes cannot loop forever.
    */
   listAutoPullRequestCandidates(): { card: Card; run: Run }[] {
@@ -984,7 +985,7 @@ export class Board {
   private awaitsAutoPullRequest(repoBoard: RepoBoard, card: Card, run: Run): boolean {
     const attempts = this.db.prepare("SELECT COUNT(*) AS n, SUM(runId=?) AS tried FROM auto_pull_requests WHERE cardId=?").get(run.id, card.id) as { n: number; tried: number | null };
     return run.status === "review" && !!run.finishedAt && !!repoBoard.autoPullRequestEnabledAt && run.finishedAt > repoBoard.autoPullRequestEnabledAt &&
-      !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !attempts.tried && attempts.n < loopGuards.autoPullRequestPushes &&
+      !run.ciFix && !card.prOverrideUrl && !card.prPushedRunId && !card.prClosedNumber && !attempts.tried && attempts.n < loopGuards.autoPullRequestPushes &&
       !this.hasRequestedChanges(card.id, run.id) && !this.hasDraftReviewComments(card.id, run.id);
   }
   /** Records that Bakery is opening `runId`'s pull request on its own. False when the run is no longer a candidate. */
@@ -1666,6 +1667,9 @@ export class Board {
       this.db.prepare("INSERT INTO runs(id, cardId, attempt, status, sessionId, startedAt, startedBy, recoveryOf, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, 0, 0, 0, 0, 0)").run(id, cardId, attempt, sessionId, now(), startedBy, recoveryOf);
       // Any start, manual or automatic, uses up a waiting retry; the retry count stays until a run succeeds.
       this.db.prepare("UPDATE cards SET status='running', autoRetryAt=NULL, updatedAt=? WHERE id=?").run(now(), cardId);
+      // Running again after the branch's PR closed unmerged makes work for a new PR, which Approve opens, so the card sets the closed one aside.
+      if (card.prState === "CLOSED" && !card.prOverrideUrl)
+        this.db.prepare("UPDATE cards SET prClosedNumber=prNumber, prNumber=NULL, prUrl=NULL, prState=NULL, prChecks=NULL, prError=NULL, prCiPending=0 WHERE id=?").run(cardId);
       // Any run, however started, is the attempt a start waiting for a slot asked for; it must not start another later.
       this.db.prepare("DELETE FROM queued_starts WHERE cardId=? AND untilSlot=1").run(cardId);
       this.explain(cardId, `Attempt ${attempt} started${why ? ` ${why}` : startedBy === "auto" ? " by auto-pickup" : ""}`);

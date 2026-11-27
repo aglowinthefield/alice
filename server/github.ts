@@ -398,7 +398,11 @@ function prRepo(card: Card, repo: string): string {
   return (card.prOverrideUrl && parsePullRequestUrl(card.prOverrideUrl)?.repo) || repo;
 }
 
-/** The PR linked to a card: its override URL if set, else the newest PR from `bakery/<id>`. */
+/**
+ * The PR linked to a card: its override URL if set, else the newest PR from `bakery/<id>`, unless that is the closed PR
+ * the card ran again past (`prClosedNumber`), whose replacement Approve opens. Once that PR is reopened it is the card's
+ * PR again, and closing it again counts.
+ */
 export async function linkedPullRequest(github: GitHub, repo: string, card: Card, recent?: PullRequest[]): Promise<PullRequest | undefined> {
   if (card.prOverrideUrl) {
     const link = parsePullRequestUrl(card.prOverrideUrl);
@@ -406,7 +410,8 @@ export async function linkedPullRequest(github: GitHub, repo: string, card: Card
     return recent?.find(pr => pr.number === link.number) ?? github.view(link.repo, link.number);
   }
   const branch = `bakery/${card.id}`;
-  return recent?.find(pr => pr.headRefName === branch) ?? (recent && !card.prNumber ? undefined : github.findByBranch(repo, branch));
+  const pr = recent?.find(pr => pr.headRefName === branch) ?? (recent && !card.prNumber ? undefined : await github.findByBranch(repo, branch));
+  return pr?.state === "CLOSED" && pr.number === card.prClosedNumber && pr.number !== card.prNumber ? undefined : pr;
 }
 
 /**

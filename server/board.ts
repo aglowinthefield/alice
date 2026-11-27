@@ -15,7 +15,8 @@ import { defaultStaleReviewDays, validateStaleReviewDays } from "../src/stale-re
 import { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot } from "../src/model.js";
 import { classifyRuns, type RunKind } from "../src/run-kinds.js";
 import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
-import type { StatsInput } from "./stats.js";
+import { parseTime, type StatsInput } from "./stats.js";
+import type { ActiveWork } from "./metrics.js";
 import type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields } from "../shared/wire.js";
 export type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields };
 export { reviewActionLabels } from "../shared/card-state.js";
@@ -864,6 +865,13 @@ export class Board {
   /** Agents working now on every board: card runs and agent reviews. */
   activeAgents(): number {
     return (this.db.prepare("SELECT (SELECT COUNT(*) FROM cards WHERE status='running') + (SELECT COUNT(*) FROM auto_review_jobs WHERE state='running') AS n").get() as { n: number }).n;
+  }
+  /** The card and start time of each of these runs, for the metrics' Running now table. Reads no transcripts. */
+  runsGoingNow(runIds: string[]): ActiveWork[] {
+    if (!runIds.length) return [];
+    const rows = this.db.prepare(`SELECT runs.cardId, runs.startedAt, cards.repo, cards.title FROM runs JOIN cards ON cards.id=runs.cardId WHERE runs.id IN (${runIds.map(() => "?").join(",")})`)
+      .all(...runIds) as { cardId: string; startedAt: string; repo: string; title: string }[];
+    return rows.map(row => ({ kind: "run", repo: row.repo, cardId: row.cardId, title: row.title, startedAt: parseTime(row.startedAt) ?? Date.now() }));
   }
   /** The machine's agent slots: the limit in force and how many are taken. */
   machineCapacity(): { limit: number; active: number; setting: number } {

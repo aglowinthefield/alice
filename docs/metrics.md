@@ -46,7 +46,8 @@ Labels: `repo` is the board's repository path. `agent` is the run's models as Al
 | `alice_cards` | gauge | `repo`, `status` | Cards per lane |
 | `alice_active_runs` | gauge | none | Agent runs going now |
 | `alice_active_agent_reviews` | gauge | none | Agent reviews going now |
-| `alice_active_pull_request_drafts` | gauge | none | Pull request drafts going now |
+| `alice_active_pull_request_drafts` | gauge | none | Automatic pull requests being drafted or pushed now |
+| `alice_active_run_started_seconds` | gauge | `repo`, `card`, `title`, `kind` | Start time in Unix seconds, one series per run, agent review or pull request draft going now. `card` is the card id, `title` its first 80 characters, `kind` is `run`, `agent_review` or `pr_draft`. A `pr_draft` series lasts while Pi writes the title and body, for any card, and not while a draft waits for a slot or is pushed |
 
 ## Example queries
 
@@ -56,6 +57,9 @@ sum by (repo) (increase(alice_run_cost_dollars_total[1d]))
 
 # Failure rate per model over the last week
 sum by (agent) (increase(alice_runs_total{status="failed"}[7d])) / sum by (agent) (increase(alice_runs_total[7d]))
+
+# What is running now, and for how long
+time() - alice_active_run_started_seconds
 
 # p95 run time per repository
 histogram_quantile(0.95, sum by (repo, le) (rate(alice_run_duration_seconds_bucket[1d])))

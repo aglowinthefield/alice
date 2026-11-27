@@ -149,12 +149,13 @@ export function progressLine(line: string): string {
   return "";
 }
 
-function runPi(piBin: string, prompt: string, cwd: string, models: string[], onProgress: (step: string) => void): Promise<string> {
+function runPi(piBin: string, prompt: string, cwd: string, models: string[], onProgress: (step: string) => void, signal?: AbortSignal): Promise<string> {
   // One turn, no tools: the prompt already carries the diff and the writing style, so skills, MCP and
   // AGENTS.md would only add startup time. Extensions stay on: the Anthropic OAuth and multi-pass plugins are extensions.
   const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-skills", "--no-context-files", "--thinking", "low", ...models, "--", prompt];
   return new Promise((resolve, reject) => {
-    const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, IMPRESSION_SESSION: "off" } });
+    // Aborting kills Pi and rejects with an AbortError through the "error" event.
+    const child = spawn(...command(piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, IMPRESSION_SESSION: "off" }, signal });
     let stdout = "", stderr = "", exceeded = false;
     const timer = setTimeout(() => { exceeded = true; killTree(child); }, 3 * 60_000);
     let pending = "";
@@ -181,7 +182,7 @@ function runPi(piBin: string, prompt: string, cwd: string, models: string[], onP
  * the card title and body, as before, without spending tokens. Otherwise Pi drafts from the rules; if that fails,
  * the operator gets the card title and the bare template, with the reason, to edit by hand.
  */
-export async function draftPullRequest(input: { card: Card; run: Run; worktree: string; patch: string; piBin: string; models: string[]; onProgress?: (step: string) => void }): Promise<PullRequestDraft> {
+export async function draftPullRequest(input: { card: Card; run: Run; worktree: string; patch: string; piBin: string; models: string[]; onProgress?: (step: string) => void; signal?: AbortSignal }): Promise<PullRequestDraft> {
   const { card, run, worktree, patch, piBin, models } = input;
   const onProgress = input.onProgress ?? (() => {});
   onProgress("Reading the repository's pull request template and title rules");
@@ -195,7 +196,7 @@ export async function draftPullRequest(input: { card: Card; run: Run; worktree: 
   try {
     const prompt = draftPrompt(card, run, rules, patch);
     onProgress(`Asking Pi to draft (prompt ${Math.round(prompt.length / 1000)}k characters, diff ${Math.round(patch.length / 1000)}k, up to 3 minutes)`);
-    const draft = parseDraftReply(await runPi(piBin, prompt, worktree, models, onProgress));
+    const draft = parseDraftReply(await runPi(piBin, prompt, worktree, models, onProgress, input.signal));
     return { ...base, ...draft, source: "agent", problem: titleProblem(draft.title) };
   } catch (error) {
     const title = cardTitle(card);

@@ -73,9 +73,9 @@ const worker = new Worker(board, dataDir, piBin, process.env.ALICE_WT_BIN ?? "wt
 const integration = new Integration(board, dataDir);
 // github-pr boards: the PR draft and the repository's hooks run when a run reaches Review, so Approve only pushes.
 const readiness = new Readiness(board, integration, {
-  draft: (card, run, onProgress) => {
+  draft: (card, run, onProgress, signal) => {
     const patch = integration.review(card).files.map(file => `File: ${file.path}\n${file.patch}`).join("\n");
-    return draftPullRequest({ card, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")), onProgress });
+    return draftPullRequest({ card, run, worktree: run.worktree!, patch, piBin, models: piModelArgs(board.agentModelFor(card.repo, "draft")), onProgress, signal });
   },
   sendBack: (card, error) => sendBackHookFailure(card, error),
 });
@@ -285,7 +285,8 @@ const server = createServer(async (req, res) => {
     if (path === "/metrics" && req.method === "GET") {
       if (process.env.ALICE_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set ALICE_METRICS=1 to serve them." }); return; }
       res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount }, version.version));
+      const work = [...board.runsGoingNow(worker.activeRunIds), ...autoReview.activeWork, ...readiness.activeWork];
+      res.end(renderMetrics(board.statsInput(), { runs: worker.activeCount, reviews: autoReview.activeCount, pullRequests: autoPullRequest.activeCount, work }, version.version));
       return;
     }
     if (path === "/api/status" && req.method === "GET") {

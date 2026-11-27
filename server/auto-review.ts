@@ -6,6 +6,7 @@ import { piModelArgs } from "../shared/agent-models.js";
 import { Integration } from "./integration.js";
 import { attachmentPath } from "./attachments.js";
 import { atReviewCapacity, loopGuards, needsPatchSize, reviewDiffRefusal } from "./repo-limits.js";
+import type { ActiveWork } from "./metrics.js";
 
 // The reviewer is a full Pi agent in the card worktree: it can read code, run builds and tests, and use skills and
 // context files. It is told not to change anything, and the fingerprint checks after review fail closed if it does.
@@ -127,7 +128,7 @@ export function reviewerVerdict(stream: string): ReviewerVerdict {
 
 export class AutoReview {
   /** Reviews in progress, by run id. A board runs at most `autoReviewConcurrency` at once; boards do not share a limit. */
-  private activeReviews = new Map<string, { cardId: string; repo: string }>();
+  private activeReviews = new Map<string, ActiveWork>();
   private reviewers = new Map<string, ChildProcess>();
   private draining = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -157,6 +158,8 @@ export class AutoReview {
   get activeCount(): number { return this.activeReviews.size; }
   /** The cards being reviewed right now. */
   get activeCardIds(): string[] { return [...this.activeReviews.values()].map(item => item.cardId); }
+  /** The reviews in progress, for the metrics' Running now table. */
+  get activeWork(): ActiveWork[] { return [...this.activeReviews.values()]; }
   /**
    * Starts the oldest waiting reviews of each board that has a free slot, and resolves once those it started have
    * finished. Reviews started by an earlier tick keep running and keep their slots.
@@ -179,7 +182,7 @@ export class AutoReview {
       // A review runs the repository's checks like a card run, so it takes a machine-wide agent slot. The rest wait for
       // a later tick. `process` claims the job before its first await, so the count below includes it next time round.
       if (this.board.atMachineCapacity()) break;
-      this.activeReviews.set(candidate.run.id, { cardId: candidate.card.id, repo: candidate.card.repo });
+      this.activeReviews.set(candidate.run.id, { kind: "agent_review", cardId: candidate.card.id, repo: candidate.card.repo, title: candidate.card.title, startedAt: Date.now() });
       started.push(this.process(candidate.card, candidate.run, candidate.board).finally(() => this.activeReviews.delete(candidate.run.id)));
     }
     await Promise.all(started);

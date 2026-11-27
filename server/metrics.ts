@@ -7,7 +7,10 @@ import { parseTime, type StatsInput } from "./stats.js";
  * counts once it has finished. docs/metrics.md lists every metric.
  */
 
-export type LiveCounts = { runs: number; reviews: number; pullRequests: number };
+/** One run, agent review or pull request draft going now. `startedAt` is in Unix milliseconds. */
+export type ActiveWork = { kind: "run" | "agent_review" | "pr_draft"; repo: string; cardId: string; title: string; startedAt: number };
+/** What is going now: the counts behind the `alice_active_*` totals, and each piece of work for the Running now table. */
+export type Live = { runs: number; reviews: number; pullRequests: number; work: ActiveWork[] };
 
 /** Run duration buckets, in seconds: 1, 2, 5, 10, 15, 30 and 60 minutes, then 2 and 4 hours. */
 const durationBuckets = [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400];
@@ -34,7 +37,7 @@ class Sums {
   get samples() { return [...this.rows.values()]; }
 }
 
-export function renderMetrics(input: StatsInput, live: LiveCounts, version: string): string {
+export function renderMetrics(input: StatsInput, live: Live, version: string): string {
   const runs = new Sums(), cost = new Sums(), tokens = new Sums(), cacheTasks = new Sums(), cacheHits = new Sums(), cacheSaved = new Sums();
   const durations = new Map<string, { labels: Labels; counts: number[]; count: number; sum: number }>();
   for (const run of input.runs) {
@@ -85,7 +88,10 @@ export function renderMetrics(input: StatsInput, live: LiveCounts, version: stri
     { name: "alice_cards", help: "Cards per lane.", type: "gauge", samples: cards.samples },
     { name: "alice_active_runs", help: "Agent runs going now.", type: "gauge", samples: [{ labels: {}, value: live.runs }] },
     { name: "alice_active_agent_reviews", help: "Agent reviews going now.", type: "gauge", samples: [{ labels: {}, value: live.reviews }] },
-    { name: "alice_active_pull_request_drafts", help: "Pull request drafts going now.", type: "gauge", samples: [{ labels: {}, value: live.pullRequests }] },
+    { name: "alice_active_pull_request_drafts", help: "Automatic pull requests being drafted or pushed now.", type: "gauge", samples: [{ labels: {}, value: live.pullRequests }] },
+    { name: "alice_active_run_started_seconds", help: "Start time, in Unix seconds, of each run, agent review and pull request draft going now.", type: "gauge",
+      // Cut by code point, so an emoji at the limit is kept whole rather than split into a lone surrogate.
+      samples: live.work.map(item => ({ labels: { repo: item.repo, card: item.cardId, title: Array.from(item.title).slice(0, 80).join(""), kind: item.kind }, value: item.startedAt / 1000 })) },
   ];
   return families.map(family => {
     const sampleName = family.type === "histogram" ? `${family.name}_bucket` : family.name;

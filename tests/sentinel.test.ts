@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { Board } from "../server/board.js";
 import type { GitHub, RepoComment } from "../server/github.js";
 import { lockBody, lockStatus, lockTtlMs, parseLock } from "../server/pr-lock.js";
@@ -47,10 +48,12 @@ function fixture() {
   let nextComment = 1;
   const asked: RepoComment[] = [];
   const reacted: string[] = [];
+  /** PRs whose next `requestTarget` fails, as a flaky `gh` call would. */
+  const unreadable = new Set<number>();
   const github = {
     reactToRepoComment: async (_repo: string, id: string) => { reacted.push(id); },
     repoComments: async (_repo: string, since: string) => asked.filter(item => item.at > since),
-    requestTarget: async (_repo: string, number: number) => { const pr = prs.find(item => item.number === number); if (!pr) throw new Error("not a pull request"); return { ...pr, isCrossRepository: !!pr.fork }; },
+    requestTarget: async (_repo: string, number: number) => { if (unreadable.delete(number)) throw new Error("HTTP 502: Bad Gateway"); const pr = prs.find(item => item.number === number); return pr && { ...pr, isCrossRepository: !!pr.fork }; },
     viewer: async () => "aglowinthefield",
     listOpenPullRequests: async () => prs.filter(pr => pr.state === "OPEN"),
     health: async (_repo: string, number: number) => { const pr = prs.find(item => item.number === number)!; return { mergeable: pr.mergeable, statusCheckRollup: pr.failing ? [{ name: "test", conclusion: "FAILURE" }] : [] }; },
@@ -68,7 +71,7 @@ function fixture() {
   const addPr = (over: Partial<Pr> = {}): Pr => { const number = n++; const pr = { number, title: `Change ${number}`, url: `https://github.com/acme/widgets/pull/${number}`, author: { login: "aglowinthefield" }, isDraft: false, mergeable: "CONFLICTING", state: "OPEN", headRefOid: `head${number}`.padEnd(40, "0"), headRefName: `feature-${number}`, ...over }; prs.push(pr); return pr; };
   const sentinelCards = () => board.listCards(repo).filter(card => card.title.startsWith("Fix PR #"));
   const land = (name: string) => { git(upstream, "pull", "-q", "--ff-only", "origin", "main"); writeFileSync(join(upstream, name), name); git(upstream, "add", name); git(upstream, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", name); git(upstream, "push", "-q", "origin", "main"); };
-  return { dir, origin, upstream, github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, asked, sentinelCards, reacted, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, origin, upstream, github, board, repoBoard, repo, store, locks, sentinel, addPr, prs, comments, asked, sentinelCards, reacted, unreadable, land, advance: (ms: number) => { clock += ms; }, cleanup: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a conflicting PR by the owner gets a Ready card whose brief rebases onto main first, and a lock", async () => {
@@ -341,6 +344,181 @@ test("a /bakery comment that waits behind an open request card says so on the PR
   } finally { f.cleanup(); }
 });
 
+test("a /bakery comment whose PR could not be read is retried on the next pass, and the failed pass is recorded", async () => {
+  const f = fixture();
+  try {
+    const [first, second] = [f.addPr({ mergeable: "MERGEABLE" }), f.addPr({ mergeable: "MERGEABLE" })];
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const start = f.store.requestCursor("acme/widgets")!;
+    const at = (seconds: number) => new Date(Date.parse(start) + seconds * 1000).toISOString();
+    f.asked.push(
+      { id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/bakery fix the first", prNumber: first.number },
+      { id: "issues/comments:2", at: at(2), author: "a", association: "OWNER", body: "/bakery fix the second", prNumber: second.number },
+    );
+    f.unreadable.add(first.number);
+    const requests = () => f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR")).map(card => card.title).sort();
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.deepEqual(requests(), [`Requested on PR #${second.number}: ${second.title}`], "the other PR's request does not wait for it");
+    assert.equal(f.store.requestCursor("acme/widgets"), start, "the cursor does not pass a request that was not acted on");
+    const [run] = f.store.listRuns(sentinelOf(f, "pr-requests").id, 1);
+    assert.equal(run.status, "failed");
+    assert.match(run.error ?? "", new RegExp(`#${first.number}: HTTP 502`));
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.deepEqual(requests(), [`Requested on PR #${first.number}: ${first.title}`, `Requested on PR #${second.number}: ${second.title}`]);
+    assert.equal(f.store.requestCursor("acme/widgets"), at(2));
+    assert.equal(f.store.listRuns(sentinelOf(f, "pr-requests").id, 1)[0].status, "succeeded");
+    assert.deepEqual(f.reacted, ["issues/comments:1", "issues/comments:2"], "each request is acknowledged once");
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.equal(requests().length, 2, "nothing is acted on twice");
+  } finally { f.cleanup(); }
+});
+
+test("a pass retried after a failed card never folds a request already on a card into another", async () => {
+  const f = fixture();
+  try {
+    const [a, b] = [f.addPr({ mergeable: "MERGEABLE" }), f.addPr({ mergeable: "MERGEABLE" })];
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const start = f.store.requestCursor("acme/widgets")!;
+    const at = (seconds: number) => new Date(Date.parse(start) + seconds * 1000).toISOString();
+    const ask = (id: number, seconds: number, pr: Pr) => ({ id: `issues/comments:${id}`, at: at(seconds), author: "a", association: "OWNER", body: `/bakery change ${id}`, prNumber: pr.number });
+    f.asked.push(ask(1, 1, a), ask(2, 2, b), ask(3, 3, a));
+    // B's card fails inside its transaction, after A's card was made.
+    const record = f.store.recordRequestAttempt.bind(f.store);
+    let fail = true;
+    f.store.recordRequestAttempt = (...args: Parameters<typeof record>) => { if (args[1] === b.number && fail) { fail = false; throw new Error("disk I/O error"); } return record(...args); };
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const onA = () => f.board.listCards(f.repo).filter(card => card.title.startsWith(`Requested on PR #${a.number}`));
+    assert.equal(onA().length, 1);
+    assert.equal(f.store.listRuns(sentinelOf(f, "pr-requests").id, 1)[0].status, "failed");
+    f.board.setStatus(onA()[0].id, "done");
+    f.asked.push(ask(4, 4, a));
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const newer = onA().find(card => card.status !== "done");
+    assert.ok(newer, "the new comment on A gets a card of its own");
+    assert.match(newer.body, /change 4/);
+    assert.doesNotMatch(newer.body, /change [13]/, "comments already on A's first card are not asked again");
+    assert.equal(f.board.listCards(f.repo).filter(card => card.title.startsWith(`Requested on PR #${b.number}`)).length, 1, "B's request is retried");
+    assert.equal(f.store.requestCursor("acme/widgets"), at(4));
+  } finally { f.cleanup(); }
+});
+
+test("a fork refusal that could not be posted is posted on the next pass, once", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr({ mergeable: "MERGEABLE", fork: true });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const start = f.store.requestCursor("acme/widgets")!;
+    f.asked.push({ id: "issues/comments:1", at: new Date(Date.parse(start) + 1000).toISOString(), author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number });
+    const comment = f.github.comment.bind(f.github);
+    let fail = true;
+    Object.assign(f.github, { comment: async (...args: Parameters<typeof comment>) => { if (fail) { fail = false; throw new Error("HTTP 502: Bad Gateway"); } return comment(...args); } });
+    const refusals = () => (f.comments.get(pr.number) ?? []).filter(item => /comes from a fork/.test(item.body)).length;
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.equal(refusals(), 0);
+    assert.equal(f.store.requestCursor("acme/widgets"), start, "an unanswered request keeps the cursor before it");
+    assert.equal(f.store.listRuns(sentinelOf(f, "pr-requests").id, 1)[0].status, "failed");
+    for (let i = 0; i < 2; i++) await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.equal(refusals(), 1);
+  } finally { f.cleanup(); }
+});
+
+test("a second request on a PR gets its card at the same head and main as the first, and beside a health attempt", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr({ mergeable: "MERGEABLE" });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const at = (seconds: number) => new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + seconds * 1000).toISOString();
+    const mainTip = git(f.repo, "rev-parse", "origin/main");
+    f.store.recordAttempt("acme/widgets", pr.number, pr.headRefName, pr.headRefOid, mainTip, "health-card", at(0));
+    const requests = () => f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR"));
+    f.asked.push({ id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/bakery first", prNumber: pr.number });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    // The first card finishes without pushing, so the PR's head and main stay where they were.
+    f.board.setStatus(requests()[0].id, "done");
+    f.asked.push({ id: "issues/comments:2", at: at(2), author: "a", association: "OWNER", body: "/bakery second", prNumber: pr.number });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const second = requests().find(card => card.status !== "done");
+    assert.ok(second, "the second request gets a card");
+    assert.match(second.body, /second/);
+    assert.equal(f.store.listRuns(sentinelOf(f, "pr-requests").id, 1)[0].status, "succeeded");
+    assert.deepEqual({ ...f.store.attemptFor(second.id) }, { repo: "acme/widgets", prNumber: pr.number, branch: pr.headRefName, head: pr.headRefOid }, "its PR and head are found for locking and pushing");
+    assert.equal(f.store.attemptCount("acme/widgets", pr.number), 1, "requests do not count against the health limit");
+    assert.deepEqual(f.store.listAttemptCards("acme/widgets"), ["health-card"]);
+  } finally { f.cleanup(); }
+});
+
+test("request attempts stored with health attempts move to their own table, keeping their lookups", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bakery-request-attempts-"));
+  const db = new DatabaseSync(join(dir, "old.sqlite"));
+  try {
+    db.exec(`CREATE TABLE sentinel_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, prNumber INTEGER NOT NULL, branch TEXT NOT NULL, head TEXT NOT NULL, mainTip TEXT NOT NULL, cardId TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(repo, prNumber, head, mainTip));
+      CREATE TABLE pr_request_cards (cardId TEXT PRIMARY KEY);
+      INSERT INTO sentinel_attempts(repo, prNumber, branch, head, mainTip, cardId, at) VALUES ('acme/widgets', 7, 'seven', 'h1', 'm1', 'request-card', 't'), ('acme/widgets', 7, 'seven', 'h0', 'm1', 'health-card', 't');
+      INSERT INTO pr_request_cards(cardId) VALUES ('request-card');`);
+    const store = new SentinelStore(db);
+    assert.deepEqual(store.listRequestCards("acme/widgets").map(row => ({ ...row })), [{ cardId: "request-card", prNumber: 7 }]);
+    assert.equal(store.attemptFor("request-card")?.head, "h1");
+    assert.deepEqual(store.listAttemptCards("acme/widgets"), ["health-card"]);
+    store.recordRequestAttempt("acme/widgets", 7, "seven", "h1", "m1", "next-request", "t");
+    assert.equal(store.attemptPr("next-request"), 7, "a request at the same head and main is recorded");
+    assert.ok(store.isRequestCard("next-request"));
+  } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a request whose PR closed before the retry is answered once, and never made a card", async () => {
+  const f = fixture();
+  try {
+    const pr = f.addPr({ mergeable: "MERGEABLE" });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
+    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number });
+    f.unreadable.add(pr.number);
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    pr.state = "MERGED";
+    for (let i = 0; i < 2; i++) await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.deepEqual(f.comments.get(pr.number)!.map(item => item.body.split("\n")[0]), ["Bakery can't act on this request: the pull request is merged."]);
+    assert.equal(f.board.listCards(f.repo).length, 0);
+    assert.equal(f.store.requestCursor("acme/widgets"), at);
+  } finally { f.cleanup(); }
+});
+
+test("a request on a PR a card only watches is answered, and makes no job that would push", async () => {
+  const f = fixture();
+  try {
+    const started: string[] = [];
+    const sentinel = new Sentinel(f.board, f.github, f.store, f.locks, join(f.dir, "data"), "aglowinthefield", 5 * 60_000, 60_000, card => { started.push(card.id); });
+    const pr = f.addPr({ mergeable: "MERGEABLE" });
+    const watcher = f.board.createCard({ title: "Watch the release PR", body: "", repo: f.repo });
+    f.board.setPullRequestOverride(watcher.id, pr.url);
+    await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
+    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number });
+    const comment = f.github.comment.bind(f.github);
+    let fail = true;
+    Object.assign(f.github, { comment: async (...args: Parameters<typeof comment>) => { if (fail) { fail = false; throw new Error("HTTP 502: Bad Gateway"); } return comment(...args); } });
+    for (let i = 0; i < 3; i++) await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.deepEqual(f.comments.get(pr.number)!.map(item => item.body.split("\n")[0]), ['Bakery can\'t act on this request: this pull request is linked to the card "Watch the release PR", which only watches it. Bakery pushes only to the branches of cards it opened.'], "a reply that failed is posted on a later pass, once");
+    assert.deepEqual(f.board.listCards(f.repo).map(card => card.id), [watcher.id]);
+    assert.deepEqual(f.store.listRequestCards("acme/widgets"), []);
+    assert.deepEqual(started, []);
+    assert.equal(f.store.requestCursor("acme/widgets"), at);
+  } finally { f.cleanup(); }
+});
+
+test("a /bakery comment on an issue is ignored even where origin has no main", async () => {
+  const f = fixture();
+  try {
+    git(f.origin, "branch", "-m", "main", "trunk");
+    git(f.repo, "update-ref", "-d", "refs/remotes/origin/main");
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
+    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: 999 });
+    await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
+    assert.equal(f.store.listRuns(sentinelOf(f, "pr-requests").id, 1)[0].status, "succeeded");
+    assert.equal(f.store.requestCursor("acme/widgets"), at);
+  } finally { f.cleanup(); }
+});
+
 test("a /bakery comment on a fork's PR is declined, and one on an issue is ignored", async () => {
   const f = fixture();
   try {
@@ -354,6 +532,7 @@ test("a /bakery comment on a fork's PR is declined, and one on an issue is ignor
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     assert.equal(f.board.listCards(f.repo).length, 0);
     assert.match(f.comments.get(pr.number)![0].body, /comes from a fork/);
+    assert.equal(f.store.requestCursor("acme/widgets"), at, "both were answered, so the cursor moves past them");
   } finally { f.cleanup(); }
 });
 

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isSentinelJob, reportFromOutput, type Board, type Card, type RepoBoard, type Run } from "./board.js";
-import { acknowledge, boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, type RepoComment, trustedBakeryComments } from "./github.js";
+import { acknowledge, boardGithubRepo, type Check, commentOnPullRequest, fetchOrigin, fixableFailures, git, type GitHub, postOnPullRequest, type RepoComment, trustedBakeryComments } from "./github.js";
 import { githubRepo } from "./github-url.js";
 import type { PrLocks } from "./pr-locks.js";
 import { prFindingKey, sentinelKinds, sentinelNames, type SentinelFinding, type SentinelKind, type SentinelRecord, type SentinelRun, type SentinelStore } from "./sentinel-store.js";
@@ -231,8 +231,11 @@ export class Sentinel {
    * board's repository, becomes a Ready card that checks out the PR branch and makes the change. The result is pushed
    * to that branch when the run finishes (`afterRun`). One card per PR per pass, however many comments; while a request
    * card for a PR is open, newer comments on it wait. A repository is first read from the moment Bakery first sees it, so
-   * old comments are not replayed. PRs from forks are declined, as Bakery cannot push there. PRs with a card of their
-   * own are left to that card's sync, which sends the card back.
+   * old comments are not replayed. Requests on closed or merged PRs, PRs from forks (Bakery cannot push there) and PRs a
+   * card only watches through a link are declined with a reply. PRs with a card of their own are left to that card's
+   * sync, which sends the card back. Each comment is marked once it is acted on or answered,
+   * and the cursor stops before the first one that is not, so a request that waits or fails is read again next pass
+   * while the marked ones are left alone. A pass where a request failed is recorded as failed.
    */
   private async requestsOnce(repoBoard: RepoBoard, context: RunContext): Promise<void> {
     const repo = boardGithubRepo(repoBoard), tag = `[requests ${repo}]`;
@@ -245,42 +248,59 @@ export class Sentinel {
     for (const item of asked) if (fresh.has(`react:${item.id}`)) await acknowledge(() => this.github.reactToRepoComment(repo, item.id), `${repo}#${item.prNumber} comment ${item.id}`);
     const cards = this.board.listCards(repoBoard.repo).filter(isOpen);
     const requestCards = new Set(this.store.listRequestCards(repo).filter(item => cards.some(card => card.id === item.cardId)).map(item => item.prNumber));
+    const handled = this.store.handledRequests(asked.map(item => item.id));
     const groups = new Map<number, RepoComment[]>();
-    let stopAt: string | undefined;
-    for (const item of asked) {
-      if (requestCards.has(item.prNumber)) {
-        stopAt = item.at; console.log(`${tag} #${item.prNumber}: a request card is still open; the request waits`);
-        if (this.board.firstTime([`wait:${item.id}`]).length) await commentOnPullRequest(this.github, repo, item.prNumber, "Bakery read this request, but an earlier request on this pull request is still being worked on. It will pick this one up when that card is finished.");
-        break;
-      }
-      groups.set(item.prNumber, [...groups.get(item.prNumber) ?? [], item]);
-    }
-    const handled = asked.filter(item => !stopAt || item.at < stopAt);
-    if (handled.length) await fetchOrigin(repoBoard.repo);
+    for (const item of asked) if (!handled.has(item.id)) groups.set(item.prNumber, [...groups.get(item.prNumber) ?? [], item]);
+    // The latest main, read once and only for a pass that makes a card.
+    let mainTip: Promise<string> | undefined;
+    const tip = () => mainTip ??= fetchOrigin(repoBoard.repo).then(() => git(repoBoard.repo, "rev-parse", "origin/main"));
+    const failed: string[] = [];
     for (const [number, items] of groups) {
-      try { await this.requestCard(repoBoard, repo, number, items, cards, context); }
-      catch (error) { console.error(`${tag} #${number}: could not act on the request: ${error instanceof Error ? error.message : String(error)}`); }
+      if (requestCards.has(number)) {
+        console.log(`${tag} #${number}: a request card is still open; the request waits`);
+        if (this.board.firstTime([`wait:${items[0].id}`]).length) await commentOnPullRequest(this.github, repo, number, "Bakery read this request, but an earlier request on this pull request is still being worked on. It will pick this one up when that card is finished.");
+        continue;
+      }
+      try {
+        await this.requestCard(repoBoard, repo, number, items, cards, tip, context);
+        this.store.markRequestsHandled(items.map(item => item.id));
+        for (const item of items) handled.add(item.id);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`${tag} #${number}: could not act on the request; the next pass retries it: ${message}`);
+        failed.push(`#${number}: ${message}`);
+      }
     }
-    if (handled.length) this.store.setRequestCursor(repo, handled[handled.length - 1].at);
+    // The cursor passes only comments acted on or answered. One in the same second as the first that was not stays behind with it.
+    const pending = asked.find(item => !handled.has(item.id));
+    const passed = pending ? asked.filter(item => item.at < pending.at) : asked;
+    if (passed.length) this.store.setRequestCursor(repo, passed[passed.length - 1].at);
+    if (failed.length) throw new Error(`Could not act on ${failed.length} request${failed.length === 1 ? "" : "s"}: ${failed.join("; ")}`);
   }
 
-  private async requestCard(repoBoard: RepoBoard, repo: string, number: number, items: RepoComment[], cards: Card[], context: RunContext): Promise<void> {
+  /** Acts on or answers one PR's new requests; throws when it could do neither, so they are retried. */
+  private async requestCard(repoBoard: RepoBoard, repo: string, number: number, items: RepoComment[], cards: Card[], mainTip: () => Promise<string>, context: RunContext): Promise<void> {
     const tag = `[requests ${repo}]`;
-    let pr;
-    try { pr = await this.github.requestTarget(repo, number); }
-    catch { console.debug(`${tag} #${number}: not a pull request, ignoring`); return; }
-    if (pr.state !== "OPEN") return;
-    if (cards.some(card => card.prNumber === number)) { console.debug(`${tag} #${number}: has its own card, which handles requests`); return; }
-    if (pr.isCrossRepository) { await commentOnPullRequest(this.github, repo, number, "Bakery can't act on this request: the pull request comes from a fork, and Bakery only pushes to branches in this repository."); return; }
-    const mainTip = await git(repoBoard.repo, "rev-parse", "origin/main");
+    const pr = await this.github.requestTarget(repo, number);
+    if (!pr) { console.debug(`${tag} #${number}: not a pull request, ignoring`); return; }
+    // Refusals are the answer, so one that could not be posted throws and the request is retried.
+    const refuse = (why: string) => postOnPullRequest(this.github, repo, number, `Bakery can't act on this request: ${why}`);
+    if (pr.state !== "OPEN") return refuse(`the pull request is ${pr.state === "MERGED" ? "merged" : "closed"}.`);
+    const own = cards.find(card => card.prNumber === number);
+    // A linked card only watches its PR: card sync neither sends it requests nor pushes to that branch.
+    if (own?.prOverrideUrl) return refuse(`this pull request is linked to the card "${own.title}", which only watches it. Bakery pushes only to the branches of cards it opened.`);
+    if (own) { console.debug(`${tag} #${number}: has its own card, which handles requests`); return; }
+    if (pr.isCrossRepository) return refuse("the pull request comes from a fork, and Bakery only pushes to branches in this repository.");
+    const tip = await mainTip();
     const requests = items.map(item => ({ author: item.author, comment: item.body.trim().slice(0, 4000), ...(item.path ? { path: item.path, line: item.line } : {}) }));
     const findingKey = `request:${items[0].id}`;
-    // One transaction: the attempt exists before the card is Ready, so its run locks the PR and its result is pushed.
+    // One transaction: the attempt exists before the card is Ready, so its run locks the PR and its result is pushed,
+    // and the comments it carries are marked, so a retried pass never folds them into another card.
     const card = this.board.createCard({ title: `Requested on PR #${number}: ${pr.title}`, repo: repoBoard.repo, idempotencyKey: findingKey, priority: 0, source: "pr-comment",
       provenance: { sentinelId: context.sentinel.id, sentinelRunId: context.runId, findingKey },
       body: withInstructions(requestBrief({ url: pr.url, branch: pr.headRefName, head: pr.headRefOid, requests }), context.sentinel),
       ready: `Created by a /bakery comment on pull request #${number}`,
-      inTransaction: made => { this.store.recordAttempt(repo, number, pr.headRefName, pr.headRefOid, mainTip, made.id, new Date().toISOString()); this.store.markRequestCard(made.id); } });
+      inTransaction: made => { this.store.recordRequestAttempt(repo, number, pr.headRefName, pr.headRefOid, tip, made.id, new Date().toISOString()); this.store.markRequestsHandled(items.map(item => item.id)); } });
     context.findings.push({ key: findingKey, cardId: card.id, outcome: "created" });
     console.log(`${tag} #${number}: created card ${card.id.slice(0, 8)} for ${items.length} request(s) from ${[...new Set(items.map(item => item.author))].join(", ")}`);
     this.startJob(card);

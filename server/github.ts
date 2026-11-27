@@ -289,9 +289,10 @@ export class GitHub {
       .map(line => { const item = JSON.parse(line); return { id: `${endpoint}:${item.id}`, at: item.at, author: item.author ?? "ghost", association: item.association, body: item.body ?? "", prNumber: item.number, ...(item.path ? { path: item.path, line: item.line } : {}) } as RepoComment; });
     return [...await read("issues/comments"), ...await read("pulls/comments")];
   }
-  /** What a request needs to know about a PR; throws when the number is an issue, not a PR. */
-  async requestTarget(repo: string, number: number): Promise<RequestTarget> {
-    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "number,title,url,state,headRefName,headRefOid,isCrossRepository"])) as RequestTarget;
+  /** What a request needs to know about a PR, or undefined when the number is an issue. Any other failure throws. */
+  async requestTarget(repo: string, number: number): Promise<RequestTarget | undefined> {
+    try { return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "number,title,url,state,headRefName,headRefOid,isCrossRepository"])) as RequestTarget; }
+    catch (error) { if (/Could not resolve to a PullRequest/.test((error as Error).message)) return undefined; throw error; }
   }
   /** A PR's recent comments, reviews and inline review comments, in one GraphQL call. */
   async prComments(repo: string, number: number): Promise<PrComment[]> {
@@ -347,9 +348,14 @@ const bakeryIconUrl = () => `https://raw.githubusercontent.com/aglowinthefield/b
  * Bakery comments on its PRs at each turning point (sent back for CI, fix pushed, gave up, update pushed) so
  * reviewers can see what the automation did. A comment that fails to post never blocks the work; it is logged.
  */
+/** Posts a Bakery comment on a PR, throwing when it could not: for replies the work depends on. */
+export async function postOnPullRequest(github: GitHub, repo: string, number: number, body: string): Promise<void> {
+  await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`);
+}
+/** `postOnPullRequest` for courtesy comments: one that fails is logged, never blocking the work. */
 export async function commentOnPullRequest(github: GitHub, repo: string, number: number | null | undefined, body: string): Promise<void> {
   if (!number) return;
-  try { await github.comment(repo, number, `${githubMarkdown(body)}\n\n<img src="${bakeryIconUrl()}" width="16" height="16" alt="" /> Posted by Bakery`); }
+  try { await postOnPullRequest(github, repo, number, body); }
   catch (error) { console.error(`Could not comment on ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 

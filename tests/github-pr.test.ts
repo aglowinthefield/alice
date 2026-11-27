@@ -1942,3 +1942,14 @@ for (const mode of ["auto-review", "automatic pull requests"] as const) {
     } finally { f.cleanup(); }
   });
 }
+
+test("requestTarget reads a PR, says undefined for an issue, and throws when gh fails otherwise", async () => {
+  const f = fixture();
+  try {
+    f.setPrs([{ number: 7, title: "Seven", url: "https://github.com/acme/widgets/pull/7", state: "OPEN", headRefName: "seven", headRefOid: "abc", isCrossRepository: false }]);
+    assert.equal((await f.github.requestTarget("acme/widgets", 7))?.headRefName, "seven");
+    assert.equal(await f.github.requestTarget("acme/widgets", 8), undefined, "an issue is not a request target");
+    writeFileSync(join(f.ghDir, "auth-fail"), "");
+    await assert.rejects(f.github.requestTarget("acme/widgets", 7), /not signed in/);
+  } finally { f.cleanup(); }
+});

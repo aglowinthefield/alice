@@ -526,6 +526,8 @@ export class GitHubSync {
   private async settle(repoBoard: RepoBoard, card: Card, pr: PullRequest, repo: string): Promise<void> {
     const checks = checksState(pr);
     if (pr.state === "OPEN") {
+      // A Failed card's open PR is a person's to finish: record it, but start no fix or conflict-repair runs.
+      if (card.status === "failed") { this.board.recordPullRequest(card.id, { ...pr, checks }); return; }
       if (await this.pushCiFix(card, pr, repo)) return;
       const fresh = this.board.getCard(card.id) ?? card;
       const ci = await this.sendBackComments(fresh, pr, repo) ?? await this.sendBackConflict(fresh, pr, repo) ?? await this.sendBackFailingCi(fresh, pr, repo);

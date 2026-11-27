@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A Failed card whose pull request someone fixes and merges on GitHub now goes to Done. Before, only Review cards were settled from their PRs, so it stayed Failed. While its PR is open, Alice records the PR's state but starts no fix or conflict-repair runs for it.
 - Bakery is now Alice. The repository moves to github.com/aglowinthefield/alice.
   - New names: the `alice` CLI, `ALICE_*` variables, `alice/<card>` branches, `alice_*` Prometheus metrics with the same labels, `alice.*` telemetry, the `/alice` PR comment, `alice.service` and `alice-update.timer`, and launchd `dev.alice.*`.
   - For one release the old names still work: `bakery-cli` and `bakery` run the CLI, `BAKERY_*` fills any unset `ALICE_*`, and `/bakery` comments still count.

@@ -7,7 +7,7 @@ const JSON_OUT = ["--json", "print the full API data"];
 const SOURCE = ["--source NAME", "where the card came from (default: cli); agents give their name"];
 const PRIORITY = ["--priority P", "-100 to 100, or low, normal, high or urgent (default: normal)"];
 
-export const GROUPS = ["Cards", "Runs", "Tidy up", "Boards", "Sentinels", "Setup"];
+export const GROUPS = ["Cards", "Runs", "Tidy up", "Boards", "Setup"];
 
 export const COMMANDS = [
   {
@@ -153,7 +153,7 @@ export const COMMANDS = [
   {
     name: "agents", group: "Boards", args: "[N|auto]", summary: "agents at once across all boards: show or set",
     full: "[N|auto] [--json]",
-    details: "Card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. auto is a quarter of the CPU cores, at least 2. Automatic work (pickup, send-backs, CI and hook fixes, sentinels, reviews) waits for a slot; a run you start yourself always starts.",
+    details: "Card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. auto is a quarter of the CPU cores, at least 2. Automatic work (pickup, send-backs, CI and hook fixes, reviews) waits for a slot; a run you start yourself always starts.",
     options: [JSON_OUT],
     examples: [["alice agents 4", ""], ["alice agents auto", ""]],
   },
@@ -170,24 +170,6 @@ export const COMMANDS = [
     details: "With no argument, prints the pickup state. on, and reset (which clears the 24-hour count), can start paid Pi runs, so they need --yes. --limit and --budget are stored, and apply only while the board's limits are on (see limits).",
     options: [["--concurrency N", "runs at once, 1 to 4"], ["--limit N|off", "most automatic starts per rolling 24 hours; 0 or off means no limit"], ["--budget USD|off", "stop starting once 24 hours of runs cost this much"], BOARD, ["--yes", "confirm"]],
     examples: [["alice pickup on --concurrency 2 --budget 20 --yes", ""], ["alice pickup off", ""]],
-  },
-  {
-    name: "sentinels", group: "Sentinels", summary: "list monitors: state, schedule, latest run",
-    full: "[--board ID|PATH] [--json]",
-    details: "Sentinels are persistent monitors that are not cards. Pausing or finishing a job card never changes a sentinel.",
-    options: [BOARD, JSON_OUT],
-  },
-  {
-    name: "sentinel-pause", group: "Sentinels", args: "SENTINEL_ID", summary: "stop its future runs",
-    full: "SENTINEL_ID [--board ID|PATH] [--json]", details: "Also holds its unstarted jobs.", options: [BOARD, JSON_OUT],
-  },
-  {
-    name: "sentinel-resume", group: "Sentinels", args: "SENTINEL_ID", summary: "let it run again, at once",
-    full: "SENTINEL_ID [--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
-  },
-  {
-    name: "sentinel-run", group: "Sentinels", args: "SENTINEL_ID", summary: "run an enabled sentinel now",
-    full: "SENTINEL_ID [--board ID|PATH] [--json]", options: [BOARD, JSON_OUT],
   },
   {
     name: "service", group: "Setup", args: "ACTION", summary: "run Alice in the background: install, restart, logs",

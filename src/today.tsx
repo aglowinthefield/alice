@@ -13,7 +13,6 @@ import {
   type Board,
   type Card,
 } from "./model.js";
-import { isSentinelJob } from "./sentinels.js";
 import {
   defaultStaleReviewDays,
   isStaleReview,
@@ -31,7 +30,6 @@ export const staleReviewCards = (
       const board = boards.find((item) => item.repo === card.repo);
       return (
         !!board &&
-        !isSentinelJob(card) &&
         isStaleReview(
           card,
           board.staleReviewDays ?? defaultStaleReviewDays,

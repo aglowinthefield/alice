@@ -64,7 +64,7 @@ export class Readiness {
   /** Which parts a card gets at Review: none off github-pr boards, and no hooks where something pushes on its own. */
   private wants(card: Card, run: Run): { draft: boolean; hooks: boolean } {
     const repoBoard = this.board.boardForRepo(card.repo);
-    if (!this.board.features.pullRequests || repoBoard?.integration !== "github-pr" || card.prOverrideUrl || run.ciFix || card.prPushedRunId === run.id || !run.worktree)
+    if (repoBoard?.integration !== "github-pr" || card.prOverrideUrl || run.ciFix || card.prPushedRunId === run.id || !run.worktree)
       return { draft: false, hooks: false };
     if (repoBoard.autoReviewEnabled || repoBoard.autoPullRequestEnabled) return { draft: false, hooks: false };
     // An open PR keeps its title and body, so Approve needs no draft for it.

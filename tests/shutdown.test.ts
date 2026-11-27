@@ -27,7 +27,7 @@ test("a shutdown request exits the server even while a chat event stream is open
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_SENTINEL: "0" },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";

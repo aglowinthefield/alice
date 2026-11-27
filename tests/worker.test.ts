@@ -81,7 +81,7 @@ test("a board's shared caches point the agent at the main checkout's cache, and 
     writeFileSync(join(repo, "README.md"), "fixture\n");
     execFileSync("git", ["-C", repo, "add", "README.md"]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$TURBO_CACHE_DIR" > "${dir}/seen-$(basename "$PWD")"\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$TURBO_CACHE_DIR" > "${dir}/seen-$(basename "$PWD")"\nprintf '%s' "$IMPRESSION_SESSION" > "${dir}/impression-$(basename "$PWD")"\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
     chmodSync(fakePi, 0o755);
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const repoBoard = board.addRepo(repo);
@@ -90,6 +90,7 @@ test("a board's shared caches point the agent at the main checkout's cache, and 
       board.setStatus(card.id, "ready");
       const run = await worker.start(board.getCard(card.id)!);
       await waitFor(() => board.getRun(run.id)?.status === "review");
+      assert.equal(readFileSync(join(dir, `impression-${card.id}`), "utf8"), "read", "a card run reads Impression's memories without sending its transcript");
       return readFileSync(join(dir, `seen-${card.id}`), "utf8");
     };
     assert.equal(await runCard("Off"), "");

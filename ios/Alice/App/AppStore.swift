@@ -121,7 +121,7 @@ final class AppStore: ObservableObject {
     }
 
     func board(_ id: String) -> Board? { boards.first { $0.id == id } }
-    func cards(_ boardId: String) -> [Card] { (cardsByBoard[boardId] ?? []).filter { !$0.isSentinelJob } }
+    func cards(_ boardId: String) -> [Card] { cardsByBoard[boardId] ?? [] }
     func card(_ boardId: String, _ id: String) -> Card? { cardsByBoard[boardId]?.first { $0.id == id } }
     func board(forRepo repo: String) -> Board? { boards.first { $0.repo == repo } }
 

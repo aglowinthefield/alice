@@ -10,21 +10,21 @@ import { Board } from "../server/board.js";
 
 test("both features are off unless their switch is 1", () => {
   assert.deepEqual(readFeatures({}), { sentinels: false, pullRequests: false });
-  assert.deepEqual(readFeatures({ BAKERY_FEATURE_SENTINELS: "1" }), {
+  assert.deepEqual(readFeatures({ ALICE_FEATURE_SENTINELS: "1" }), {
     sentinels: true,
     pullRequests: false,
   });
   assert.deepEqual(
     readFeatures({
-      BAKERY_FEATURE_PULL_REQUESTS: "1",
-      BAKERY_FEATURE_SENTINELS: "0",
+      ALICE_FEATURE_PULL_REQUESTS: "1",
+      ALICE_FEATURE_SENTINELS: "0",
     }),
     { sentinels: false, pullRequests: true },
   );
   assert.deepEqual(
     readFeatures({
-      BAKERY_FEATURE_PULL_REQUESTS: "",
-      BAKERY_FEATURE_SENTINELS: " 1 ",
+      ALICE_FEATURE_PULL_REQUESTS: "",
+      ALICE_FEATURE_SENTINELS: " 1 ",
     }),
     { sentinels: true, pullRequests: false },
   );
@@ -32,12 +32,12 @@ test("both features are off unless their switch is 1", () => {
 
 test("a switch that is not 0 or 1 is rejected rather than read as off", () => {
   assert.throws(
-    () => readFeatures({ BAKERY_FEATURE_SENTINELS: "true" }),
-    /BAKERY_FEATURE_SENTINELS must be 0 or 1/,
+    () => readFeatures({ ALICE_FEATURE_SENTINELS: "true" }),
+    /ALICE_FEATURE_SENTINELS must be 0 or 1/,
   );
   assert.throws(
     () => readFeatures({ [featureSwitches.pullRequests]: "yes" }),
-    /BAKERY_FEATURE_PULL_REQUESTS must be 0 or 1/,
+    /ALICE_FEATURE_PULL_REQUESTS must be 0 or 1/,
   );
 });
 
@@ -74,12 +74,12 @@ async function withServer(
       cwd: process.cwd(),
       env: {
         ...process.env,
-        BAKERY_HOST: "",
-        BAKERY_ALLOWED_HOSTS: "",
+        ALICE_HOST: "",
+        ALICE_ALLOWED_HOSTS: "",
         HOME: home,
-        BAKERY_DATA_DIR: dataDir,
-        BAKERY_PORT: String(port),
-        BAKERY_GH_BIN: "false",
+        ALICE_DATA_DIR: dataDir,
+        ALICE_PORT: String(port),
+        ALICE_GH_BIN: "false",
         [featureSwitches.sentinels]: switches.sentinels ? "1" : "0",
         [featureSwitches.pullRequests]: switches.pullRequests ? "1" : "0",
       },
@@ -124,7 +124,7 @@ async function withServer(
 }
 
 test("the server refuses a disabled feature in every combination and keeps its stored data", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-features-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-features-"));
   try {
     const repo = join(home, "code", "alpha"),
       dataDir = join(home, "data");
@@ -195,6 +195,11 @@ test("the server refuses a disabled feature in every combination and keeps its s
             label,
           );
 
+          const sentinelOff = {
+            code: "feature_off",
+            feature: "sentinels",
+            error: "Sentinels are turned off in this Alice build. Build and start Alice with ALICE_FEATURE_SENTINELS=1 to use them.",
+          };
           // Sentinels: the routes exist only with the feature, and the stored sentinels survive being off.
           const sentinelList = await api(`/boards/${boardId}/sentinels`);
           if (sentinels) {
@@ -206,25 +211,20 @@ test("the server refuses a disabled feature in every combination and keeps its s
             );
           } else {
             assert.equal(sentinelList.status, 404, label);
-            assert.equal(sentinelList.data.code, "feature_off", label);
-            assert.match(
-              sentinelList.data.error,
-              /BAKERY_FEATURE_SENTINELS=1/,
-              label,
+            assert.deepEqual(sentinelList.data, sentinelOff, label);
+          }
+          for (const [path, method, error] of [
+            ["/sentinels/missing", "GET", "Sentinel not found"],
+            ["/sentinels/missing/runs", "GET", "Sentinel not found"],
+            ["/sentinels/missing/run", "POST", "Sentinel not found"],
+            [`/boards/${boardId}/sentinels?view=list`, "PUT", "Not found"],
+          ]) {
+            assert.deepEqual(
+              await api(path, method),
+              { status: 404, data: sentinels ? { error } : sentinelOff },
+              `${label}: ${method} ${path}`,
             );
           }
-          assert.equal(
-            [200, 404].includes((await api("/sentinels/missing/runs")).status),
-            true,
-            label,
-          );
-          const sentinelRun = await api("/sentinels/anything/run", "POST");
-          assert.equal(sentinelRun.status, sentinels ? 404 : 404, label);
-          assert.equal(
-            sentinelRun.data.code === "feature_off",
-            !sentinels,
-            label,
-          );
 
           // Pull requests: the board reads as local while off, but still remembers what was stored.
           const board = (await api("/boards")).data[0];
@@ -262,6 +262,23 @@ test("the server refuses a disabled feature in every combination and keeps its s
               `${label}: ${path} -> ${response.status} ${JSON.stringify(response.data)}`,
             );
           }
+          const pullRequestsOff = {
+            code: "feature_off",
+            feature: "pullRequests",
+            error: "GitHub pull requests are turned off in this Alice build. Build and start Alice with ALICE_FEATURE_PULL_REQUESTS=1 to use them.",
+          };
+          // Missing records keep the supported requests from attempting a merge or changing a card.
+          for (const [path, method, error] of [
+            ["/boards/missing/pull-requests/123456789/merge", "POST", "Board not found"],
+            [`/boards/${boardId}/cards/missing/pull-request`, "PUT", "Card not found on this board"],
+            [`/boards/${boardId}/cards/${cardId}/pr-draft?view=status`, "PUT", "Not found"],
+          ]) {
+            assert.deepEqual(
+              await api(path, method),
+              { status: 404, data: pullRequests ? { error } : pullRequestsOff },
+              `${label}: ${method} ${path}`,
+            );
+          }
           if (!pullRequests) {
             const choose = await api(`/boards/${boardId}/settings`, "PATCH", {
               integration: "github-pr",
@@ -269,7 +286,7 @@ test("the server refuses a disabled feature in every combination and keeps its s
             assert.equal(choose.status, 400, label);
             assert.match(
               choose.data.error,
-              /BAKERY_FEATURE_PULL_REQUESTS=1/,
+              /ALICE_FEATURE_PULL_REQUESTS=1/,
               label,
             );
             const auto = await api(`/boards/${boardId}/settings`, "PATCH", {
@@ -278,7 +295,7 @@ test("the server refuses a disabled feature in every combination and keeps its s
             assert.equal(auto.status, 400, label);
             assert.match(
               auto.data.error,
-              /BAKERY_FEATURE_PULL_REQUESTS=1/,
+              /ALICE_FEATURE_PULL_REQUESTS=1/,
               label,
             );
             // A board set to pull requests must not fall back to a local merge behind the operator's back.
@@ -322,7 +339,7 @@ test("the server refuses a disabled feature in every combination and keeps its s
 });
 
 test("with pull requests off, a board that chose Local merge approves locally as before", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-features-local-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-features-local-"));
   try {
     const repo = join(home, "code", "alpha"),
       dataDir = join(home, "data");
@@ -359,7 +376,7 @@ test("with pull requests off, a board that chose Local merge approves locally as
 });
 
 test("with only Sentinels on, a fresh board with a GitHub remote is monitored and stays a local-merge board", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-features-sentinels-only-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-features-sentinels-only-"));
   try {
     const repo = join(home, "code", "alpha"),
       dataDir = join(home, "data");
@@ -410,7 +427,7 @@ test("with only Sentinels on, a fresh board with a GitHub remote is monitored an
 });
 
 test("clearing the remote of a stored github-pr board is refused while pull requests are off, and the server stays up", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-features-remote-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-features-remote-"));
   try {
     const repo = join(home, "code", "alpha"),
       dataDir = join(home, "data");
@@ -460,7 +477,7 @@ test("clearing the remote of a stored github-pr board is refused while pull requ
 });
 
 test("a stored GitHub sync error does not hold back automatic pickup while pull requests are off, and returns with them", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-features-pickup-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-features-pickup-"));
   try {
     const repo = join(dir, "repo");
     mkdirSync(repo, { recursive: true });

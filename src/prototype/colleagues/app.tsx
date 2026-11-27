@@ -1,4 +1,4 @@
-// Colleagues and rooms prototype. Fixture data only: this module never calls Bakery's API.
+// Colleagues and rooms prototype. Fixture data only: this module never calls Alice's API.
 import { useReducer, useState, type ReactNode } from "react";
 import { Button } from "../../components/ui/button";
 import { BrandIcon } from "../../brand-icon";
@@ -79,7 +79,7 @@ export function PrototypeApp() {
           <div className="flex items-center gap-3 px-5 py-5">
             <BrandIcon />
             <span className="text-[18px] font-semibold tracking-[-.04em]">
-              bakery<span className="text-primary">.</span>
+              alice<span className="text-primary">.</span>
             </span>
           </div>
           <nav aria-label="Prototype navigation" className="px-2">
@@ -87,7 +87,7 @@ export function PrototypeApp() {
               href="/"
               className="mb-4 flex w-full items-center rounded-md px-3 py-1.5 text-[length:var(--text-sidebar)] text-muted-foreground hover:bg-accent/30 hover:text-foreground"
             >
-              ← Back to Bakery
+              ← Back to Alice
             </a>
             {nav("rooms", "Rooms", state.rooms.length)}
             {nav("colleagues", "Colleagues")}
@@ -1121,7 +1121,7 @@ function Entry({
     return (
       <div className={`${frame} border-primary`}>
         <div className="text-xs text-muted-foreground">
-          Simulated card · not a real Bakery card
+          Simulated card · not a real Alice card
         </div>
         <p className="mt-1 font-medium">
           {card?.id}: {message.text}
@@ -1344,7 +1344,7 @@ function Handoff({ state, dispatch }: { state: State; dispatch: Dispatch }) {
       </Heading>
       <div className="mb-4 rounded-md border border-border bg-accent/40 px-3 py-2 text-sm">
         Simulated handoff. The final action creates a simulated card in this tab
-        only. No Bakery card, run, or memory is created.
+        only. No Alice card, run, or memory is created.
       </div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
         <fieldset disabled={done} className={`${panel} space-y-3`}>

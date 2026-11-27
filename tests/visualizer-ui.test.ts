@@ -23,7 +23,7 @@ const card = (id: string, status: string, dependsOn: string[] = [], extra: Recor
 async function open(cards: unknown[], theme = "default", triage = "show") {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   // Triage cards start hidden; most tests draw them, so they opt in unless a test says otherwise.
-  await page.addInitScript((value) => localStorage.setItem("bakery-visualizer-triage", value), triage);
+  await page.addInitScript((value) => localStorage.setItem("alice-visualizer-triage", value), triage);
   const data: Record<string, unknown> = {
     "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
     "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme },
@@ -200,7 +200,7 @@ test("the glow setting changes bloom and is remembered", async () => {
     await page.waitForTimeout(300);
     const off = await brightness(page);
     assert.ok(full > off + 1, `Full is brighter than Off (${full} vs ${off})`);
-    assert.equal(await page.evaluate(() => localStorage.getItem("bakery-visualizer-glow")), "off");
+    assert.equal(await page.evaluate(() => localStorage.getItem("alice-visualizer-glow")), "off");
     await page.reload();
     await ready(page, 4);
     assert.equal(await page.getByRole("group", { name: "Glow" }).getByRole("button", { name: "Off" }).getAttribute("aria-pressed"), "true");
@@ -365,7 +365,7 @@ test("without WebGL the graph is plain SVG with state colors, labels, hover and 
   const noGl = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   try {
     await noGl.addInitScript(`
-      localStorage.setItem("bakery-visualizer-triage", "show");
+      localStorage.setItem("alice-visualizer-triage", "show");
       const getContext = HTMLCanvasElement.prototype.getContext;
       HTMLCanvasElement.prototype.getContext = function (type) {
         return /webgl/.test(type) ? null : getContext.apply(this, arguments);

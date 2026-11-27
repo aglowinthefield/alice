@@ -1,9 +1,9 @@
 // Spots a card run going in circles from its Pi event stream, so the operator hears about it well before the run
-// timeout. The thresholds come from 807 finished card runs with Pi session logs (Bakery's own board, measured
+// timeout. The thresholds come from 807 finished card runs with Pi session logs (Alice's own board, measured
 // 2026-11-24): 736 that reached Review and 71 killed by the 60-minute run timeout. Session logs hold tool calls, not
 // the worktree, so there a "change" was an edit or write call or a bash command that plainly writes a file; the
 // worker sees real worktree changes, so it should flag a little less often. Rerun that measurement before changing
-// the numbers; the scripts are attached to the Bakery card that added this file (33139a26).
+// the numbers; the scripts are attached to the Alice card that added this file (33139a26).
 
 /** A run is flagged when one tool call (same tool, same arguments) makes up this many of its last `REPEAT_WINDOW` calls. */
 // No run in the sample got past 4; the 4 runs that reached 4 all finished and reached Review.
@@ -18,8 +18,8 @@ export const IDLE_TURNS_AFTER_CHANGE = 25;
 // No successful run went 60 turns before its first change (9 went 40, 3 went 50); 1 timed-out run did.
 export const IDLE_TURNS_BEFORE_CHANGE = 60;
 
-/** Step-back message Bakery steers a flagged run with, once. */
-export const STUCK_MESSAGE = "Bakery: you seem stuck. Step back before your next tool call: say in one or two sentences what you are trying to establish and why the last attempts did not get there, then pick a different approach. If something outside this worktree blocks you, stop and write your report saying what blocks you.";
+/** Step-back message Alice steers a flagged run with, once. */
+export const STUCK_MESSAGE = "Alice: you seem stuck. Step back before your next tool call: say in one or two sentences what you are trying to establish and why the last attempts did not get there, then pick a different approach. If something outside this worktree blocks you, stop and write your report saying what blocks you.";
 
 /**
  * Tracks one run. Feed it every tool call and every turn end; it returns a reason the first time the run looks stuck

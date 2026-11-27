@@ -2,8 +2,8 @@ import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs
 import { dirname } from "node:path";
 import { format } from "node:util";
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
-export interface LogEntry { seq: number; at: string; level: LogLevel; message: string }
+import type { LogEntry, LogLevel } from "../shared/wire.js";
+export type { LogEntry, LogLevel };
 
 const methods = { debug: "debug", log: "info", info: "info", warn: "warn", error: "error" } as const;
 

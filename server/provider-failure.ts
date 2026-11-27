@@ -11,7 +11,8 @@
  * - `rate-limit`, `transient`: 429, 5xx, overloaded and network errors. An ordinary retry is expected to work.
  * - `unknown`: no recognizable provider status.
  */
-export type ProviderFailureKind = "invalid-history" | "output-blocked" | "billing" | "auth" | "invalid-request" | "rate-limit" | "transient" | "unknown";
+import type { ProviderFailureKind } from "../shared/wire.js";
+export type { ProviderFailureKind };
 
 export const PROVIDER_FAILURE_KINDS: readonly ProviderFailureKind[] = ["invalid-history", "output-blocked", "billing", "auth", "invalid-request", "rate-limit", "transient", "unknown"];
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emptyAgentModels, parseAgentModels, parseBoardAgentModels, parseModelList, piModelArgs, resolveAgentModel, validateAgentModels, validateBoardAgentModels } from "../server/agent-models.js";
+import { emptyAgentModels, parseAgentModels, parseBoardAgentModels, parseModelList, piModelArgs, resolveAgentModel, validateAgentModels, validateBoardAgentModels } from "../shared/agent-models.js";
 
 test("agent model input fills missing phases and rejects unknown phases, flags, and thinking levels", () => {
   assert.deepEqual(validateAgentModels({}), emptyAgentModels());

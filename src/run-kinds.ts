@@ -1,5 +1,6 @@
 // Why a run happened, so a card's cost can be split into its first attempt and the rework after it.
-export type RunKind = "first" | "send_back" | "ci_fix" | "retry" | "rerun";
+import type { RunKind } from "../shared/wire.js";
+export type { RunKind };
 
 export const runKindLabels: Record<RunKind, string> = {
   first: "First attempt",

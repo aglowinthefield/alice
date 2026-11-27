@@ -37,7 +37,7 @@ import { SentinelStore } from "./sentinel-store.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
-import { parseModelList, piModelArgs, validateAgentModels } from "./agent-models.js";
+import { parseModelList, piModelArgs, validateAgentModels } from "../shared/agent-models.js";
 import { LogBuffer } from "./logs.js";
 import { Updates, installScript, promoteStagedUi } from "./updates.js";
 import { PushNotifications } from "./push.js";

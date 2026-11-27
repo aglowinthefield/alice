@@ -3,7 +3,7 @@
 // `createTui` holds the state and answers keys without touching the terminal, so tests drive it with a fake API;
 // `runTui` wires it to a raw-mode TTY.
 import { spawn } from "node:child_process";
-import { cardActivity, needsYouStatuses, needsYourReview, reviewWaitText, searchRank, todaySections, waitingOn } from "../src/model.ts";
+import { cardActivity, needsYouStatuses, needsYourReview, reviewWaitText, searchRank, todaySections, waitingOn } from "../shared/card-state.ts";
 import { Screen, clip, width, wrap } from "./cli-screen.mjs";
 import { useColor } from "./cli-style.mjs";
 

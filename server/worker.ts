@@ -3,7 +3,7 @@ import { command } from "./platform.js";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
-import { piModelArgs, type AgentPhase } from "./agent-models.js";
+import { piModelArgs, type AgentPhase } from "../shared/agent-models.js";
 import { attachmentsPrompt, evidencePrompt } from "./attachments.js";
 import { Board, RunLimitError, type Card, type CiFeedbackSource, type Run } from "./board.js";
 import { classifyProviderFailure, describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js";

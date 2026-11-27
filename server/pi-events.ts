@@ -3,8 +3,8 @@
 import { agentLabel, messageUsage, type Usage } from "./agent.js";
 import { describeToolCall } from "./failure-summary.js";
 
-/** What a running Pi is doing now: its latest tool, that tool's turn, and when the tool started (ISO time). */
-export type LiveActivity = { tool: string; turn: number; since: string };
+import type { LiveActivity } from "../shared/wire.js";
+export type { LiveActivity };
 
 /** One tool call in the current turn. `since` is the epoch milliseconds it started. */
 export type PiTool = { id: string; name: string; finished: boolean; failed: boolean; since: number; detail: string };

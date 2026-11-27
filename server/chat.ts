@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { command } from "./platform.js";
 import { settledReply } from "./agent.js";
-import { piModelArgs } from "./agent-models.js";
+import { piModelArgs } from "../shared/agent-models.js";
 import { publishChatImages } from "./chat-images.js";
 import type { Board, Card, Chat, ChatMessage, ChatPart, RepoBoard } from "./board.js";
 

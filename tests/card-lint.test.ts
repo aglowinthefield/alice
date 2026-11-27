@@ -97,7 +97,7 @@ test("only Triage cards written by people are checked on the way to Ready", () =
   assert.deepEqual(readyFlags(card).map(flag => flag.rule), ["person-only", "no-acceptance"]);
   assert.deepEqual(readyFlags({ ...card, status: "failed" }), [], "a retry was committed to before");
   assert.deepEqual(readyFlags({ ...card, status: "done" }), [], "reopening is not a first move to Ready");
-  assert.deepEqual(readyFlags({ ...card, sentinelId: "sentinel-1" }), [], "sentinel cards come from Bakery's own template");
+  assert.deepEqual(readyFlags({ ...card, sentinelId: "sentinel-1" }), [], "sentinel cards come from Alice's own template");
 });
 
 const tenRoutes = ["/settings", "/settings/profile", "/settings/billing", "/settings/team", "/settings/keys", "/boards/:id",
@@ -172,7 +172,7 @@ test("cards that already ask for a plan are never wide", () => {
   const wide = { title: "Migrate the remaining pages to Tailwind", body: "Done when no CSS modules remain." };
   const plan = planningCard(wide);
   assert.equal(plan.title, "Plan: Migrate the remaining pages to Tailwind");
-  assert.match(plan.body, /^Plan this work; do not implement it\..*bakery-plan block\.\n\n## The work to plan\n\nDone when no CSS modules remain\.$/s);
+  assert.match(plan.body, /^Plan this work; do not implement it\..*alice-plan block\.\n\n## The work to plan\n\nDone when no CSS modules remain\.$/s);
   assert.equal(isPlanningCard(plan), true);
   assert.equal(estimateWidth(plan).wide, false);
   assert.deepEqual(planningCard(plan), { title: plan.title, body: planningCard({ title: plan.title, body: plan.body }).body }, "the title is not prefixed twice");
@@ -181,7 +181,7 @@ test("cards that already ask for a plan are never wide", () => {
   assert.equal(isPlanningCard({ title: "Fix the planner", body: "" }), false);
 });
 
-test("Bakery's own wide card text is not flagged, and a wide card in Triage is flagged on the way to Ready", () => {
+test("Alice's own wide card text is not flagged, and a wide card in Triage is flagged on the way to Ready", () => {
   const own = "## Steps\n- Extend the Ready lint with a width estimate from the card text (many routes, files or surfaces, or words like \"all\", \"every\", \"migrate the remaining\").\n- For a wide card, offer \"Turn into a plan\".\n\n## Acceptance\n- A card listing 10 routes is flagged; a one-file fix is not flagged.\n- Tests cover the estimate.";
   assert.equal(estimateWidth({ title: "Warn about wide cards at Ready", body: own }).wide, false);
   assert.deepEqual(readyFlags({ title: "Migrate the remaining pages", body: `Move them.${done}`, status: "triage" }).map(flag => flag.rule), ["wide"]);

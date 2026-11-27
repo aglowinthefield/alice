@@ -12,7 +12,7 @@ function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 }
 function fixture(title = "Review work") {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-integrate-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-integrate-"));
   const repo = join(dir, "repo"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   git(repo, "init", "-q", "-b", "main");
@@ -23,7 +23,7 @@ function fixture(title = "Review work") {
   const card = board.createCard({ title, body: "", repo });
   board.setStatus(card.id, "ready");
   const run = board.claim(card.id), worktree = join(data, "worktrees", card.id);
-  git(repo, "worktree", "add", "-qb", `bakery/${card.id}`, worktree, "HEAD");
+  git(repo, "worktree", "add", "-qb", `alice/${card.id}`, worktree, "HEAD");
   board.attach(run.id, process.pid, worktree);
   board.finish(run.id, "review");
   const integration = new Integration(board, data);
@@ -66,7 +66,7 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
     assert.deepEqual(item.board.listMergeFailures(item.repo), []);
     assert.equal(item.board.setStatus(item.card.id, "ready").status, "ready");
     assert.equal(git(item.repo, "log", "-1", "--format=%s"), "Merge card: Review work");
-    assert.equal(git(item.repo, "log", "-1", "--format=%b"), `Card: ${item.card.id}\nBranch: bakery/${item.card.id}`);
+    assert.equal(git(item.repo, "log", "-1", "--format=%b"), `Card: ${item.card.id}\nBranch: alice/${item.card.id}`);
   } finally { item.close(); }
 });
 
@@ -237,12 +237,12 @@ test("a changed main tip cannot silently complete an interrupted approval", () =
     writeFileSync(join(item.repo, "README.md"), "original\n");
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "revert work");
-    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /Main changed after Bakery merged/);
+    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /Main changed after Alice merged/);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
   } finally { item.close(); }
 });
 
-test("outside merges do not count as Bakery's prepared integration", () => {
+test("outside merges do not count as Alice's prepared integration", () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed\n");
@@ -252,7 +252,7 @@ test("outside merges do not count as Bakery's prepared integration", () => {
     const run = item.board.listRuns(item.card.id)[0];
     item.board.recordApproval(item.card.id, run.id, candidate);
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "-s", "ours", "--no-ff", "--no-edit", candidate);
-    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /merged outside Bakery/);
+    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /merged outside Alice/);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n");
   } finally { item.close(); }

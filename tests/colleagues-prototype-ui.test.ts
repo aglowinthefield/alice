@@ -115,8 +115,8 @@ test("operator walks colleagues, room, queue and steer, standup, context and sim
   assert.match(await create.innerText(), /Create in Triage/);
   await page.getByText("Triage holds the card for review. Nothing runs.").waitFor();
   await create.click();
-  await page.getByText(/Simulated card · not a real Bakery card/).waitFor();
-  assert.equal(await page.getByText(/Simulated card · not a real Bakery card/).count(), 1);
+  await page.getByText(/Simulated card · not a real Alice card/).waitFor();
+  assert.equal(await page.getByText(/Simulated card · not a real Alice card/).count(), 1);
   await shot("09-simulated-card");
 
   // Reset clears everything.

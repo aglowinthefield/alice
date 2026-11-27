@@ -88,7 +88,7 @@ test("parses GFM tables with alignment, escaped pipes and code spans", () => {
   assert.equal(parseMarkdown("a | b\nc | d")[0].type, "paragraph");
 });
 
-test("images render only from Bakery's stored files, never from local paths or other URLs", () => {
+test("images render only from Alice's stored files, never from local paths or other URLs", () => {
   const attachment = "/api/boards/b-1/cards/c-1/attachments/a-1";
   assert.deepEqual(parseMarkdown(`![Before](${attachment})`), [
     { type: "paragraph", children: [{ type: "image", src: attachment, alt: "Before" }] },

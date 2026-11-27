@@ -26,13 +26,13 @@ export function acquireLock(path: string, log: (message: string) => void = conso
     const recorded = readLock(path);
     if (recorded === null) continue; // removed between our open and read
     const pid = /^\s*(\d+)\s*$/.exec(recorded)?.[1];
-    if (!pid) throw new Error(`Bakery found a lock at ${path} without a PID. Another server may be starting; if not, remove the lock.`);
-    if (alive(Number(pid))) throw new Error(`Bakery already owns this data directory (PID ${pid}, lock ${path}).`);
+    if (!pid) throw new Error(`Alice found a lock at ${path} without a PID. Another server may be starting; if not, remove the lock.`);
+    if (alive(Number(pid))) throw new Error(`Alice already owns this data directory (PID ${pid}, lock ${path}).`);
     // Only remove the exact stale lock we inspected, not one another server just wrote.
     if (readLock(path) !== recorded) continue;
     unlinkSync(path);
-    log(`Removed stale Bakery lock ${path} from PID ${pid}, which is no longer running.`);
+    log(`Removed stale Alice lock ${path} from PID ${pid}, which is no longer running.`);
   }
-  throw new Error(`Bakery could not acquire ${path}; another server may be starting.`);
+  throw new Error(`Alice could not acquire ${path}; another server may be starting.`);
 }
 

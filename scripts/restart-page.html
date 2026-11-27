@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bakery is restarting</title>
+<title>Alice is restarting</title>
 <style>
   :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
@@ -16,7 +16,7 @@
 </head>
 <body>
 <main>
-  <h1 id="title">Bakery is restarting</h1>
+  <h1 id="title">Alice is restarting</h1>
   <div class="bar"><i id="fill"></i></div>
   <p id="detail">Checking status…</p>
   <p id="timing"></p>
@@ -26,17 +26,17 @@
   const secs = ms => Math.max(0, Math.round(ms / 1000)) + "s";
   async function tick() {
     try {
-      const s = await (await fetch("/__bakery/state", { cache: "no-store" })).json();
+      const s = await (await fetch("/__alice/state", { cache: "no-store" })).json();
       if (s.phase === "up") { location.reload(); return; }
       const skew = Date.now() - s.now; // server clock vs this one
       const now = Date.now() - skew;
       if (s.phase === "crashed") {
-        $("title").textContent = "Bakery stopped unexpectedly";
+        $("title").textContent = "Alice stopped unexpectedly";
         $("detail").textContent = "Retrying in " + secs(s.retryAt - now) + ", or as soon as a file changes.";
         $("timing").textContent = "";
         $("fill").style.width = "0";
       } else if (s.phase === "ui") {
-        $("title").textContent = "Bakery is starting the UI";
+        $("title").textContent = "Alice is starting the UI";
         $("detail").textContent = "The server is up; the Vite dev server is still starting. This page reloads when it is ready.";
         $("timing").textContent = "";
       } else if (s.phase === "draining") {
@@ -45,7 +45,7 @@
         $("timing").textContent = "Waiting " + secs(now - s.changeAt);
       } else {
         const since = now - (s.phase === "starting" ? s.startedAt : s.changeAt);
-        $("title").textContent = "Bakery is restarting";
+        $("title").textContent = "Alice is restarting";
         $("detail").textContent = "Starting the server. This page reloads when it is ready.";
         $("timing").textContent = "Elapsed " + secs(since) + " · usually about " + secs(s.bootMs);
         $("fill").style.width = Math.min(95, (since / s.bootMs) * 100) + "%";

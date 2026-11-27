@@ -76,10 +76,10 @@ test("Move to Ready in the card's details flags a physical-device ask and moves 
     const flags = check.getByTestId("ready-flags");
     assert.match(await flags.innerText(), /Needs a physical device, which the agent does not have\s+“Verify on a physical iPhone before review\.”/);
     assert.doesNotMatch(await flags.innerText(), /acceptance/i, "the card has acceptance criteria");
-    // Evidence for review: BAKERY_READY_CHECK_SHOT=path.png saves the dialog.
-    if (process.env.BAKERY_READY_CHECK_SHOT) {
+    // Evidence for review: ALICE_READY_CHECK_SHOT=path.png saves the dialog.
+    if (process.env.ALICE_READY_CHECK_SHOT) {
       await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== "running"));
-      await page.screenshot({ path: process.env.BAKERY_READY_CHECK_SHOT });
+      await page.screenshot({ path: process.env.ALICE_READY_CHECK_SHOT });
     }
     assert.equal(requests.length, 1, "nothing moves while the check is open");
     await check.getByRole("button", { name: "Ready anyway" }).click();
@@ -134,10 +134,10 @@ test("a wide card offers Turn into a plan, which rewrites it as a planning card 
     const check = page.getByRole("dialog", { name: "This card may need another pass" });
     await check.waitFor();
     assert.match(await check.getByTestId("ready-flags").innerText(), /Looks too wide for one run \(10 routes\)/);
-    // Evidence for review: BAKERY_WIDE_CHECK_SHOT=path.png saves the dialog.
-    if (process.env.BAKERY_WIDE_CHECK_SHOT) {
+    // Evidence for review: ALICE_WIDE_CHECK_SHOT=path.png saves the dialog.
+    if (process.env.ALICE_WIDE_CHECK_SHOT) {
       await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== "running"));
-      await page.screenshot({ path: process.env.BAKERY_WIDE_CHECK_SHOT });
+      await page.screenshot({ path: process.env.ALICE_WIDE_CHECK_SHOT });
     }
     assert.equal(requests.length, 0, "nothing changes while the check is open");
     await check.getByRole("button", { name: "Turn into a plan" }).click();
@@ -147,7 +147,7 @@ test("a wide card offers Turn into a plan, which rewrites it as a planning card 
     assert.equal(requests.length, 2);
     const patch = JSON.parse(requests[0].replace(/^PATCH \/api\/boards\/board\/cards\/routes /, ""));
     assert.equal(patch.title, "Plan: routes card");
-    assert.match(patch.body, /^Plan this work; do not implement it\..*bakery-plan block\.\n\n## The work to plan\n\nMove these routes/s);
+    assert.match(patch.body, /^Plan this work; do not implement it\..*alice-plan block\.\n\n## The work to plan\n\nMove these routes/s);
     assert.equal(requests[1], '/api/boards/board/cards/routes/status {"status":"ready"}');
   } finally { await browser.close(); await server.close(); }
 });

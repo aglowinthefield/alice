@@ -1,5 +1,5 @@
 /**
- * Plain-text checks Bakery runs on a card as it moves from Triage to Ready, before a paid run can start. They look for
+ * Plain-text checks Alice runs on a card as it moves from Triage to Ready, before a paid run can start. They look for
  * asks only a person can meet (a physical device, screenshots by hand, staging or production), for a body that never
  * says what done looks like (the two kinds of card that reviewers send back most), and for a card too wide for one run
  * (many routes, files or surfaces, or a sweep like "migrate the remaining pages"), which takes about twice as many
@@ -94,7 +94,7 @@ function quoteAround(text: string, index: number, length: number): string {
 
 /**
  * The flags to show as a card moves to Ready. Only Triage cards are checked: a card that already ran was committed to
- * before. Sentinel cards are skipped too, since Bakery wrote their text from its own template.
+ * before. Sentinel cards are skipped too, since Alice wrote their text from its own template.
  */
 export function readyFlags(card: {
   title: string;
@@ -160,7 +160,7 @@ export type Width = {
 };
 
 // Counts at or above `strong` flag a card alone; at or above `some` they flag it with another sign of width. Files never
-// flag a card alone: on Bakery's own history, careful briefs that name a dozen files took no more runs than the rest.
+// flag a card alone: on Alice's own history, careful briefs that name a dozen files took no more runs than the rest.
 const limits = {
   routes: { some: 3, strong: 5 },
   files: { some: 8, strong: Infinity },
@@ -218,11 +218,13 @@ function workText(body: string): string {
   return kept.join("\n");
 }
 
-/** A card already asking for a plan: the text "Turn into a plan" writes, a bakery-plan block, or a title starting "Plan". */
+/** A card already asking for a plan: the text "Turn into a plan" writes, an alice-plan block (or a bakery-plan one from before the rename), or a title starting "Plan". */
 export function isPlanningCard(card: { title: string; body: string }): boolean {
   return (
     /^\s*(?:plan|break\s+down|split)\b/i.test(card.title) ||
-    /\bbakery-plan\b|\b(?:do\s+not|don't)\s+implement\b/i.test(card.body ?? "")
+    /\b(?:alice|bakery)-plan\b|\b(?:do\s+not|don't)\s+implement\b/i.test(
+      card.body ?? "",
+    )
   );
 }
 
@@ -314,7 +316,7 @@ export function estimateWidth(card: { title: string; body: string }): Width {
 
 /**
  * The card rewritten to ask for a plan instead of code, keeping its words as the brief. A run on it ends with the
- * bakery-plan block Bakery turns into Triage cards, the same flow as any card that asks for a breakdown.
+ * alice-plan block Alice turns into Triage cards, the same flow as any card that asks for a breakdown.
  */
 export function planningCard(card: { title: string; body: string }): {
   title: string;
@@ -325,6 +327,6 @@ export function planningCard(card: { title: string; body: string }): {
     : `Plan: ${card.title}`;
   return {
     title: title.slice(0, 200),
-    body: `Plan this work; do not implement it. Read the code it touches and break it into small cards, each one agent run that touches a few files on one surface, ordered so cards that edit the same files depend on each other. Finish with the bakery-plan block.\n\n## The work to plan\n\n${card.body ?? ""}`.trimEnd(),
+    body: `Plan this work; do not implement it. Read the code it touches and break it into small cards, each one agent run that touches a few files on one surface, ordered so cards that edit the same files depend on each other. Finish with the alice-plan block.\n\n## The work to plan\n\n${card.body ?? ""}`.trimEnd(),
   };
 }

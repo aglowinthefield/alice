@@ -29,7 +29,7 @@ async function open(options: { cards: ReturnType<typeof card>[] }) {
   const page = await browser.newPage();
   const requests: { method: string; path: string; input: unknown }[] = [];
   const state = { cards: options.cards };
-  await page.addInitScript(visit => { if (!sessionStorage.getItem("seeded")) { localStorage.setItem("bakery-last-visit", visit); sessionStorage.setItem("seeded", "1"); } }, lastVisit);
+  await page.addInitScript(visit => { if (!sessionStorage.getItem("seeded")) { localStorage.setItem("alice-last-visit", visit); sessionStorage.setItem("seeded", "1"); } }, lastVisit);
   await page.route("**/api/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     requests.push({ method: request.method(), path, input: request.postDataJSON() });

@@ -22,8 +22,8 @@ export type ReadyChoice =
   | { choice: "cancel" };
 
 /**
- * Rewrites each card to ask for a plan instead of code (see planningCard). Its run then ends with a bakery-plan block,
- * which Bakery turns into small Triage cards. Call it before moving the cards to Ready.
+ * Rewrites each card to ask for a plan instead of code (see planningCard). Its run then ends with a alice-plan block,
+ * which Alice turns into small Triage cards. Call it before moving the cards to Ready.
  */
 export async function turnIntoPlans(boardId: string, cards: Card[]) {
   for (const card of cards)

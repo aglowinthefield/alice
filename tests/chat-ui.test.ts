@@ -422,6 +422,15 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
   }
 });
 
+/**
+ * Waits for Inter to load and the render it causes to land. The chat list measures its labels in the font on screen,
+ * so a maximum read while the fallback still shows would change under the test once Inter swaps in.
+ */
+async function fontsLoaded(page: Page) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
 async function waitUntil(condition: () => boolean | Promise<boolean>, timeout = 10_000) {
   for (const started = Date.now(); !(await condition()); await new Promise(resolve => setTimeout(resolve, 25)))
     if (Date.now() - started > timeout) throw new Error("timed out waiting for the condition");
@@ -702,6 +711,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     const width = async () => Math.round((await nav.boundingBox())!.width);
     const value = async (name: string) => Number(await divider.getAttribute(name));
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     const max = await value("aria-valuemax"), min = await value("aria-valuemin");
     assert.equal(min, 180);
@@ -742,6 +752,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const saved = await width();
     await page.reload();
     await nav.getByRole("button", { name: /^Why is card B/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     assert.equal(await width(), saved, "the chosen width survives a reload");
 
@@ -852,6 +863,7 @@ test("at the maximum a wide-glyph label with a badge fits with fractional widths
     const nav = page.getByRole("navigation", { name: "Chats" });
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
     await divider.focus();
     await page.keyboard.press("End");
@@ -869,6 +881,45 @@ test("at the maximum a wide-glyph label with a badge fits with fractional widths
     await page.keyboard.press("End");
     const pane = (await page.getByRole("region", { name: "Chat" }).boundingBox())!.width;
     assert.ok(pane >= 360, `the message pane keeps its minimum (${pane})`);
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+});
+
+test("the chat list measures its labels again once Inter loads, so the maximum fits the font on screen", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await (await browser.newContext({ viewport: { width: 1400, height: 800 } })).newPage();
+    // Inter is held back, so the labels are first laid out in the fallback font, and then it swaps in.
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route("**/*.woff2", async route => { await held; await route.continue(); });
+    await unreadHarness(page, [{ id: "c1", topic: "WWWWWW multi word title", unread: 2 }, { id: "c2", topic: "Short", unread: 0 }]);
+    await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
+    const nav = page.getByRole("navigation", { name: "Chats" });
+    const divider = page.getByRole("separator", { name: "Resize chat list" });
+    await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
+    await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
+    assert.ok(await page.evaluate(() => [...document.fonts].some(face => face.family === "Inter" && face.status === "loading")), "Inter is still loading");
+    release();
+    // Nothing else on the page changes, and the list polls only every few seconds, so a maximum still measured in the
+    // fallback font would stay as it was.
+    await fontsLoaded(page);
+    // The label box grows one for one with the list, so at the maximum it would hold the text with no more than the
+    // maximum's rounding to spare: the maximum follows Inter's widths, wider or narrower than the fallback's.
+    const max = Number(await divider.getAttribute("aria-valuemax"));
+    const spare = await nav.evaluate((el, max) => {
+      const label = el.querySelector<HTMLElement>("[data-chat-label]")!;
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      const style = getComputedStyle(label);
+      const atMax = label.getBoundingClientRect().width + max - el.getBoundingClientRect().width;
+      return atMax - range.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    }, max);
+    assert.ok(spare >= 0 && spare < 2, `at the maximum the label would fit Inter's text (${spare}px to spare)`);
   } finally {
     await browser.close();
     await server.close();

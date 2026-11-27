@@ -3,6 +3,7 @@
 // `createTui` holds the state and answers keys without touching the terminal, so tests drive it with a fake API;
 // `runTui` wires it to a raw-mode TTY.
 import { spawn } from "node:child_process";
+import { command as platformCommand } from "../server/platform.ts";
 import { cardActivity, needsYouStatuses, needsYourReview, reviewWaitText, searchRank, todaySections, waitingOn } from "../src/model.ts";
 import { Screen, clip, width, wrap } from "./cli-screen.mjs";
 import { useColor } from "./cli-style.mjs";
@@ -671,13 +672,15 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
 
 /**
  * Opens `url` in the browser: `$BROWSER` when set, else the platform's opener. Returns false when there is nothing to
- * open it with (no display over SSH), so the caller can rely on the printed URL instead.
+ * open it with (no display over SSH), so the caller can rely on the printed URL instead. On Windows `$BROWSER` is
+ * resolved through PATH and PATHEXT, and an npm-style `.cmd` shim runs its script under node, since Node cannot spawn
+ * a `.cmd` file or an extensionless name there.
  */
 export function openUrl(url) {
   const browser = process.env.BROWSER?.trim();
   const headless = process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
   if (!browser && headless) return false;
-  const [command, args] = browser ? [browser, [url]]
+  const [command, args] = browser ? platformCommand(browser, [url])
     : process.platform === "darwin" ? ["open", [url]]
     : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]]
     : ["xdg-open", [url]];

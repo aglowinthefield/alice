@@ -19,16 +19,20 @@ test("BAKERY_* settings fill their ALICE_* names, and an ALICE_* setting wins", 
 
 test("the data dir stays in ~/.local/share/bakery when it exists, else moves to alice", () => {
   const home = mkdtempSync(join(tmpdir(), "alice-home-"));
-  const saved = process.env.HOME;
+  // os.homedir() reads HOME off Windows and USERPROFILE on it.
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
   try {
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     assert.equal(dataDir({ BAKERY_DATA_DIR: "/data" }), "/data");
     assert.equal(dataDir({ ALICE_DATA_DIR: "/new", BAKERY_DATA_DIR: "/old" }), "/new");
     assert.equal(dataDir({}), join(home, ".local", "share", "alice"));
     mkdirSync(join(home, ".local", "share", "bakery"), { recursive: true });
     assert.equal(dataDir({}), join(home, ".local", "share", "bakery"));
   } finally {
-    process.env.HOME = saved;
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
     rmSync(home, { recursive: true, force: true });
   }
 });

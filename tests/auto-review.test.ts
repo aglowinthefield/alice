@@ -666,7 +666,10 @@ test("the reviewer sees the implementer's report and the card's attachments, so 
     await item.auto.tick();
     const prompt = readFileSync(argsFile, "utf8");
     assert.match(prompt, /implementer's report for this run[^\n]*\nRestyled the palette\. Screenshots attached for both themes\./);
-    assert.match(prompt, new RegExp(`- ${item.data}/attachments/${card.id}/[^ ]*palette-dark\\.png \\(palette-dark\\.png, image/png\\)`));
+    // The server joins the path with the platform's separator, so the expectation does too (and is not a RegExp: a
+    // Windows path's backslashes would read as escapes).
+    const shot = join(item.data, "attachments", card.id, "shot", "palette-dark.png");
+    assert.ok(prompt.includes(`- ${shot} (palette-dark.png, image/png)`), prompt);
     assert.match(prompt, /a screenshot that shows what the card asks for is evidence/);
   } finally { item.close(); }
 });

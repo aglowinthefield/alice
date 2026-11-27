@@ -240,8 +240,9 @@ test("open prints and opens the board or a card by its short ID, through $BROWSE
     const printed = await f.run("open", "card-one", "--print");
     assert.match(printed.stdout, /\/board\/board-one\/card\/card-one\n$/);
     assert.notEqual((await f.run("cards", "--print")).code, 0, "--print only goes with open");
-    // The browser runs detached; wait for both opens to land.
-    for (let i = 0; i < 50 && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    // The browser runs detached; wait for both opens to land. On Windows each goes through node and sh, which can take
+    // a while; the deadline only keeps a browser that never runs from hanging the test.
+    for (const deadline = Date.now() + 30_000; Date.now() < deadline && (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 2);) await new Promise(resolve => setTimeout(resolve, 20));
     assert.deepEqual(readFileSync(log, "utf8").trim().split("\n").map(url => new URL(url).pathname), ["/board/board-one", "/board/board-one/card/card-one"]);
   } finally {
     if (saved === undefined) delete process.env.BROWSER; else process.env.BROWSER = saved;

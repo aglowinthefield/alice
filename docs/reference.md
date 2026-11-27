@@ -57,7 +57,7 @@ To run a single production server instead, run `npm run build && BAKERY_SERVE_UI
 Then:
 
 1. Add a repository by entering its Git root, either an absolute path or a `~/` path. The repository needs at least one commit, because worktrees start from `HEAD`.
-2. Create a card. New cards start in **Triage**.
+2. Create a card. New cards start in **Triage**. To attach files, use **Attach files** or paste an image (such as a screenshot) into the form. A pasted screenshot is named `pasted-image-1.png`, `pasted-image-2.png` and so on. A paste that also has text, such as cells copied from a spreadsheet, pastes the text and attaches nothing.
 3. Move the card to **Ready**, then start it. Starting a run uses paid model tokens.
 4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge into local main** (or **Approve and open PR** on a github-pr board) or **Request changes**.
 

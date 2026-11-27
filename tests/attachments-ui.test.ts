@@ -384,3 +384,86 @@ test("clicking an image in an agent report opens the lightbox over the report's 
     await lightbox.waitFor({ state: "detached" });
   } finally { await browser.close(); await server.close(); }
 });
+
+test("pasting an image into the new card form attaches it, and uploads it once the card exists", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    const card = { id: "card", title: "Pasted", body: "", repo: "/tmp/repo", source: "manual", status: "triage", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 0, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false, attachmentCount: 0 };
+    const data: Record<string, unknown> = {
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
+      "/api/boards/board/cards": [],
+      "/api/boards/board/conflicts": [],
+      "/api/boards/board/cards/card": card,
+      "/api/boards/board/cards/card/runs": [],
+      "/api/boards/board/cards/card/approval": { pending: false },
+      "/api/boards/board/cards/card/push-progress": null,
+      "/api/boards/board/cards/card/comments": [],
+      "/api/boards/board/cards/card/auto-review": [],
+      "/api/boards/board/cards/card/history": [],
+      "/api/boards/board/cards/card/attachments": [],
+      "/api/boards/board/cards/card/review": { fingerprint: "a".repeat(64), files: [] },
+      "/api/boards/board/cards/card/pr-draft": { startedAt: 0, steps: [], fingerprint: null },
+      "/api/status": { draining: false, activeRuns: 0 },
+    };
+    const uploads: { name: string; type: string; body: Buffer }[] = [];
+    await page.route("**/api/**", async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (request.method() === "POST" && url.pathname === "/api/boards/board/cards") return route.fulfill({ json: card });
+      if (request.method() === "POST" && url.pathname === "/api/boards/board/cards/card/attachments") {
+        const body = request.postDataBuffer() ?? Buffer.alloc(0);
+        uploads.push({ name: url.searchParams.get("name") ?? "", type: request.headers()["content-type"] ?? "", body });
+        return route.fulfill({ json: { id: `a${uploads.length}`, cardId: "card", messageId: null, name: url.searchParams.get("name"), type: "image/png", size: body.length, createdAt: "2026-01-01" } });
+      }
+      assert.ok(url.pathname in data, `Unexpected API request: ${request.method()} ${url.pathname}`);
+      await route.fulfill({ json: data[url.pathname] });
+    });
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    await page.getByRole("button", { name: "New card" }).click();
+    const description = page.getByPlaceholder(/Context, acceptance criteria/);
+    await description.waitFor();
+    await page.getByPlaceholder("What needs doing?").fill("Pasted");
+    // Each paste is a distinct screenshot: a 1x1 PNG with its own trailing marker byte, so each upload can be traced back.
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+    const shot = (marker: number) => Buffer.concat([png, Buffer.from([marker])]);
+    // A clipboard paste the way a browser delivers a screenshot: one image file named "image.png", optionally with
+    // text, dispatched to whatever element has focus.
+    const paste = (marker: number, text = "") => page.evaluate(({ bytes, text }) => {
+      const data = new DataTransfer();
+      data.items.add(new File([Uint8Array.from(bytes)], "image.png", { type: "image/png" }));
+      if (text) data.setData("text/plain", text);
+      (document.activeElement ?? document.body).dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, { bytes: [...shot(marker)], text });
+    await description.focus();
+    const dialog = page.getByRole("dialog", { name: "New card" });
+    const pending = async () => (await dialog.getByRole("button", { name: /^Remove / }).evaluateAll(buttons => buttons.map(button => button.getAttribute("aria-label")!.replace(/^Remove /, ""))));
+    await paste(1);
+    await dialog.getByText(/pasted-image-1\.png/).waitFor();
+    await paste(2);
+    await dialog.getByText(/pasted-image-2\.png/).waitFor();
+    // Copied spreadsheet cells carry a rendered image too; the text is what was meant, so nothing is attached.
+    await paste(9, "A1\tB1");
+    assert.deepEqual(await pending(), ["pasted-image-1.png", "pasted-image-2.png"]);
+    // Removing the first and pasting again must not repeat pasted-image-2.
+    await dialog.getByRole("button", { name: "Remove pasted-image-1.png" }).click();
+    await dialog.getByText(/pasted-image-1\.png/).waitFor({ state: "detached" });
+    // The focused Remove button is gone, so focus is on the dialog itself, outside the form. Paste there as is.
+    assert.deepEqual(await page.evaluate(() => ({ dialog: document.activeElement?.getAttribute("role"), inForm: !!document.activeElement?.closest("form") })), { dialog: "dialog", inForm: false });
+    await paste(3);
+    await dialog.getByText(/pasted-image-1\.png/).waitFor();
+    const names = await pending();
+    assert.deepEqual(names, ["pasted-image-2.png", "pasted-image-1.png"]);
+    assert.equal(new Set(names).size, names.length);
+    await dialog.getByRole("button", { name: /Create/ }).click();
+    await dialog.waitFor({ state: "detached" });
+    // Each file goes up under its own name with the exact bytes that were pasted.
+    assert.deepEqual(uploads.map(item => item.name), ["pasted-image-2.png", "pasted-image-1.png"]);
+    assert.deepEqual(uploads.map(item => item.type), ["image/png", "image/png"]);
+    assert.ok(uploads[0].body.equals(shot(2)), "pasted-image-2.png has the second paste's bytes");
+    assert.ok(uploads[1].body.equals(shot(3)), "pasted-image-1.png has the third paste's bytes");
+  } finally { await browser.close(); await server.close(); }
+});

@@ -5,7 +5,7 @@ export type CacheUsage = { tasks: number; hits: number; savedMs: number };
 
 /**
  * What Turborepo's cache did for the turbo runs started in `worktree` at or after `sinceMs`. Turbo writes one summary
- * per run into .turbo/runs when TURBO_RUN_SUMMARY is set (see server/shared-caches.ts). Null when there are none,
+ * per run into .turbo/runs when TURBO_RUN_SUMMARY is set (see shared/shared-caches.ts). Null when there are none,
  * so a run that never used turbo is not counted as a 0% hit rate.
  */
 export function turboCacheUsage(worktree: string, sinceMs: number): CacheUsage | null {

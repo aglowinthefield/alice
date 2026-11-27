@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { checkBeforeReady } from "./ready-check.js";
+import { checkBeforeReady, turnIntoPlans } from "./ready-check.js";
 import {
   Check,
   Copy,
@@ -28,6 +28,7 @@ import { followUps } from "./follow-ups.js";
 import { parsePlan } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
+import { CloseCardDialog } from "./close-card.js";
 import {
   PRIORITY_MAX,
   PRIORITY_MIN,
@@ -35,7 +36,7 @@ import {
   needsYourReview,
   reviewActionLabels,
   type AutoReviewJob,
-  type BakerySettings,
+  type AliceSettings,
   type Card,
   type MergeConflict,
   type ReviewComment,
@@ -61,7 +62,7 @@ type Props = {
   onOpenCard: (id: string) => void;
   /** Opens the repository's Pull requests page on this card's PR; absent when the remote has none. */
   onOpenPullRequest?: () => void;
-  settings: BakerySettings | null;
+  settings: AliceSettings | null;
   conflict: MergeConflict | undefined;
   onClose: () => void;
   onEdit: (card: Card) => void;
@@ -96,6 +97,7 @@ export function CardDetails({
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [autoJobs, setAutoJobs] = useState<AutoReviewJob[]>([]);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const [expandedDetails, setExpandedDetails] = useState(false);
   const [tab, setTab] = useState<
     "overview" | "reviews" | "attempts" | "discuss" | "details"
@@ -106,7 +108,7 @@ export function CardDetails({
     setReply("");
   }, [cardId]);
   const [sideWidth, setSideWidth] = useState(
-    () => Number(localStorage.getItem("bakery-side-width")) || 900,
+    () => Number(localStorage.getItem("alice-side-width")) || 900,
   );
   const [smallScreen, setSmallScreen] = useState(
     () => window.matchMedia("(max-width: 1023px)").matches,
@@ -426,7 +428,7 @@ export function CardDetails({
                     Math.max(520, window.innerWidth - event.clientX),
                   );
                   setSideWidth(width);
-                  localStorage.setItem("bakery-side-width", String(width));
+                  localStorage.setItem("alice-side-width", String(width));
                 }
               }}
               onKeyDown={(event) => {
@@ -441,7 +443,7 @@ export function CardDetails({
                       previous + (event.key === "ArrowLeft" ? 32 : -32),
                     ),
                   );
-                  localStorage.setItem("bakery-side-width", String(width));
+                  localStorage.setItem("alice-side-width", String(width));
                   return width;
                 });
               }}
@@ -614,8 +616,8 @@ export function CardDetails({
             card.locallyMerged && (
               <div className="mt-4 rounded-md border border-border p-3 text-xs">
                 <p>
-                  Bakery merged this card into local main, not through a pull
-                  request. Publish as PR pushes the approved work to bakery/
+                  Alice merged this card into local main, not through a pull
+                  request. Publish as PR pushes the approved work to alice/
                   {card.id}, opens a pull request, and moves the card back to
                   Review until the PR merges.
                 </p>
@@ -789,6 +791,7 @@ export function CardDetails({
                             title,
                             body: `${body}\n\nFollow-up from card ${card.id}: ${card.title}`,
                             idempotencyKey: `follow-up:${runs[0].id}:${index}`,
+                            source: "follow-up",
                           }),
                         }).then(
                           () => true,
@@ -1063,6 +1066,20 @@ export function CardDetails({
                     </Button>
                   </div>
                 )}
+                {card && (
+                  <div
+                    data-testid="card-source"
+                    className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+                  >
+                    <span>Source</span>
+                    <code className="font-mono text-foreground">
+                      {card.source}
+                    </code>
+                    {card.source === "manual" && (
+                      <span>(made before Alice recorded sources)</span>
+                    )}
+                  </div>
+                )}
                 <CardHistory entries={history} />
                 {card?.sentinelId && (
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -1091,13 +1108,16 @@ export function CardDetails({
                 onClick={async () => {
                   const check = await checkBeforeReady([card]);
                   if (check.choice === "edit") onEdit(card);
-                  if (check.choice !== "ready") return;
-                  await action(() =>
-                    api(`/boards/${boardId}/cards/${card.id}/status`, {
+                  if (check.choice !== "ready" && check.choice !== "plan")
+                    return;
+                  await action(async () => {
+                    if (check.choice === "plan")
+                      await turnIntoPlans(boardId, check.cards);
+                    return api(`/boards/${boardId}/cards/${card.id}/status`, {
                       method: "POST",
                       body: JSON.stringify({ status: "ready" }),
-                    }),
-                  );
+                    });
+                  });
                 }}
               >
                 Move to Ready
@@ -1125,7 +1145,9 @@ export function CardDetails({
                   className="rounded border border-status-interrupted/50 px-2 py-1 text-xs text-status-interrupted"
                   data-testid="start-queued-badge"
                 >
-                  Queued, starts after restart
+                  {card.startQueuedForSlot
+                    ? "Queued, starts when a run finishes"
+                    : "Queued, starts after restart"}
                 </span>
                 <Button
                   variant="outline"
@@ -1278,7 +1300,7 @@ export function CardDetails({
                   if (
                     integration !== "github-pr" &&
                     !(await confirmAction(
-                      `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                      `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Alice checks Git conflicts and whitespace, but does not run tests or push.`,
                     ))
                   )
                     return;
@@ -1450,26 +1472,29 @@ export function CardDetails({
               card?.status === "failed" ||
               card?.status === "triage" ||
               card?.status === "ready") && (
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={async () => {
-                  if (
-                    !(await confirmAction(
-                      "Close this card without merging? Its worktree and branch stay, and Reopen brings it back.",
-                    ))
-                  )
-                    return;
-                  void action(() =>
-                    api(`/boards/${boardId}/cards/${card.id}/close`, {
-                      method: "POST",
-                      body: "{}",
-                    }),
-                  );
-                }}
-              >
-                Close without merging
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setClosing(true)}
+                >
+                  Close without merging
+                </Button>
+                <CloseCardDialog
+                  open={closing}
+                  busy={busy}
+                  onOpenChange={setClosing}
+                  onClose={(choice) => {
+                    setClosing(false);
+                    void action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/close`, {
+                        method: "POST",
+                        body: JSON.stringify(choice),
+                      }),
+                    );
+                  }}
+                />
+              </>
             )}
             {card?.status === "done" && (
               <Button
@@ -1646,7 +1671,7 @@ function PullRequestLink({
             #{card.prNumber}
           </a>
         ) : (
-          `none yet (looks for bakery/${card.id})`
+          `none yet (looks for alice/${card.id})`
         )}
         {onOpenPullRequest && (
           <>
@@ -1831,7 +1856,7 @@ function Dependencies({
               className="flex items-center gap-2"
             >
               {link(item)}
-              <span className="font-mono text-[10px] uppercase">
+              <span className="font-mono text-[11px] uppercase">
                 {statusLabel(item.status)}
               </span>
               <Button

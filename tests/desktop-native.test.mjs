@@ -58,12 +58,12 @@ test(
       process.env.DISPLAY,
       "Run with an isolated X11 display, for example xvfb-run.",
     );
-    const directory = await mkdtemp(join(tmpdir(), "bakery-native-"));
+    const directory = await mkdtemp(join(tmpdir(), "alice-native-"));
     const openLog = join(directory, "opened");
     await mkdir(join(directory, "bin"));
     await writeFile(
       join(directory, "bin", "xdg-open"),
-      '#!/bin/sh\nprintf "%s\\n" "$1" >> "$BAKERY_OPEN_LOG"\n',
+      '#!/bin/sh\nprintf "%s\\n" "$1" >> "$ALICE_OPEN_LOG"\n',
       { mode: 0o755 },
     );
     const reports = [];
@@ -84,12 +84,12 @@ test(
           "Content-Disposition",
           'attachment; filename="example.txt"',
         );
-        response.end("Bakery attachment");
+        response.end("Alice attachment");
       } else {
         response.setHeader("Content-Type", "text/html");
-        response.end(`<!doctype html><title>Bakery fixture</title>
+        response.end(`<!doctype html><title>Alice fixture</title>
         <style>a { display:block; height:48px; }</style>
-        <a href="https://example.org/bakery-desktop-test" target="_blank">External link</a>
+        <a href="https://example.org/alice-desktop-test" target="_blank">External link</a>
         <a href="/attachment" download="example.txt">Download attachment</a>
         <script>
         (async () => {
@@ -113,14 +113,14 @@ test(
     const address = `http://127.0.0.1:${server.address().port}/`;
     let logs = "";
     const app = spawn(
-      process.env.BAKERY_DESKTOP_BINARY ||
-        resolve("src-tauri/target/debug/bakery-desktop"),
+      process.env.ALICE_DESKTOP_BINARY ||
+        resolve("src-tauri/target/debug/alice-desktop"),
       [],
       {
         env: {
           ...process.env,
           PATH: `${join(directory, "bin")}:${process.env.PATH}`,
-          BAKERY_OPEN_LOG: openLog,
+          ALICE_OPEN_LOG: openLog,
           XDG_CONFIG_HOME: join(directory, "config"),
           XDG_DATA_HOME: join(directory, "data"),
         },
@@ -139,7 +139,7 @@ test(
     });
     try {
       const connection = await eventually(
-        () => windowId("Connect to Bakery"),
+        () => windowId("Connect to Alice"),
         "connection window",
       );
       await delay(750);
@@ -158,13 +158,13 @@ test(
       }
       assert.equal(
         await readFile(
-          join(directory, "config/dev.bakery.desktop/server-url"),
+          join(directory, "config/dev.alice.desktop/server-url"),
           "utf8",
         ),
         address,
       );
       const remote = await eventually(
-        () => windowId("Bakery"),
+        () => windowId("Alice"),
         "remote fixture window",
       );
       xdo("windowraise", remote, "windowfocus", "--sync", remote);
@@ -172,7 +172,7 @@ test(
       await eventually(
         async () =>
           (await readFile(openLog, "utf8").catch(() => "")).includes(
-            "https://example.org/bakery-desktop-test",
+            "https://example.org/alice-desktop-test",
           ),
         "external browser link",
       );
@@ -188,24 +188,24 @@ test(
       );
       xdo("windowquit", connection);
       await eventually(
-        () => !windowId("Connect to Bakery"),
+        () => !windowId("Connect to Alice"),
         "settings to hide",
       );
       xdo("windowquit", remote);
       await eventually(
-        () => !windowId("Bakery") && windowId("Connect to Bakery"),
-        "settings to recover after closing Bakery",
+        () => !windowId("Alice") && windowId("Connect to Alice"),
+        "settings to recover after closing Alice",
       );
       submit(connection, address);
-      await eventually(() => reports.length === 6, "reopening Bakery");
+      await eventually(() => reports.length === 6, "reopening Alice");
       assert.equal(
-        windowId("Bakery"),
+        windowId("Alice"),
         remote,
         "reconnect must reuse the native webview",
       );
       xdo("windowquit", remote);
       await eventually(
-        () => !windowId("Bakery") && windowId("Connect to Bakery"),
+        () => !windowId("Alice") && windowId("Connect to Alice"),
         "settings to recover again",
       );
       xdo("windowquit", connection);

@@ -1,5 +1,5 @@
 /** Where the chat list's chosen width is saved. */
-export const sidebarWidthKey = "bakery-chat-sidebar-width";
+export const sidebarWidthKey = "alice-chat-sidebar-width";
 /** The narrowest the chat list gets, which still fits its New chat and Group by controls. */
 export const sidebarMin = 180;
 /** The width before the operator picks one. */

@@ -6,9 +6,9 @@ import test from "node:test";
 import { LogBuffer } from "../server/logs.js";
 
 test("a persisted log keeps every line, indents multi-line messages, and rotates at the size limit", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-log-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-log-"));
   try {
-    const file = join(dir, "logs", "bakery.log");
+    const file = join(dir, "logs", "alice.log");
     const logs = new LogBuffer();
     logs.persist(file, 200);
     logs.add("info", "first\nsecond line");

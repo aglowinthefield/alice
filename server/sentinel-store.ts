@@ -34,13 +34,17 @@ export const prFindingKey = (prNumber: number) => `pr:${prNumber}`;
 export type LockRow = PrLock & { repo: string; prNumber: number; commentId: string | null; state: "pending" | "held" | "released" };
 type Row = { repo: string; prNumber: number; holder: string; startedAt: string; releasedAt: string | null; commentId: string | null; state: LockRow["state"] };
 
+/** Health attempts and request attempts together, for lookups by card. */
+const allAttempts = "(SELECT cardId, repo, prNumber, branch, head FROM sentinel_attempts UNION ALL SELECT cardId, repo, prNumber, branch, head FROM pr_request_cards)";
+
 export class SentinelStore {
   constructor(private readonly db: DatabaseSync) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS pr_locks (repo TEXT NOT NULL, prNumber INTEGER NOT NULL, holder TEXT NOT NULL, startedAt TEXT NOT NULL, releasedAt TEXT, commentId TEXT, state TEXT NOT NULL CHECK(state IN ('pending','held','released')), PRIMARY KEY (repo, prNumber));
       CREATE TABLE IF NOT EXISTS sentinel_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, prNumber INTEGER NOT NULL, branch TEXT NOT NULL, head TEXT NOT NULL, mainTip TEXT NOT NULL, cardId TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(repo, prNumber, head, mainTip));
       CREATE TABLE IF NOT EXISTS pr_request_cursor (repo TEXT PRIMARY KEY, since TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS pr_request_cards (cardId TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS pr_request_cards (cardId TEXT PRIMARY KEY, repo TEXT, prNumber INTEGER, branch TEXT, head TEXT, mainTip TEXT, at TEXT);
+      CREATE TABLE IF NOT EXISTS pr_request_comments (commentId TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS sentinel_given_up (repo TEXT NOT NULL, prNumber INTEGER NOT NULL, at TEXT NOT NULL, PRIMARY KEY (repo, prNumber));
       CREATE TABLE IF NOT EXISTS sentinels (id TEXT PRIMARY KEY, boardId TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('pr-health','pr-requests')), instructions TEXT NOT NULL DEFAULT '', scope TEXT NOT NULL DEFAULT '',
         intervalMs INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)), nextRunAt TEXT NOT NULL, lastRunAt TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, UNIQUE(boardId, kind));
@@ -50,6 +54,19 @@ export class SentinelStore {
       CREATE UNIQUE INDEX IF NOT EXISTS sentinel_runs_one_running ON sentinel_runs(sentinelId) WHERE status='running';
       CREATE INDEX IF NOT EXISTS sentinel_runs_by_sentinel ON sentinel_runs(sentinelId, startedAt);
     `);
+    // Request attempts used to live in sentinel_attempts, whose UNIQUE(head, mainTip) refused a second request at the same
+    // head and main. They move to pr_request_cards, in one transaction, so a crash leaves each row in one place.
+    const requestColumns = new Set((db.prepare("PRAGMA table_info(pr_request_cards)").all() as { name: string }[]).map(column => column.name));
+    for (const column of ["repo TEXT", "prNumber INTEGER", "branch TEXT", "head TEXT", "mainTip TEXT", "at TEXT"]) if (!requestColumns.has(column.split(" ")[0])) db.exec(`ALTER TABLE pr_request_cards ADD COLUMN ${column}`);
+    if (db.prepare("SELECT 1 FROM sentinel_attempts WHERE cardId IN (SELECT cardId FROM pr_request_cards)").get()) {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.exec(`UPDATE pr_request_cards SET (repo, prNumber, branch, head, mainTip, at) = (SELECT repo, prNumber, branch, head, mainTip, at FROM sentinel_attempts a WHERE a.cardId=pr_request_cards.cardId)
+            WHERE cardId IN (SELECT cardId FROM sentinel_attempts);
+          DELETE FROM sentinel_attempts WHERE cardId IN (SELECT cardId FROM pr_request_cards);`);
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+    }
     // One store is made per process, so a run still marked running was cut off by a restart.
     db.prepare("UPDATE sentinel_runs SET status='interrupted', finishedAt=?, error='Alice stopped during this run' WHERE status='running'").run(new Date().toISOString());
   }
@@ -136,7 +153,7 @@ export class SentinelStore {
    */
   adoptLegacyJobs(intervals: Record<SentinelKind, number> = defaultSentinelIntervals): number {
     const rows = this.db.prepare(`SELECT cards.id, cards.idempotencyKey AS "key", cards.createdAt, boards.id AS boardId, a.prNumber FROM cards JOIN boards ON boards.repo=cards.repo
-      LEFT JOIN sentinel_attempts a ON a.cardId=cards.id
+      LEFT JOIN ${allAttempts} a ON a.cardId=cards.id
       WHERE cards.sentinelId IS NULL AND (cards.idempotencyKey LIKE 'sentinel:%' OR cards.idempotencyKey LIKE 'request:%') ORDER BY cards.createdAt`).all() as { id: string; key: string; createdAt: string; boardId: string; prNumber: number | null }[];
     if (!rows.length) return 0;
     this.db.exec("BEGIN IMMEDIATE");
@@ -192,25 +209,36 @@ export class SentinelStore {
   setRequestCursor(repo: string, since: string): void {
     this.db.prepare("INSERT INTO pr_request_cursor(repo, since) VALUES (?, ?) ON CONFLICT(repo) DO UPDATE SET since=excluded.since").run(repo, since);
   }
-  /** Marks an attempt's card as made for a `/alice` request, not to fix a broken PR: the sentinel's limits and withdrawal leave it alone. */
-  markRequestCard(cardId: string): void { this.db.prepare("INSERT OR IGNORE INTO pr_request_cards(cardId) VALUES (?)").run(cardId); }
+  /**
+   * A card made for a `/alice` request, not to fix a broken PR: the sentinel's limits and withdrawal leave it alone.
+   * Kept apart from `sentinel_attempts`, so a request at a head and main already tried still gets its card.
+   */
+  recordRequestAttempt(repo: string, prNumber: number, branch: string, head: string, mainTip: string, cardId: string, at: string): void {
+    this.db.prepare("INSERT INTO pr_request_cards(cardId, repo, prNumber, branch, head, mainTip, at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(cardId, repo, prNumber, branch, head, mainTip, at);
+  }
+  /** Marks `/alice` comments as acted on or answered, so a later pass that reads them again leaves them alone. */
+  markRequestsHandled(commentIds: string[]): void {
+    const insert = this.db.prepare("INSERT OR IGNORE INTO pr_request_comments(commentId) VALUES (?)");
+    for (const id of commentIds) insert.run(id);
+  }
+  /** Which of these comments were acted on or answered. */
+  handledRequests(commentIds: string[]): Set<string> {
+    const handled = this.db.prepare("SELECT 1 FROM pr_request_comments WHERE commentId=?");
+    return new Set(commentIds.filter(id => handled.get(id)));
+  }
   isRequestCard(cardId: string): boolean { return !!this.db.prepare("SELECT 1 FROM pr_request_cards WHERE cardId=?").get(cardId); }
   /** Request cards of this repo with the PR each is for. */
   listRequestCards(repo: string): { cardId: string; prNumber: number }[] {
-    return this.db.prepare("SELECT a.cardId, a.prNumber FROM sentinel_attempts a JOIN pr_request_cards r ON r.cardId=a.cardId WHERE a.repo=?").all(repo) as { cardId: string; prNumber: number }[];
+    return this.db.prepare("SELECT cardId, prNumber FROM pr_request_cards WHERE repo=?").all(repo) as { cardId: string; prNumber: number }[];
   }
   attemptCount(repo: string, prNumber: number): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM sentinel_attempts WHERE repo=? AND prNumber=? AND cardId NOT IN (SELECT cardId FROM pr_request_cards)").get(repo, prNumber) as { n: number }).n;
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM sentinel_attempts WHERE repo=? AND prNumber=?").get(repo, prNumber) as { n: number }).n;
   }
   hasAttempt(repo: string, prNumber: number, head: string, mainTip: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM sentinel_attempts WHERE repo=? AND prNumber=? AND head=? AND mainTip=? AND cardId NOT IN (SELECT cardId FROM pr_request_cards)").get(repo, prNumber, head, mainTip);
+    return !!this.db.prepare("SELECT 1 FROM sentinel_attempts WHERE repo=? AND prNumber=? AND head=? AND mainTip=?").get(repo, prNumber, head, mainTip);
   }
   recordAttempt(repo: string, prNumber: number, branch: string, head: string, mainTip: string, cardId: string, at: string): void {
     this.db.prepare("INSERT INTO sentinel_attempts(repo, prNumber, branch, head, mainTip, cardId, at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(repo, prNumber, branch, head, mainTip, cardId, at);
-  }
-  /** Card ids of this PR's sentinel attempts, newest first. */
-  attemptCards(repo: string, prNumber: number): string[] {
-    return (this.db.prepare("SELECT cardId FROM sentinel_attempts WHERE repo=? AND prNumber=? ORDER BY id DESC").all(repo, prNumber) as { cardId: string }[]).map(row => row.cardId);
   }
   /** Returns true the first time it is called for a PR, so the "needs a person" comment is posted once. */
   markGivenUp(repo: string, prNumber: number, at: string): boolean {
@@ -218,12 +246,11 @@ export class SentinelStore {
   }
   /** Card ids of every sentinel attempt on a repo. */
   listAttemptCards(repo: string): string[] {
-    return (this.db.prepare("SELECT cardId FROM sentinel_attempts WHERE repo=? AND cardId NOT IN (SELECT cardId FROM pr_request_cards)").all(repo) as { cardId: string }[]).map(row => row.cardId);
+    return (this.db.prepare("SELECT cardId FROM sentinel_attempts WHERE repo=?").all(repo) as { cardId: string }[]).map(row => row.cardId);
   }
-  attemptPr(cardId: string): number | undefined {
-    return (this.db.prepare("SELECT prNumber FROM sentinel_attempts WHERE cardId=?").get(cardId) as { prNumber: number } | undefined)?.prNumber;
-  }
+  /** The PR a sentinel or request card works on. */
+  attemptPr(cardId: string): number | undefined { return this.attemptFor(cardId)?.prNumber; }
   attemptFor(cardId: string): { repo: string; prNumber: number; branch: string; head: string } | undefined {
-    return this.db.prepare("SELECT repo, prNumber, branch, head FROM sentinel_attempts WHERE cardId=?").get(cardId) as { repo: string; prNumber: number; branch: string; head: string } | undefined;
+    return this.db.prepare(`SELECT repo, prNumber, branch, head FROM ${allAttempts} WHERE cardId=?`).get(cardId) as { repo: string; prNumber: number; branch: string; head: string } | undefined;
   }
 }

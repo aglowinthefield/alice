@@ -26,12 +26,17 @@ test("githubMarkdown leaves external links, code and plain text alone", () => {
 test("a pull request body built from a report carries no relative attachment URL", () => {
   const body = pullRequestBody(
     `Summary\n\n${shot}`,
-    { id: "c1" },
+    { id: "c1", idempotencyKey: null },
     { output: `Report\n${shot}` },
   );
   assert.doesNotMatch(body, /\(\/api\//);
   assert.match(body, /before\.png/);
   assert.match(body, /Opened by Alice for card `c1`/);
+});
+
+test("a pull request body names the card's key, so whatever created the card can find its PR", () => {
+  const body = pullRequestBody("Summary", { id: "c1", idempotencyKey: "gh-42/t1" }, { output: "" });
+  assert.match(body, /Opened by Alice for card `c1` \(key `gh-42\/t1`\)\./);
 });
 
 test("githubMarkdown leaves unrelated /api links alone and rewrites chat images", () => {

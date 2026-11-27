@@ -286,8 +286,9 @@ export class AutoReview {
   }
   private async review(prompt: string, repo: string, cwd: string, runId: string, models: string[]): Promise<string> {
     // Same capabilities as a card run (tools, extensions, MCP, skills, context files), without a saved session.
+    // IMPRESSION_SESSION=off: the reviewer judges from the card, the diff and the repository, not from saved memories.
     const args = ["--print", "--mode", "json", "--no-session", ...models, "--", prompt];
-    const child = spawn(...command(this.piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
+    const child = spawn(...command(this.piBin, args), { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo), IMPRESSION_SESSION: "off" } });
     this.reviewers.set(runId, child);
     try { return await new Promise<string>((resolve, reject) => {
       let stdout = "", stderr = "", exceeded = false, pending = "";

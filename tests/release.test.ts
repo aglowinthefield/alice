@@ -13,7 +13,7 @@ function git(cwd: string, ...args: string[]) {
 }
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-release-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-release-"));
   git(dir, "init", "-q", "-b", "main");
   git(dir, "config", "user.email", "t@example.com");
   git(dir, "config", "user.name", "T");

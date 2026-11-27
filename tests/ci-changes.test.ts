@@ -15,7 +15,7 @@ test("a test and a dev dependency run on Linux only", () => {
 });
 
 test("OS-sensitive code adds macOS", () => {
-  for (const file of ["server/platform.ts", "server/worker.ts", "server/integration.ts", "src/review.tsx", "desktop/index.html", "src-tauri/Cargo.toml", "tests/chat-ui.test.ts"]) {
+  for (const file of ["server/platform.ts", "server/worker.ts", "server/integration.ts", "src/review.tsx", "shared/wire.ts", "desktop/index.html", "src-tauri/Cargo.toml", "tests/chat-ui.test.ts"]) {
     assert.deepEqual(plan(["README.md", file]), { test: true, os: [linux, macos] }, file);
   }
 });

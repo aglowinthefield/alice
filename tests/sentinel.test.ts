@@ -25,13 +25,13 @@ test("a lock comment round-trips and expires after 30 minutes", () => {
   assert.deepEqual(parseLock(lockBody(released)), released);
   assert.equal(lockStatus(released, start + 10 * lockTtlMs), "released");
   assert.equal(parseLock("just a comment"), undefined);
-  assert.equal(parseLock("<!-- bakery-lock {nope} -->"), undefined);
+  assert.equal(parseLock("<!-- alice-lock {nope} -->"), undefined);
 });
 
 type Pr = { number: number; title: string; url: string; author: { login: string }; isDraft: boolean; mergeable: string; failing?: boolean; state: string; fork?: boolean; headRefOid: string; headRefName: string };
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-sentinel-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-sentinel-"));
   const origin = join(dir, "origin.git"), repo = join(dir, "repo"), upstream = join(dir, "upstream");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
   execFileSync("git", ["clone", "-q", origin, upstream], { stdio: "ignore" });
@@ -59,9 +59,9 @@ function fixture() {
     health: async (_repo: string, number: number) => { const pr = prs.find(item => item.number === number)!; return { mergeable: pr.mergeable, statusCheckRollup: pr.failing ? [{ name: "test", conclusion: "FAILURE" }] : [] }; },
     view: async (_repo: string, number: number) => prs.find(pr => pr.number === number)!,
     listComments: async (_repo: string, number: number) => [...(comments.get(number) ?? [])],
-    createComment: async (_repo: string, number: number, body: string) => { const id = String(nextComment++); comments.set(number, [...(comments.get(number) ?? []), { id, body, author: "bakery" }]); return id; },
+    createComment: async (_repo: string, number: number, body: string) => { const id = String(nextComment++); comments.set(number, [...(comments.get(number) ?? []), { id, body, author: "alice" }]); return id; },
     editComment: async (_repo: string, id: string, body: string) => { for (const list of comments.values()) for (const item of list) if (item.id === id) item.body = body; },
-    comment: async (_repo: string, number: number, body: string) => { comments.set(number, [...(comments.get(number) ?? []), { id: String(nextComment++), body, author: "bakery" }]); },
+    comment: async (_repo: string, number: number, body: string) => { comments.set(number, [...(comments.get(number) ?? []), { id: String(nextComment++), body, author: "alice" }]); },
   } as unknown as GitHub;
   const store = new SentinelStore(board.sqlite);
   let clock = Date.parse("2026-01-01T00:00:00.000Z");
@@ -169,10 +169,10 @@ test("a pending lock row left by a crash is settled from the PR", async () => {
   } finally { f.cleanup(); }
 });
 
-test("the brief names the branch and leaves the push to Bakery", () => {
+test("the brief names the branch and leaves the push to Alice", () => {
   const brief = sentinelBrief({ repo: "acme/widgets", number: 5, url: "u", branch: "feat", head: "a".repeat(40), mainTip: "b".repeat(40), problems: ["It conflicts with main."] });
   assert.match(brief, /git switch -C feat origin\/feat/);
-  assert.match(brief, /Bakery force-pushes it/);
+  assert.match(brief, /Alice force-pushes it/);
 });
 
 test("a run locks its card's PR while it works, and releases it when it finishes", async () => {
@@ -195,7 +195,7 @@ test("a run locks its card's PR while it works, and releases it when it finishes
   } finally { f.cleanup(); }
 });
 
-test("after a sentinel run Bakery pushes the rebased branch with a lease", async () => {
+test("after a sentinel run Alice pushes the rebased branch with a lease", async () => {
   const f = fixture();
   try {
     const commit = ["-c", "user.name=t", "-c", "user.email=t@t"];
@@ -255,7 +255,7 @@ test("the push is refused when someone pushed to the PR branch after the card wa
   } finally { f.cleanup(); }
 });
 
-test("when main moves during the run, Bakery rebases the result onto it and still pushes", async () => {
+test("when main moves during the run, Alice rebases the result onto it and still pushes", async () => {
   const f = fixture();
   try {
     const commit = ["-c", "user.name=t", "-c", "user.email=t@t"];
@@ -300,7 +300,7 @@ test("a pre-push hook that refuses does not stop the sentinel's push", async () 
   } finally { f.cleanup(); }
 });
 
-test("a /bakery comment from a trusted author on any PR makes a Ready request card, once", async () => {
+test("a /alice comment from a trusted author on any PR makes a Ready request card, once", async () => {
   const f = fixture();
   try {
     const pr = f.addPr({ mergeable: "MERGEABLE", author: { login: "someone" } });
@@ -309,8 +309,8 @@ test("a /bakery comment from a trusted author on any PR makes a Ready request ca
     assert.ok(since, "the first look only records where to start");
     const at = new Date(Date.parse(since) + 1000).toISOString();
     f.asked.push(
-      { id: "issues/comments:1", at, author: "aglowinthefield", association: "MEMBER", body: "/bakery rename foo to bar", prNumber: pr.number },
-      { id: "issues/comments:2", at, author: "stranger", association: "NONE", body: "/bakery delete everything", prNumber: pr.number },
+      { id: "issues/comments:1", at, author: "aglowinthefield", association: "MEMBER", body: "/alice rename foo to bar", prNumber: pr.number },
+      { id: "issues/comments:2", at, author: "stranger", association: "NONE", body: "/alice delete everything", prNumber: pr.number },
       { id: "issues/comments:3", at, author: "aglowinthefield", association: "MEMBER", body: "looks good", prNumber: pr.number },
     );
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
@@ -328,15 +328,15 @@ test("a /bakery comment from a trusted author on any PR makes a Ready request ca
   } finally { f.cleanup(); }
 });
 
-test("a /bakery comment that waits behind an open request card says so on the PR, once", async () => {
+test("a /alice comment that waits behind an open request card says so on the PR, once", async () => {
   const f = fixture();
   try {
     const pr = f.addPr({ mergeable: "MERGEABLE", author: { login: "someone" } });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const at = (seconds: number) => new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + seconds * 1000).toISOString();
-    f.asked.push({ id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/bakery first", prNumber: pr.number });
+    f.asked.push({ id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/alice first", prNumber: pr.number });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
-    f.asked.push({ id: "issues/comments:2", at: at(10), author: "a", association: "OWNER", body: "/bakery second", prNumber: pr.number });
+    f.asked.push({ id: "issues/comments:2", at: at(10), author: "a", association: "OWNER", body: "/alice second", prNumber: pr.number });
     for (let i = 0; i < 3; i++) await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     assert.deepEqual(f.reacted, ["issues/comments:1", "issues/comments:2"]);
     const waiting = f.comments.get(pr.number)!.filter(item => /earlier request on this pull request is still being worked on/.test(item.body));
@@ -344,7 +344,7 @@ test("a /bakery comment that waits behind an open request card says so on the PR
   } finally { f.cleanup(); }
 });
 
-test("a /bakery comment whose PR could not be read is retried on the next pass, and the failed pass is recorded", async () => {
+test("a /alice comment whose PR could not be read is retried on the next pass, and the failed pass is recorded", async () => {
   const f = fixture();
   try {
     const [first, second] = [f.addPr({ mergeable: "MERGEABLE" }), f.addPr({ mergeable: "MERGEABLE" })];
@@ -352,8 +352,8 @@ test("a /bakery comment whose PR could not be read is retried on the next pass, 
     const start = f.store.requestCursor("acme/widgets")!;
     const at = (seconds: number) => new Date(Date.parse(start) + seconds * 1000).toISOString();
     f.asked.push(
-      { id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/bakery fix the first", prNumber: first.number },
-      { id: "issues/comments:2", at: at(2), author: "a", association: "OWNER", body: "/bakery fix the second", prNumber: second.number },
+      { id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/alice fix the first", prNumber: first.number },
+      { id: "issues/comments:2", at: at(2), author: "a", association: "OWNER", body: "/alice fix the second", prNumber: second.number },
     );
     f.unreadable.add(first.number);
     const requests = () => f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR")).map(card => card.title).sort();
@@ -380,7 +380,7 @@ test("a pass retried after a failed card never folds a request already on a card
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const start = f.store.requestCursor("acme/widgets")!;
     const at = (seconds: number) => new Date(Date.parse(start) + seconds * 1000).toISOString();
-    const ask = (id: number, seconds: number, pr: Pr) => ({ id: `issues/comments:${id}`, at: at(seconds), author: "a", association: "OWNER", body: `/bakery change ${id}`, prNumber: pr.number });
+    const ask = (id: number, seconds: number, pr: Pr) => ({ id: `issues/comments:${id}`, at: at(seconds), author: "a", association: "OWNER", body: `/alice change ${id}`, prNumber: pr.number });
     f.asked.push(ask(1, 1, a), ask(2, 2, b), ask(3, 3, a));
     // B's card fails inside its transaction, after A's card was made.
     const record = f.store.recordRequestAttempt.bind(f.store);
@@ -408,7 +408,7 @@ test("a fork refusal that could not be posted is posted on the next pass, once",
     const pr = f.addPr({ mergeable: "MERGEABLE", fork: true });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const start = f.store.requestCursor("acme/widgets")!;
-    f.asked.push({ id: "issues/comments:1", at: new Date(Date.parse(start) + 1000).toISOString(), author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number });
+    f.asked.push({ id: "issues/comments:1", at: new Date(Date.parse(start) + 1000).toISOString(), author: "a", association: "OWNER", body: "/alice fix it", prNumber: pr.number });
     const comment = f.github.comment.bind(f.github);
     let fail = true;
     Object.assign(f.github, { comment: async (...args: Parameters<typeof comment>) => { if (fail) { fail = false; throw new Error("HTTP 502: Bad Gateway"); } return comment(...args); } });
@@ -431,11 +431,11 @@ test("a second request on a PR gets its card at the same head and main as the fi
     const mainTip = git(f.repo, "rev-parse", "origin/main");
     f.store.recordAttempt("acme/widgets", pr.number, pr.headRefName, pr.headRefOid, mainTip, "health-card", at(0));
     const requests = () => f.board.listCards(f.repo).filter(card => card.title.startsWith("Requested on PR"));
-    f.asked.push({ id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/bakery first", prNumber: pr.number });
+    f.asked.push({ id: "issues/comments:1", at: at(1), author: "a", association: "OWNER", body: "/alice first", prNumber: pr.number });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     // The first card finishes without pushing, so the PR's head and main stay where they were.
     f.board.setStatus(requests()[0].id, "done");
-    f.asked.push({ id: "issues/comments:2", at: at(2), author: "a", association: "OWNER", body: "/bakery second", prNumber: pr.number });
+    f.asked.push({ id: "issues/comments:2", at: at(2), author: "a", association: "OWNER", body: "/alice second", prNumber: pr.number });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const second = requests().find(card => card.status !== "done");
     assert.ok(second, "the second request gets a card");
@@ -448,7 +448,7 @@ test("a second request on a PR gets its card at the same head and main as the fi
 });
 
 test("request attempts stored with health attempts move to their own table, keeping their lookups", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-request-attempts-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-request-attempts-"));
   const db = new DatabaseSync(join(dir, "old.sqlite"));
   try {
     db.exec(`CREATE TABLE sentinel_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, prNumber INTEGER NOT NULL, branch TEXT NOT NULL, head TEXT NOT NULL, mainTip TEXT NOT NULL, cardId TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(repo, prNumber, head, mainTip));
@@ -471,12 +471,12 @@ test("a request whose PR closed before the retry is answered once, and never mad
     const pr = f.addPr({ mergeable: "MERGEABLE" });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
-    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number });
+    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/alice fix it", prNumber: pr.number });
     f.unreadable.add(pr.number);
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     pr.state = "MERGED";
     for (let i = 0; i < 2; i++) await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
-    assert.deepEqual(f.comments.get(pr.number)!.map(item => item.body.split("\n")[0]), ["Bakery can't act on this request: the pull request is merged."]);
+    assert.deepEqual(f.comments.get(pr.number)!.map(item => item.body.split("\n")[0]), ["Alice can't act on this request: the pull request is merged."]);
     assert.equal(f.board.listCards(f.repo).length, 0);
     assert.equal(f.store.requestCursor("acme/widgets"), at);
   } finally { f.cleanup(); }
@@ -492,12 +492,12 @@ test("a request on a PR a card only watches is answered, and makes no job that w
     f.board.setPullRequestOverride(watcher.id, pr.url);
     await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
-    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number });
+    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/alice fix it", prNumber: pr.number });
     const comment = f.github.comment.bind(f.github);
     let fail = true;
     Object.assign(f.github, { comment: async (...args: Parameters<typeof comment>) => { if (fail) { fail = false; throw new Error("HTTP 502: Bad Gateway"); } return comment(...args); } });
     for (let i = 0; i < 3; i++) await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
-    assert.deepEqual(f.comments.get(pr.number)!.map(item => item.body.split("\n")[0]), ['Bakery can\'t act on this request: this pull request is linked to the card "Watch the release PR", which only watches it. Bakery pushes only to the branches of cards it opened.'], "a reply that failed is posted on a later pass, once");
+    assert.deepEqual(f.comments.get(pr.number)!.map(item => item.body.split("\n")[0]), ['Alice can\'t act on this request: this pull request is linked to the card "Watch the release PR", which only watches it. Alice pushes only to the branches of cards it opened.'], "a reply that failed is posted on a later pass, once");
     assert.deepEqual(f.board.listCards(f.repo).map(card => card.id), [watcher.id]);
     assert.deepEqual(f.store.listRequestCards("acme/widgets"), []);
     assert.deepEqual(started, []);
@@ -505,29 +505,29 @@ test("a request on a PR a card only watches is answered, and makes no job that w
   } finally { f.cleanup(); }
 });
 
-test("a /bakery comment on an issue is ignored even where origin has no main", async () => {
+test("a /alice comment on an issue is ignored even where origin has no main", async () => {
   const f = fixture();
   try {
     git(f.origin, "branch", "-m", "main", "trunk");
     git(f.repo, "update-ref", "-d", "refs/remotes/origin/main");
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
-    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: 999 });
+    f.asked.push({ id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/alice fix it", prNumber: 999 });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     assert.equal(f.store.listRuns(sentinelOf(f, "pr-requests").id, 1)[0].status, "succeeded");
     assert.equal(f.store.requestCursor("acme/widgets"), at);
   } finally { f.cleanup(); }
 });
 
-test("a /bakery comment on a fork's PR is declined, and one on an issue is ignored", async () => {
+test("a /alice comment on a fork's PR is declined, and one on an issue is ignored", async () => {
   const f = fixture();
   try {
     const pr = f.addPr({ mergeable: "MERGEABLE", fork: true });
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     const at = new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString();
     f.asked.push(
-      { id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: pr.number },
-      { id: "issues/comments:2", at, author: "a", association: "OWNER", body: "/bakery fix it", prNumber: 999 },
+      { id: "issues/comments:1", at, author: "a", association: "OWNER", body: "/alice fix it", prNumber: pr.number },
+      { id: "issues/comments:2", at, author: "a", association: "OWNER", body: "/alice fix it", prNumber: 999 },
     );
     await f.sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     assert.equal(f.board.listCards(f.repo).length, 0);
@@ -536,7 +536,7 @@ test("a /bakery comment on a fork's PR is declined, and one on an issue is ignor
   } finally { f.cleanup(); }
 });
 
-test("the sentinel starts its own jobs, from the timer or a /bakery comment, and retries one that could not start", async () => {
+test("the sentinel starts its own jobs, from the timer or a /alice comment, and retries one that could not start", async () => {
   const f = fixture();
   try {
     const started: string[] = [];
@@ -550,7 +550,7 @@ test("the sentinel starts its own jobs, from the timer or a /bakery comment, and
     assert.deepEqual(started, [`Fix PR #${pr.number}: ${pr.title}`]);
     const other = f.addPr({ mergeable: "MERGEABLE" });
     await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
-    f.asked.push({ id: "issues/comments:9", at: new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString(), author: "aglowinthefield", association: "MEMBER", body: "/bakery add a test", prNumber: other.number });
+    f.asked.push({ id: "issues/comments:9", at: new Date(Date.parse(f.store.requestCursor("acme/widgets")!) + 1000).toISOString(), author: "aglowinthefield", association: "MEMBER", body: "/alice add a test", prNumber: other.number });
     await sentinel.requestsPass(f.board.getBoard(f.repoBoard.id)!);
     assert.equal(started.length, 2);
     assert.match(started[1], /^Requested on PR/, "the request job starts as soon as it is made");

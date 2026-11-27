@@ -24,9 +24,9 @@ import { SvgGraph } from "./svg-graph.js";
 const refreshMs = 15_000;
 /** While an agent's live tool is shown, its elapsed time ticks every second. */
 const liveRefreshMs = 1_000;
-const glowKey = "bakery-visualizer-glow";
-const doneKey = "bakery-visualizer-done";
-const triageKey = "bakery-visualizer-triage";
+const glowKey = "alice-visualizer-glow";
+const doneKey = "alice-visualizer-done";
+const triageKey = "alice-visualizer-triage";
 const doneFilters: DoneFilter[] = ["all", "relevant", "hide"];
 const readDone = (): DoneFilter => {
   const saved = localStorage.getItem(doneKey);

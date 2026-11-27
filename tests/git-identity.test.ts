@@ -12,8 +12,8 @@ function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 }
 
-test("Bakery's approval commits and merge are the operator's: their identity, signed with their key", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-identity-"));
+test("Alice's approval commits and merge are the operator's: their identity, signed with their key", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-identity-"));
   const repo = join(dir, "repo"), data = join(dir, "data"), key = join(dir, "signing");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
   execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "operator", "-f", key]);
@@ -29,7 +29,7 @@ test("Bakery's approval commits and merge are the operator's: their identity, si
     const created = board.createCard({ title: "Operator work", body: "", repo });
     board.setStatus(created.id, "ready");
     const run = board.claim(created.id), worktree = join(data, "worktrees", created.id);
-    git(repo, "worktree", "add", "-qb", `bakery/${created.id}`, worktree, "HEAD");
+    git(repo, "worktree", "add", "-qb", `alice/${created.id}`, worktree, "HEAD");
     board.attach(run.id, process.pid, worktree);
     board.finish(run.id, "review");
     writeFileSync(join(worktree, "README.md"), "original\nreviewed\n");
@@ -38,22 +38,22 @@ test("Bakery's approval commits and merge are the operator's: their identity, si
     const format = "--format=%an <%ae>|%cn <%ce>|%G?|%GS|%s";
     assert.deepEqual([git(repo, "log", "-1", format, "main"), git(repo, "log", "-1", format, "main^2")], [
       "Operator <operator@example.invalid>|Operator <operator@example.invalid>|G|operator@example.invalid|Merge card: Operator work",
-      "Operator <operator@example.invalid>|Operator <operator@example.invalid>|G|operator@example.invalid|Bakery card: Operator work",
+      "Operator <operator@example.invalid>|Operator <operator@example.invalid>|G|operator@example.invalid|Alice card: Operator work",
     ]);
   } finally { board.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("Bakery fills in its own name and email only where the repository has none", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-identity-"));
+test("Alice fills in its own name and email only where the repository has none", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-identity-"));
   const saved = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_NOSYSTEM };
   try {
     writeFileSync(join(dir, "empty-gitconfig"), "");
     process.env.GIT_CONFIG_GLOBAL = join(dir, "empty-gitconfig");
     process.env.GIT_CONFIG_NOSYSTEM = "1";
     git(dir, "init", "-q");
-    assert.deepEqual(commitIdentityArgs(dir), ["-c", "user.name=Bakery", "-c", "user.email=bakery@localhost"]);
+    assert.deepEqual(commitIdentityArgs(dir), ["-c", "user.name=Alice", "-c", "user.email=alice@localhost"]);
     git(dir, "config", "user.email", "operator@example.invalid");
-    assert.deepEqual(commitIdentityArgs(dir), ["-c", "user.name=Bakery"]);
+    assert.deepEqual(commitIdentityArgs(dir), ["-c", "user.name=Alice"]);
     git(dir, "config", "user.name", "Operator");
     assert.deepEqual(commitIdentityArgs(dir), []);
   } finally {

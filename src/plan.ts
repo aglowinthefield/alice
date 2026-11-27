@@ -2,13 +2,14 @@
 export type Subtask = { id: string; title: string; body: string; dependsOn: string[] };
 
 /**
- * Reads the last fenced `bakery-plan` block in an agent report: a JSON array of
+ * Reads the last fenced `alice-plan` block in an agent report: a JSON array of
  * `{ id, title, body, dependsOn? }`. Returns the subtasks in an order where every one follows its dependencies,
  * or an error naming what is wrong (bad JSON, duplicate or unknown ids, a cycle, more than 20 subtasks).
  * A report without the block has no plan.
  */
 export function parsePlan(report: string): { subtasks: Subtask[] } | { error: string } | null {
-  const blocks = [...report.matchAll(/^```bakery-plan[ \t]*\n([\s\S]*?)^```[ \t]*$/gm)];
+  // Reports written before the rename fence the plan as bakery-plan.
+  const blocks = [...report.matchAll(/^```(?:alice|bakery)-plan[ \t]*\n([\s\S]*?)^```[ \t]*$/gm)];
   if (!blocks.length) return null;
   let data: unknown;
   try { data = JSON.parse(blocks[blocks.length - 1][1]); } catch { return { error: "The plan is not valid JSON." }; }

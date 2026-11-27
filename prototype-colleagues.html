@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <title>Colleagues prototype (fixture data) · Bakery</title>
+    <title>Colleagues prototype (fixture data) · Alice</title>
     <script>
       try {
-        const theme = localStorage.getItem("bakery-theme");
+        const theme = localStorage.getItem("alice-theme") ?? localStorage.getItem("bakery-theme");
         if (theme && theme !== "default" && /^[a-z-]+$/.test(theme)) {
           document.documentElement.dataset.theme = theme === "compline-system"
             ? (matchMedia("(prefers-color-scheme: light)").matches ? "compline-light" : "compline")

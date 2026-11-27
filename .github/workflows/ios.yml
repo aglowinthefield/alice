@@ -25,5 +25,5 @@ jobs:
       - name: Build for simulator
         run: |
           cd ios
-          xcodebuild -project Bakery.xcodeproj -scheme Bakery -sdk iphonesimulator \
+          xcodebuild -project Alice.xcodeproj -scheme Alice -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build-for-testing

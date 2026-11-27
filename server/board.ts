@@ -138,6 +138,10 @@ export type Run = { id: string; cardId: string; attempt: number; status: "runnin
   recoveryOf: string | null;
   /** 1 when this failed automatic run put its card back in Ready for an automatic retry, so it does not pause pickup. */
   retryScheduled: number;
+  /** When the process in `pid` started (`processStartTime`), so a reused PID is never taken for the run's. */
+  pidStartedAt: string | null;
+  /** Bytes of the run's `events.jsonl` already applied to the transcript, saved with the effects they produced. */
+  eventsOffset: number;
   /** Files the run's work changes against main, as of the last time Bakery looked; null until it has. */
   changedFiles: number | null } & UsageFields;
 export type Approval = { cardId: string; runId: string; candidate: string; preparedHead: string | null; merged: number };
@@ -381,6 +385,10 @@ export class Board {
     // The failed run a fresh-session recovery run replaced. Later runs on the card resume the recovery run's session.
     if (!runColumns.has("recoveryOf")) this.db.exec("ALTER TABLE runs ADD COLUMN recoveryOf TEXT");
     if (!runColumns.has("retryScheduled")) this.db.exec("ALTER TABLE runs ADD COLUMN retryScheduled INTEGER NOT NULL DEFAULT 0");
+    // A detached run's shim: its start time tells it from a later process with the same PID, and the offset is how far
+    // its event file has been applied. Older runs piped into the server and keep NULL and 0.
+    if (!runColumns.has("pidStartedAt")) this.db.exec("ALTER TABLE runs ADD COLUMN pidStartedAt TEXT");
+    if (!runColumns.has("eventsOffset")) this.db.exec("ALTER TABLE runs ADD COLUMN eventsOffset INTEGER NOT NULL DEFAULT 0");
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(auto_review_jobs)").all() as { name: string }[]).map(column => column.name));
     if (!jobColumns.has("agent")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN agent TEXT NOT NULL DEFAULT ''");
     if (!jobColumns.has("interruptions")) this.db.exec("ALTER TABLE auto_review_jobs ADD COLUMN interruptions INTEGER NOT NULL DEFAULT 0");
@@ -1595,7 +1603,22 @@ export class Board {
   }
   getRun(id: string): Run | undefined { return this.db.prepare("SELECT * FROM runs WHERE id=?").get(id) as Run | undefined; }
   listRuns(cardId: string): Run[] { return this.db.prepare("SELECT * FROM runs WHERE cardId=? ORDER BY attempt DESC").all(cardId) as Run[]; }
-  attach(id: string, pid: number, worktree: string) { this.db.prepare("UPDATE runs SET pid=?, worktree=?, lastActivityAt=? WHERE id=? AND status='running'").run(pid, worktree, now(), id); }
+  attach(id: string, pid: number, worktree: string, pidStartedAt: string | null = null) { this.db.prepare("UPDATE runs SET pid=?, pidStartedAt=?, worktree=?, lastActivityAt=? WHERE id=? AND status='running'").run(pid, pidStartedAt, worktree, now(), id); }
+  /** Runs still marked running, oldest first. */
+  listRunningRuns(): Run[] { return this.db.prepare("SELECT * FROM runs WHERE status='running' ORDER BY startedAt").all() as Run[]; }
+  /**
+   * Applies a batch of a run's events (`apply` makes the `append`, `recordUsage` and similar calls) and saves `offset`,
+   * the byte after the batch's last line, in one transaction, so a crash never leaves effects applied twice or lost.
+   * Any error rolls back the whole batch and its offset. A piped run has no event file and passes a null offset.
+   */
+  applyRunEvents(id: string, offset: number | null, apply: () => void) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      apply();
+      if (offset !== null) this.db.prepare("UPDATE runs SET eventsOffset=? WHERE id=? AND status='running'").run(offset, id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   /** The run's agent reported something. Lets the board tell a working run from a quiet one. */
   touch(id: string) { this.db.prepare("UPDATE runs SET lastActivityAt=? WHERE id=? AND status='running'").run(now(), id); }
   recordAgent(id: string, label: string) {

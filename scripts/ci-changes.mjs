@@ -16,7 +16,7 @@ const docsOnly = [/\.md$/i, /^docs\//, /^\.github\/ISSUE_TEMPLATE\//];
 // `chat-images.test.ts`) counts with it.
 const processModules = [
   "platform", "auto-review", "board", "chat", "discuss", "github", "index", "integration", "lock", "origin-main",
-  "origin", "pr-draft", "pr-lock", "run-locks", "sentinel", "sentinel-store", "shared-cache-env", "shared-caches",
+  "origin", "pr-draft", "pr-lock", "run-locks", "run-shim", "sentinel", "sentinel-store", "shared-cache-env", "shared-caches",
   "turbo-summary", "updates", "worker",
 ];
 // Tests that launch Playwright without the `-ui.test.ts` suffix (grep -l playwright tests/*.ts).

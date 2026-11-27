@@ -13,7 +13,7 @@ import { Board, isSentinelJob, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
-import { PoisonedSessionError, Worker } from "./worker.js";
+import { PoisonedSessionError, recoverDetachedRuns, Worker } from "./worker.js";
 import { CommitHookError, Integration, IntegrationConflictError, PushHookError } from "./integration.js";
 import { OriginMain } from "./origin-main.js";
 import { AutoReview } from "./auto-review.js";
@@ -54,7 +54,7 @@ const lockPath = join(dataDir, "server.lock");
 const lock = acquireLock(lockPath);
 if (promoteStagedUi(process.cwd())) console.log("Serving the UI built by the last update.");
 let board: Board;
-try { board = new Board(join(dataDir, "bakery.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
+try { board = new Board(join(dataDir, "bakery.sqlite")); await recoverDetachedRuns(board, dataDir); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const piBin = process.env.BAKERY_PI_BIN ?? "pi";
 /** Cards whose discussion reply is being written; one at a time per card. */

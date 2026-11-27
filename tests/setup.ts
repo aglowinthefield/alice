@@ -4,6 +4,8 @@ import { chromium, webkit } from "playwright";
 // environment carries Bakery's own remote-hosting settings, which would bind the test server to another address.
 delete process.env.BAKERY_HOST;
 delete process.env.BAKERY_ALLOWED_HOSTS;
+// A Bakery card run with shared caches on sets this for its agent; the worker tests expect it unset unless they enable it.
+delete process.env.TURBO_CACHE_DIR;
 // Optional features are off in a default build (src/features.ts). Most tests cover them, so the suite turns them on;
 // tests/features.test.ts sets each combination itself.
 process.env.BAKERY_FEATURE_SENTINELS ??= "1";

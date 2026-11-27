@@ -182,7 +182,7 @@ export function Header({
   );
 }
 
-const legendKey = "bakery-visualizer-legend";
+const legendKey = "alice-visualizer-legend";
 
 /** What each state looks like, laid over the graph's lower right corner. It collapses to a small button, and stays above the shortcuts hint. */
 export function Legend({ look }: { look: Look }) {

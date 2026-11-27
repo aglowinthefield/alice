@@ -1,19 +1,19 @@
-# Bakery reference
+# Alice reference
 
 The full feature reference. For an overview, see the [README](../README.md).
 
-Bakery is a local kanban board that hands coding tasks to Pi agents, one Git worktree per card. Nothing reaches your `main` branch until you approve it.
+Alice is a local kanban board that hands coding tasks to Pi agents, one Git worktree per card. Nothing reaches your `main` branch until you approve it.
 
-Bakery doesn't push, deploy, or write to an issue tracker unless you turn it on. PRs open only on GitHub pull request boards, and a board can opt in to pushing `main` after each local merge (see [Reviewing and merging](#reviewing-and-merging)).
+Alice doesn't push, deploy, or write to an issue tracker unless you turn it on. PRs open only on GitHub pull request boards, and a board can opt in to pushing `main` after each local merge (see [Reviewing and merging](#reviewing-and-merging)).
 
 ```mermaid
 flowchart LR
   you([You]) -->|browser| ui[Board UI]
-  you -->|terminal| cli[bakery-cli]
+  you -->|terminal| cli[alice]
   ui --> server
   cli --> server
-  server[Bakery server<br/>127.0.0.1:4317] --> db[(SQLite)]
-  server -->|one per card| wt[Git worktree<br/>branch bakery/CARD_ID]
+  server[Alice server<br/>127.0.0.1:4317] --> db[(SQLite)]
+  server -->|one per card| wt[Git worktree<br/>branch alice/CARD_ID]
   server -->|spawns| pi[pi agent]
   pi -->|edits| wt
   wt -->|Approve and merge into local main| main[local main]
@@ -52,7 +52,7 @@ Open http://127.0.0.1:5173.
 
 `npm run dev` runs the server under a supervisor that owns ports 4317 and 5173 (the server listens on 14317 and Vite on 15173) and reloads the server when code changes. While the server or Vite is down, page loads on either port get a static status page with elapsed and typical restart time, which reloads when the server is back.
 
-To run a single production server instead, run `npm run build && BAKERY_SERVE_UI=1 npm start` and open http://127.0.0.1:4317. To keep it running in the background, see [Running as a service](#running-as-a-service).
+To run a single production server instead, run `npm run build && ALICE_SERVE_UI=1 npm start` and open http://127.0.0.1:4317. To keep it running in the background, see [Running as a service](#running-as-a-service).
 
 Then:
 
@@ -65,23 +65,23 @@ Uncommitted or untracked files in your checkout don't appear in card worktrees.
 
 ## Today
 
-Bakery opens on **Today**, which covers every repository at once. After you open a board, Bakery reopens on that board until you click **Today** in the sidebar again.
+Alice opens on **Today**, which covers every repository at once. After you open a board, Alice reopens on that board until you click **Today** in the sidebar again.
 
-- **Since your last visit** gives a count of cards merged since you last opened Bakery, how many cards need you, and the last-24h cost across repositories.
-- **Capture** adds a Triage card to the repository you pick. Bakery remembers the repository. From a terminal, `bakery-cli add ...` does the same thing for the repository you're in.
+- **Since your last visit** gives a count of cards merged since you last opened Alice, how many cards need you, and the last-24h cost across repositories.
+- **Capture** adds a Triage card to the repository you pick. Alice remembers the repository. From a terminal, `alice add ...` does the same thing for the repository you're in.
 - **Needs you** lists Review cards (longest-waiting first), then Failed and Interrupted cards. The sidebar shows the same count next to **Today**.
 - **Review N cards** opens Review cards one at a time, oldest first. When a card leaves Review, either because you approved it or because it ran again, the next card opens. **Next card** skips ahead. Closing the card ends the queue.
 - **Running** and **Finished since your last visit** list the rest. Click any card to open its details.
 
 ### Worktrunk hooks
 
-If [Worktrunk](https://worktrunk.dev) is installed, Bakery runs your repository's creation hooks in each new card worktree before Pi starts. Use them to install dependencies or copy `.env` and other ignored files (`wt step copy-ignored`). Hooks live in `.config/wt.toml` in the repository, or in `~/.config/worktrunk/config.toml`.
+If [Worktrunk](https://worktrunk.dev) is installed, Alice runs your repository's creation hooks in each new card worktree before Pi starts. Use them to install dependencies or copy `.env` and other ignored files (`wt step copy-ignored`). Hooks live in `.config/wt.toml` in the repository, or in `~/.config/worktrunk/config.toml`.
 
-- `pre-start` hooks run first, and Pi waits for them. If one fails, the attempt fails with the hook output in its transcript. Bakery removes the new worktree and branch so the next attempt runs the hooks again.
+- `pre-start` hooks run first, and Pi waits for them. If one fails, the attempt fails with the hook output in its transcript. Alice removes the new worktree and branch so the next attempt runs the hooks again.
 - `post-start` hooks start in the background, as they do under `wt switch`.
-- Hooks run only when Bakery creates the worktree. Retries and conflict repairs reuse it without running them.
-- Bakery passes `--yes`, so project hooks run without Worktrunk's approval prompt. Pi runs commands in the same worktree anyway.
-- Bakery still picks the worktree path and handles review and merge itself. It doesn't call `wt switch` or `wt merge`.
+- Hooks run only when Alice creates the worktree. Retries and conflict repairs reuse it without running them.
+- Alice passes `--yes`, so project hooks run without Worktrunk's approval prompt. Pi runs commands in the same worktree anyway.
+- Alice still picks the worktree path and handles review and merge itself. It doesn't call `wt switch` or `wt merge`.
 
 ## Card lifecycle
 
@@ -103,13 +103,14 @@ stateDiagram-v2
 ```
 
 - **A finished run only reaches Review.** Only your approval, or a pull request opened by unattended review merging on GitHub, moves a card to Done.
-- **Stop** and the 60-minute run timeout both end a run as Failed. Ten minutes before the timeout, Bakery steers a run that is still going to stop starting new work, commit nothing, and write its report with evidence attached. A run that settles before the timeout keeps that report and reaches Review. Bakery loads `scripts/pi-wrap-up.mjs` into each run with `pi -e` to deliver the message, since Pi's JSON mode reads no input.
+- **Stop** and the 60-minute run timeout both end a run as Failed. Ten minutes before the timeout, Alice steers a run that is still going to stop starting new work, commit nothing, and write its report with evidence attached. A run that settles before the timeout keeps that report and reaches Review. Alice loads `scripts/pi-wrap-up.mjs` into each run with `pi -e` to deliver the message, since Pi's JSON mode reads no input.
 - **Runs are detached from the server** on Linux and macOS. Each run's Pi starts under `server/run-shim.ts` in its own process group, writes its events to `runs/<run id>/events.jsonl` in the data directory, and the shim records its exit in `exit.json`. Killing the server doesn't stop Pi. **Stop** and the timeout signal the whole group, so the tools Pi started stop too. The shim starts Pi only after the server has saved the shim's PID and start time, so every running Pi can be found. A server that starts and finds a run it didn't start stops that run's Pi, waits up to 10 seconds for it to exit (then sends SIGKILL), and only then marks the run interrupted and starts serving. The run directory is removed once the run is recorded. On Windows and other platforms, Pi still runs as a child of the server.
-- **Close without merging** moves a Review card to Done after a confirmation, or from the CLI with `bakery-cli close CARD_ID`. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
+- **Close without merging** moves a Triage, Ready, Failed or Review card to Done, or from the CLI with `alice close CARD_ID`. The dialog asks why: duplicate, wrong approach, not needed, superseded, or other with a note. One click on a reason closes the card, and **Close without a reason** skips it. The CLI takes `--reason duplicate` (or `wrong-approach`, `not-needed`, `superseded`, `other`) and `--note TEXT`. The reason shows in the card's history, and Statistics counts closes by reason, with closes from before reasons existed counted as not given. The worktree and branch stay, and **Reopen** returns it to Review. It never touches Linear or GitHub.
 - **Mark done** closes a Triage or Ready card that never ran. An unrun Ready card can also go back to Triage.
 - **Retries reuse the card's worktree and Pi session**, so Pi continues where it left off.
-- **A rejected session is recovered, not resumed.** When the provider answers HTTP 400 `invalid_request_error` about the `messages` array (for example `messages.103: role 'system' must precede an 'assistant' message`), the saved session replays the same history and fails every time. The run is marked as a provider failure, not a clean exit, and Run again refuses it (HTTP 409 `session_rejected`). Bakery starts one automatic recovery: a fresh Pi session in the same worktree, with the card's uncommitted edits, review comments, CI feedback and last report. A recovery that is rejected again stops; **Recover in a fresh session** on the card (or `bakery recover CARD_ID --yes`) tries again by hand. The old session file and run log are kept, and the card history records each recovery. Billing, authentication, other HTTP 400 errors and temporary errors (429, 5xx, network) are never recovered this way.
-- **Interrupted** cards can't be retried until you check the worktree and release the card. Bakery first confirms that the recorded PID is no longer running. A PID reused by an unrelated process also blocks release.
+- **A timed-out run is continued, not restarted.** The attempt after a run timeout (Run again or pickup) resumes that run's Pi session with a short message, "You ran out of time on the previous attempt…", plus any review comments or feedback added since, instead of the whole task again. When the session file is missing, it starts a fresh session with the whole task and the last report instead. A continued session the provider rejects gets the fresh-session recovery below. Alice learns where Pi keeps each session from `scripts/pi-wrap-up.mjs`. Other failures retry with the whole task in the same session.
+- **A rejected session is recovered, not resumed.** When the provider answers HTTP 400 `invalid_request_error` about the `messages` array (for example `messages.103: role 'system' must precede an 'assistant' message`), the saved session replays the same history and fails every time. The run is marked as a provider failure, not a clean exit, and Run again refuses it (HTTP 409 `session_rejected`). Alice starts one automatic recovery: a fresh Pi session in the same worktree, with the card's uncommitted edits, review comments, CI feedback and last report. A recovery that is rejected again stops; **Recover in a fresh session** on the card (or `alice recover CARD_ID --yes`) tries again by hand. The old session file and run log are kept, and the card history records each recovery. Billing, authentication, other HTTP 400 errors and temporary errors (429, 5xx, network) are never recovered this way.
+- **Interrupted** cards can't be retried until you check the worktree and release the card. Alice first confirms that the recorded PID is no longer running. A PID reused by an unrelated process also blocks release.
 - **Reopen** returns a Done card to Review when its work was left unmerged in the worktree. If the card was already merged, it returns to Ready.
 - **History** (Details tab, collapsed) lists every status change with its reason, plus agent-review verdicts and notes such as a failed restart after the reviewer sent a card back. Changes made before this existed show attempts and reviews only.
 - **Restore to Done** brings an archived card back. **Archive** only changes the lane. Runs, worktrees, branches, and history stay.
@@ -124,10 +125,11 @@ A card can depend on other cards on the same board. It doesn't start until every
 - A blocked card stays in Ready and shows **Waiting on N**. Its details list the cards it depends on, each linking to that card, and let you add or remove one. The cards it blocks show under **Needed by**.
 - Automatic pickup skips blocked cards. They don't use a concurrency slot or the daily limit.
 - Starting a blocked card from the UI, API, or CLI fails with an error naming the unfinished cards. Retrying a card that already has attempts isn't blocked, because it already has a worktree.
-- Bakery rejects a card depending on itself, on a card from another board, or on a card that would create a cycle.
-- If a card you depend on is gone from the database, Bakery drops that dependency on startup.
+- When a card merges (Approve on a local board, or its pull request merging), Alice brings each card in Review that depends on it up to date with `main` (`origin/main` on a pull-request board), so it doesn't conflict later. The card's work stays uncommitted, and anything staged stays staged. The branch fast-forwards, or gets a merge commit when it has commits of its own. A clean update queues agent review again. A conflict, or a local file Git ignores that main now tracks, changes nothing and shows as the usual merge conflict, with **Fix conflict with Pi**. A card with an agent review or an approval in progress is updated once that finishes, and then reviewed again. On a pull-request board, an agent approval given while the card waits for that update opens no pull request; the review on the updated card does. Cards with an open pull request are left alone, since GitHub already checks them against main.
+- Alice rejects a card depending on itself, on a card from another board, or on a card that would create a cycle.
+- If a card you depend on is gone from the database, Alice drops that dependency on startup.
 - The API takes `dependsOn: [ids]` when creating a card, `POST /api/boards/:board/cards/:id/dependencies` with `{ "dependsOn": id }`, and `DELETE .../dependencies/:dependsOn`. Card JSON includes `dependsOn` and `blocked`.
-- Done means Bakery's own Done. If a card's work reaches `main` some other way, such as a squash-merged PR you `git pull`, Bakery doesn't notice, and a started card can't be marked Done by hand. Remove the dependency with `undepend` instead.
+- Done means Alice's own Done. If a card's work reaches `main` some other way, such as a squash-merged PR you `git pull`, Alice doesn't notice, and a started card can't be marked Done by hand. Remove the dependency with `undepend` instead.
 
 ## Visualizer
 
@@ -143,12 +145,12 @@ A card can depend on other cards on the same board. It doesn't start until every
 
 The Review diff shows what the card changed since its branch split from `main`, including unignored files the agent didn't commit. Newer work on `main` doesn't show up as deletions.
 
-The diff toolbar switches between unified and split layouts and picks a syntax theme (Bakery, GitHub, One, Catppuccin, Solarized, Gruvbox, Rosé Pine, or Vitesse). Each theme has a light and a dark variant that follows Bakery's theme. This browser remembers both choices.
+The diff toolbar switches between unified and split layouts and picks a syntax theme (Alice, GitHub, One, Catppuccin, Solarized, Gruvbox, Rosé Pine, or Vitesse). Each theme has a light and a dark variant that follows Alice's theme. This browser remembers both choices.
 
 To request revisions:
 
 1. Select a line, write a comment, and add it as a draft.
-2. Click **Request changes** to submit the drafts. Bakery starts the next attempt right away, and Pi gets your comments in its prompt. If the attempt can't start (Bakery is restarting, say), the card says why; click **Run again** once it can.
+2. Click **Request changes** to submit the drafts. Alice starts the next attempt right away, and Pi gets your comments in its prompt. If the attempt can't start (Alice is restarting, say), the card says why; click **Run again** once it can.
 
 Drafts must be submitted or removed before you can approve. Comments stay as history on later diffs, where their line positions may have moved.
 
@@ -171,83 +173,83 @@ flowchart TD
 In the repository's settings, **Push main to origin after merging** (local-merge boards, off by default) runs `git push origin main` after the fast-forward, for agent-reviewer merges too. If the push fails, the card stays Done and its History says why.
 
 - Manual approval doesn't run tests or CI, and doesn't push.
-- Bakery commits and merges as you: your Git `user.name` and `user.email`, signed if your config signs commits (`commit.gpgsign`). Only a repository with no name or email configured gets `Bakery <bakery@localhost>` in its place.
+- Alice commits and merges as you: your Git `user.name` and `user.email`, signed if your config signs commits (`commit.gpgsign`). Only a repository with no name or email configured gets `Alice <alice@localhost>` in its place.
 - Your own uncommitted edits on `main` stay in place. Git refuses a merge that would overwrite them.
 - **Fix conflict with Pi** starts a new attempt in the card's worktree. Pi may merge `main` into the card branch and commit there, but must not touch `main`.
 - After a conflict fix, you review the result again before it merges.
-- If approval fails in another way, **Withdraw approval** unlocks the card for revision. It never removes commits or worktrees. If `main` has already moved, Bakery refuses and asks you to inspect.
-- Diffs over 200 files or 2 MB can't be approved in Bakery. Binary files need checking in the worktree.
-- If you merge a card's branch into `main` yourself, Bakery notices on its next tick and marks the card Done. This only applies when the worktree is clean and the merge actually changed `main`.
+- If approval fails in another way, **Withdraw approval** unlocks the card for revision. It never removes commits or worktrees. If `main` has already moved, Alice refuses and asks you to inspect.
+- Diffs over 200 files or 2 MB can't be approved in Alice. Binary files need checking in the worktree.
+- If you merge a card's branch into `main` yourself, Alice notices on its next tick and marks the card Done. This only applies when the worktree is clean and the merge actually changed `main`.
 
 ## GitHub pull request mode
 
-Off unless `BAKERY_FEATURE_PULL_REQUESTS=1` (see [Optional features](#optional-features)).
+Off unless `ALICE_FEATURE_PULL_REQUESTS=1` (see [Optional features](#optional-features)).
 
 A board integrates either locally, where Approve merges into local `main`, or through GitHub pull requests, where a card is Done only when its PR has merged on GitHub and the merge commit is on `origin/main`.
 
-The default depends on the repository. When you give a board a GitHub remote link (`https://github.com/OWNER/REPO`), Bakery asks GitHub whether `main` accepts direct pushes: `gh api repos/OWNER/REPO/rules/branches/main` for rulesets, then `gh api repos/OWNER/REPO/branches/main/protection` for branch protection. If a ruleset requires a pull request or a merge queue, or branch protection requires pull request reviews, the board switches to **GitHub pull requests**. Otherwise it stays **Local merge**. The board's settings show what Bakery found.
+The default depends on the repository. When you give a board a GitHub remote link (`https://github.com/OWNER/REPO`), Alice asks GitHub whether `main` accepts direct pushes: `gh api repos/OWNER/REPO/rules/branches/main` for rulesets, then `gh api repos/OWNER/REPO/branches/main/protection` for branch protection. If a ruleset requires a pull request or a merge queue, or branch protection requires pull request reviews, the board switches to **GitHub pull requests**. Otherwise it stays **Local merge**. The board's settings show what Alice found.
 
-- **Your choice wins.** Once you pick a mode under Integration in the board's settings, or with `bakery-cli board --integration local|github-pr`, Bakery never changes it.
-- **Protected main on a local board.** If a board is on Local merge, `main` only accepts pull requests, and you haven't chosen Local yourself, Approve refuses and points you to the Integration setting. Merging locally would leave local `main` ahead of GitHub with no way to push. Pick **GitHub pull requests**, or click **Keep Local merge** (or run `bakery-cli board --integration local`) to merge locally anyway. Boards that already had a GitHub remote are checked once when the server starts. That check only records protection; it doesn't change their mode.
-- **When Bakery can't tell.** If `gh` is missing, isn't signed in, or can't read the rules (branch protection needs admin access unless a ruleset already answered), the mode is left as it was, local Approve works as before, and the board's settings say why. The check runs again the next time the server starts or the remote changes.
+- **Your choice wins.** Once you pick a mode under Integration in the board's settings, or with `alice board --integration local|github-pr`, Alice never changes it.
+- **Protected main on a local board.** If a board is on Local merge, `main` only accepts pull requests, and you haven't chosen Local yourself, Approve refuses and points you to the Integration setting. Merging locally would leave local `main` ahead of GitHub with no way to push. Pick **GitHub pull requests**, or click **Keep Local merge** (or run `alice board --integration local`) to merge locally anyway. Boards that already had a GitHub remote are checked once when the server starts. That check only records protection; it doesn't change their mode.
+- **When Alice can't tell.** If `gh` is missing, isn't signed in, or can't read the rules (branch protection needs admin access unless a ruleset already answered), the mode is left as it was, local Approve works as before, and the board's settings say why. The check runs again the next time the server starts or the remote changes.
 
-Add a repository as a board from the terminal with `bakery-cli board-add [PATH]` (the current directory by default).
+Add a repository as a board from the terminal with `alice board-add [PATH]` (the current directory by default).
 
-To switch by hand, pick **GitHub pull requests** under Integration in the board's settings, or run `bakery-cli board --integration github-pr`. Either way, the repository's `origin` must be that GitHub repository, and its default branch must be `main`.
+To switch by hand, pick **GitHub pull requests** under Integration in the board's settings, or run `alice board --integration github-pr`. Either way, the repository's `origin` must be that GitHub repository, and its default branch must be `main`.
 
-[`gh`](https://cli.github.com) is required. If `gh` is missing or `gh auth status` fails, the board shows the error and Bakery does nothing on that board: no PR polling, no fetch, no automatic pickup. It never falls back to local detection. Set `BAKERY_GH_BIN` to use a different `gh` binary.
+[`gh`](https://cli.github.com) is required. If `gh` is missing or `gh auth status` fails, the board shows the error and Alice does nothing on that board: no PR polling, no fetch, no automatic pickup. It never falls back to local detection. Set `ALICE_GH_BIN` to use a different `gh` binary.
 
 What changes in this mode:
 
 - **New card worktrees** start from a freshly fetched `origin/main`, not from the local checkout's `HEAD`.
-- **Approve and open PR** opens a dialog with a draft title and body to edit, then commits the reviewed changes on `bakery/<card>`, pushes that branch to `origin`, and runs `gh pr create` with them. Bakery appends a footer naming the card, plus the run summary. If the repository has a pull request template (`.github/PULL_REQUEST_TEMPLATE.md`, also at the root or in `docs/`) or a semantic-PR title check (an `amannn/action-semantic-pull-request` workflow, or `.github/semantic.yml`), Pi drafts the title and body from them, the card, the run output, and the diff. The drafting run has no tools and uses the board's review model. Otherwise the draft is the card title and description, and no agent runs. A title that fails the check's types or scopes is refused before anything is pushed. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it and leaves its title and body alone. `gh` errors appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization (or the agent reviewer's approval, with unattended review on). Bakery comments on the PR at each turning point: when it pushes an update (and whether a person approved it or it was an automatic CI fix), when it sends the card back for failing CI, and when it gives up after the fix-run limit. A CI fix run may also add or remove labels on its own PR, edit its description, and comment to explain why, for checks that a label or description line satisfies.
-- **Getting ready at Review.** When a run reaches Review, Bakery drafts the PR title and body and runs the repository's hooks on the work while you review it, so Approve only pushes. It commits the work on `bakery/<card>` (pre-commit and commit-msg hooks run), then runs the pre-push hook on that commit with `git push --dry-run`, which pushes nothing. It checks one card at a time per repository. If you approve exactly that commit, Bakery pushes with `--no-verify`. If the work changed since, or Bakery couldn't run the check, the hooks run on Approve as before. A hook that refuses the work at Review goes back to the implementer right away, as a refused push does, up to 2 times in a row; after that the card waits for you. A hook that rewrites files (a formatter) changes the diff under review. Boards with auto-review or automatic pull requests skip this, since they push at Review anyway. A new attempt stops a check that's still running.
-- **Linking a PR.** Bakery finds a card's PR by its `bakery/<card>` branch. If your branch naming differs, attach the PR link on the card, or run `bakery-cli pr CARD_ID URL` (`off` clears it). A linked PR is only watched; Bakery doesn't push to it.
-- **Polling.** About once a minute per board, Bakery makes one `gh pr list` call for the board's Review cards:
+- **Approve and open PR** opens a dialog with a draft title and body to edit, then commits the reviewed changes on `alice/<card>`, pushes that branch to `origin`, and runs `gh pr create` with them. Alice appends a footer naming the card and its `--key` when it has one, plus the run summary. If the repository has a pull request template (`.github/PULL_REQUEST_TEMPLATE.md`, also at the root or in `docs/`) or a semantic-PR title check (an `amannn/action-semantic-pull-request` workflow, or `.github/semantic.yml`), Pi drafts the title and body from them, the card, the run output, and the diff. The drafting run has no tools and uses the board's review model. Otherwise the draft is the card title and description, and no agent runs. A title that fails the check's types or scopes is refused before anything is pushed. Nothing merges locally. If the branch already has an open PR, Approve pushes the new commits to it and leaves its title and body alone. `gh` errors appear on the card word for word. Pi is still told never to push or open PRs. Your Approve is the authorization (or the agent reviewer's approval, with unattended review on). Alice comments on the PR at each turning point: when it pushes an update (and whether a person approved it or it was an automatic CI fix), when it sends the card back for failing CI, and when it gives up after the fix-run limit. A CI fix run may also add or remove labels on its own PR, edit its description, and comment to explain why, for checks that a label or description line satisfies.
+- **Getting ready at Review.** When a run reaches Review, Alice drafts the PR title and body and runs the repository's hooks on the work while you review it, so Approve only pushes. It commits the work on `alice/<card>` (pre-commit and commit-msg hooks run), then runs the pre-push hook on that commit with `git push --dry-run`, which pushes nothing. It checks one card at a time per repository. If you approve exactly that commit, Alice pushes with `--no-verify`. If the work changed since, or Alice couldn't run the check, the hooks run on Approve as before. A hook that refuses the work at Review goes back to the implementer right away, as a refused push does, up to 2 times in a row; after that the card waits for you. A hook that rewrites files (a formatter) changes the diff under review. Boards with auto-review or automatic pull requests skip this, since they push at Review anyway. A new attempt stops a check that's still running.
+- **Linking a PR.** Alice finds a card's PR by its `alice/<card>` branch, or `bakery/<card>` for cards whose PR opened before the rename. If your branch naming differs, attach the PR link on the card, or run `alice pr CARD_ID URL` (`off` clears it). A linked PR is only watched; Alice doesn't push to it.
+- **Polling.** About once a minute per board, Alice makes one `gh pr list` call for the board's Review cards:
   - **Open:** the card stays in Review and shows the PR number and checks state. The button becomes **Approve and update PR #N**, which pushes new reviewed work to that PR.
-  - **Open with failing CI:** once the failed checks have finished (and the rest have too, or 10 minutes have passed), Bakery sends the card back to Pi with each failed check's name, link, and the tail of its `gh run view --log-failed` log. When the fix run reaches Review, the next sync pushes it to the same PR without waiting for Approve, unless you've left review comments on it. Runs you start yourself still wait for Approve, and the PR still needs its normal review to merge. Each pushed commit is sent back once, only when the card worktree is clean and holds that commit, and at most 3 times per card; after that the card shows why it stopped. Cancelled and action-required checks are shown but not sent back, and only the newest run of each check counts. If CI passes before the fix run starts, the failures are dropped. A linked PR (one Bakery doesn't push to) is never sent back. Neither is a draft PR, since many repositories skip CI on drafts; the card says so, and marking the PR ready lets the next sync send it back.
-  - **Merged:** Bakery fetches `origin` and checks that the merge commit is an ancestor of `origin/main`. If it is, the card moves to Done and the merge is recorded. If not yet, the card stays in Review and Bakery checks again next time.
+  - **Open with failing CI:** once the failed checks have finished (and the rest have too, or 10 minutes have passed), Alice sends the card back to Pi with each failed check's name, link, and the tail of its `gh run view --log-failed` log. When the fix run reaches Review, the next sync pushes it to the same PR without waiting for Approve, unless you've left review comments on it. Runs you start yourself still wait for Approve, and the PR still needs its normal review to merge. Each pushed commit is sent back once, only when the card worktree is clean and holds that commit, and at most 3 times per card; after that the card shows why it stopped. Cancelled and action-required checks are shown but not sent back, and only the newest run of each check counts. If CI passes before the fix run starts, the failures are dropped. A linked PR (one Alice doesn't push to) is never sent back. Neither is a draft PR, since many repositories skip CI on drafts; the card says so, and marking the PR ready lets the next sync send it back.
+  - **Merged:** Alice fetches `origin` and checks that the merge commit is an ancestor of `origin/main`. If it is, the card moves to Done and the merge is recorded. If not yet, the card stays in Review and Alice checks again next time.
   - **Closed without merging:** the card goes to Needs you with the reason.
-- **Cleanup.** After a card is Done, Bakery removes its worktree and local branch (with `wt remove` when Worktrunk is installed). Squash merges aren't ancestors of the branch, so the branch is force-deleted, but only after GitHub has confirmed the merge.
-- **Retries.** When you rerun a card whose committed branch is behind `origin/main` and hasn't been pushed, Bakery rebases it onto `origin/main` before Pi starts. If the rebase conflicts, the attempt goes to Needs you and the branch is left as it was. Cards in Review are never rebased, because that would change what you reviewed.
-- **Requesting changes from the PR.** A comment on an open PR that starts with `/bakery` sends the card back to Pi with the comment as requested changes. So does a submitted review (Request changes or Comment) whose summary starts that way (`@bakery` is not used: it would notify an unrelated GitHub account): its inline comments go along, with their file and line. Only the repository's owner, members and collaborators count; anyone else's comment is ignored, and Pi is told these are requests to weigh, not orders. Bakery replies on the PR. Each comment is sent once, comments from before Bakery first looked at the PR are not replayed, and a linked PR (one Bakery doesn't push to) is never sent back. It is sent only when the card worktree is clean and holds the PR head; until then the request waits. Unlike a CI fix, the new attempt waits for your Approve before it is pushed. Bakery reads comments on its normal sync (every minute).
-- **Requesting changes on any PR.** A comment that starts with `/bakery` from the repository's owner, a member or a collaborator, on any open PR in the repository, not only Bakery's own, becomes a Ready card within about a minute. The card checks out the PR's branch, makes the change, and Bakery pushes it to that branch when the run finishes, without waiting for Approve, because the commenter asked for it. It reads conversation and inline comments (not review summaries), skips PRs from forks (it says so on the PR), and while a request card for a PR is open, newer comments on it wait. Comments from before Bakery first looks at a repository are not replayed. Cards for these requests don't count toward the sentinel's limits.
-- **Automatic pull requests.** In the repository's settings, **Open pull requests automatically** (pull-request boards, off by default) pushes `bakery/<card>` and opens the PR as soon as a run reaches Review, drafting the title and body as Approve does, without waiting for you. Its PR comment says no person reviewed the push. Only runs that finish after you turn it on are pushed, and only a card's first PR (later pushes still need Approve, apart from CI fixes). If the draft needs a person, or the push or `gh` fails, the card stays in Review with the reason in its History. A pre-push hook refusal goes back to the implementer; after three automatic attempts on one card, it waits for Approve. With auto-review on, the agent reviewer's approval opens the PR instead.
-- **Unattended review.** With auto-review on, an agent approval does what Approve does: Bakery drafts the title and body the same way, pushes `bakery/<card>`, and opens the PR (or updates the open one). Its PR comment says the agent reviewer approved the push and no person reviewed it. The card then waits on GitHub and goes Done when the PR merges. If the draft needs a person (the title fails the semantic-PR check, or drafting fails), or the push or `gh` fails, the card stays in Review for you. A pre-push hook refusal goes back to the implementer, as it does after Approve. See [Unattended review](#unattended-review).
+- **Cleanup.** After a card is Done, Alice removes its worktree and local branch (with `wt remove` when Worktrunk is installed). Squash merges aren't ancestors of the branch, so the branch is force-deleted, but only after GitHub has confirmed the merge.
+- **Retries.** When you rerun a card whose committed branch is behind `origin/main` and hasn't been pushed, Alice rebases it onto `origin/main` before Pi starts. If the rebase conflicts, the attempt goes to Needs you and the branch is left as it was. Cards in Review are never rebased, because that would change what you reviewed.
+- **Requesting changes from the PR.** A comment on an open PR that starts with `/alice` sends the card back to Pi with the comment as requested changes. So does a submitted review (Request changes or Comment) whose summary starts that way (`@alice` is not used: it would notify an unrelated GitHub account): its inline comments go along, with their file and line. Only the repository's owner, members and collaborators count; anyone else's comment is ignored, and Pi is told these are requests to weigh, not orders. Alice replies on the PR. Each comment is sent once, comments from before Alice first looked at the PR are not replayed, and a linked PR (one Alice doesn't push to) is never sent back. It is sent only when the card worktree is clean and holds the PR head; until then the request waits. Unlike a CI fix, the new attempt waits for your Approve before it is pushed. Alice reads comments on its normal sync (every minute).
+- **Requesting changes on any PR.** A comment that starts with `/alice` from the repository's owner, a member or a collaborator, on any open PR in the repository, not only Alice's own, becomes a Ready card within about a minute. The card checks out the PR's branch, makes the change, and Alice pushes it to that branch when the run finishes, without waiting for Approve, because the commenter asked for it. It reads conversation and inline comments (not review summaries), skips PRs from forks (it says so on the PR), and while a request card for a PR is open, newer comments on it wait. Comments from before Alice first looks at a repository are not replayed. Cards for these requests don't count toward the sentinel's limits.
+- **Automatic pull requests.** In the repository's settings, **Open pull requests automatically** (pull-request boards, off by default) pushes `alice/<card>` and opens the PR as soon as a run reaches Review, drafting the title and body as Approve does, without waiting for you. Its PR comment says no person reviewed the push. Only runs that finish after you turn it on are pushed, and only a card's first PR (later pushes still need Approve, apart from CI fixes). If the draft needs a person, or the push or `gh` fails, the card stays in Review with the reason in its History. A pre-push hook refusal goes back to the implementer; after three automatic attempts on one card, it waits for Approve. With auto-review on, the two combine: the agent reviewer goes first and never blocks the PR. Its approval opens the PR; a request for changes reruns the card (waiting for a free slot if the repository is at its run limit); and a card it hands to a person, or that is out of reruns, gets a **draft** PR with the reviewer's findings posted on it.
+- **Unattended review.** With auto-review on, an agent approval does what Approve does: Alice drafts the title and body the same way, pushes `alice/<card>`, and opens the PR (or updates the open one). Its PR comment says the agent reviewer approved the push and no person reviewed it. The card then waits on GitHub and goes Done when the PR merges. If the draft needs a person (the title fails the semantic-PR check, or drafting fails), or the push or `gh` fails, the card stays in Review for you. A pre-push hook refusal goes back to the implementer, as it does after Approve. See [Unattended review](#unattended-review).
 - Local merge detection is off for these boards.
 
 ### Keeping local main current
 
-In this mode the main checkout is never a workspace. Every card works in its own worktree, so local `main` should always be clean and at or behind `origin/main`. On each sync, and right after a card goes Done, Bakery runs `git fetch origin --prune` and then `git merge --ff-only origin/main` in the main checkout.
+In this mode the main checkout is never a workspace. Every card works in its own worktree, so local `main` should always be clean and at or behind `origin/main`. On each sync, and right after a card goes Done, Alice runs `git fetch origin --prune` and then `git merge --ff-only origin/main` in the main checkout.
 
-Main only ever fast-forwards. If it has uncommitted changes, has local commits, has diverged, or isn't checked out, Bakery doesn't reset, rebase, stash, or force anything. It shows the problem on the board and pauses automatic pickup there until a later sync succeeds. Untracked files don't block the sync unless the fast-forward would overwrite them.
+Main only ever fast-forwards. If it has uncommitted changes, has local commits, has diverged, or isn't checked out, Alice doesn't reset, rebase, stash, or force anything. It shows the problem on the board and pauses automatic pickup there until a later sync succeeds. Untracked files don't block the sync unless the fast-forward would overwrite them.
 
 ### Cards merged locally before the switch
 
-A card approved while the board used local merge is Done, but its work may only be on local `main`. Board settings list these cards (Done, merged by Bakery, approved commit not on `origin/main`). On a GitHub pull request board each has **Publish as PR**, also shown on the card. It pushes the approved commit to `bakery/<card>`, opens the PR the same way Approve does, clears the local merge record, and moves the card back to Review. The card goes Done again when the PR merges and reaches `origin/main`.
+A card approved while the board used local merge is Done, but its work may only be on local `main`. Board settings list these cards (Done, merged by Alice, approved commit not on `origin/main`). On a GitHub pull request board each has **Publish as PR**, also shown on the card. It pushes the approved commit to `alice/<card>`, opens the PR the same way Approve does, clears the local merge record, and moves the card back to Review. The card goes Done again when the PR merges and reaches `origin/main`.
 
-Publishing is refused when the approved commit sits on top of other local merges that `origin/main` lacks, since they would ride along in the PR. Publish the earlier card first, or rebase the card branch onto `origin/main` yourself. A plain push is used, so an existing `bakery/<card>` on GitHub with other commits is never overwritten.
+Publishing is refused when the approved commit sits on top of other local merges that `origin/main` lacks, since they would ride along in the PR. Publish the earlier card first, or rebase the card branch onto `origin/main` yourself. A plain push is used, so an existing `alice/<card>` on GitHub with other commits is never overwritten.
 
-Publishing doesn't touch local `main`. Once every local commit on `main` is a Bakery card merge whose work is on `origin`, Bakery offers to reset `main` to `origin/main`. It saves the old tip as `bakery-recovery/<sha>` first and resets only after you confirm that tip. It won't offer the reset if `main` isn't checked out, has uncommitted changes, or holds any other commit, and `git reset --keep` refuses rather than overwrite untracked files.
+Publishing doesn't touch local `main`. Once every local commit on `main` is an Alice card merge whose work is on `origin`, Alice offers to reset `main` to `origin/main`. It saves the old tip as `alice-recovery/<sha>` first and resets only after you confirm that tip. It won't offer the reset if `main` isn't checked out, has uncommitted changes, or holds any other commit, and `git reset --keep` refuses rather than overwrite untracked files.
 
 ### Not detected
 
-- **Reverts after merge.** Once a card is Done, Bakery doesn't watch for its PR being reverted.
+- **Reverts after merge.** Once a card is Done, Alice doesn't watch for its PR being reverted.
 - Force-pushes that rewrite `origin/main` after a card is Done.
 - PRs merged into a branch other than `main`. They never reach `origin/main`, so the card stays in Review.
 
 ## Sentinels
 
-Off unless `BAKERY_FEATURE_SENTINELS=1` (see [Optional features](#optional-features)).
+Off unless `ALICE_FEATURE_SENTINELS=1` (see [Optional features](#optional-features)).
 
 A sentinel is a persistent monitor, not a card. It never enters Triage, Ready, Running, Review or Done, is never reviewed or merged, and is not counted in lane counts, Today or SDLC stats. A pull-request board has two, listed under **Sentinels** in the sidebar:
 
-- **Broken pull requests** looks every 5 minutes (`BAKERY_SENTINEL_MS`) for open PRs by the repository owner that conflict with main or fail CI.
-- **/bakery requests** looks every minute for `/bakery` comments on any open PR.
+- **Broken pull requests** looks every 5 minutes (`ALICE_SENTINEL_MS`) for open PRs by the repository owner that conflict with main or fail CI.
+- **/alice requests** looks every minute for `/alice` comments on any open PR.
 
-Each has instructions (added to every job's brief), a schedule, an enabled or paused state and a next-run time. Each execution is a run with its start and end, outcome, findings and any error; the Sentinels screen shows the latest runs. **Pause** stops future runs and holds jobs that have not started; **Resume** runs it at once; **Run now** runs an enabled sentinel on the next check. `bakery-cli sentinels`, `sentinel-pause`, `sentinel-resume` and `sentinel-run` do the same from a shell, and `PATCH /api/sentinels/:id` takes `enabled`, `intervalMs` and `instructions`. Changing `intervalMs` moves the next run to one new interval after the last run (or now, if that has passed), so shortening takes effect at once. Jobs that are queued but not started are checked against their pull request again before they start, including after a resume or restart, and are withdrawn if it was fixed, merged or closed. A job card, its attempt record and its Ready status are saved together, so a crash cannot leave a finding that later runs skip; an older half-made card is recovered on the next run. `BAKERY_SENTINEL=0` turns them all off: no timer, no run-now (the API answers 409), and no dispatch on resume.
+Each has instructions (added to every job's brief), a schedule, an enabled or paused state and a next-run time. Each execution is a run with its start and end, outcome, findings and any error; the Sentinels screen shows the latest runs. **Pause** stops future runs and holds jobs that have not started; **Resume** runs it at once; **Run now** runs an enabled sentinel on the next check. `alice sentinels`, `sentinel-pause`, `sentinel-resume` and `sentinel-run` do the same from a shell, and `PATCH /api/sentinels/:id` takes `enabled`, `intervalMs` and `instructions`. Changing `intervalMs` moves the next run to one new interval after the last run (or now, if that has passed), so shortening takes effect at once. Jobs that are queued but not started are checked against their pull request again before they start, including after a resume or restart, and are withdrawn if it was fixed, merged or closed. A job card, its attempt record and its Ready status are saved together, so a crash cannot leave a finding that later runs skip; an older half-made card is recovered on the next run. `ALICE_SENTINEL=0` turns them all off: no timer, no run-now (the API answers 409), and no dispatch on resume.
 
-What a sentinel finds becomes an ordinary job card, linked back by sentinel, run and a stable finding key (`pr:<number>` for a broken PR). The card runs on the usual worker, with the same logs, usage and budget, and Bakery pushes its result to the PR branch itself, so Approve, merge and auto-review do not apply to it. While a finding's card is open, later runs add no second card for it. Once that card is Done and the PR is still broken (a new head or main), the next run makes a new card, up to three per PR. Finishing a card never completes or pauses its sentinel. A run only one process can hold at a time, and a run cut off by a restart is marked interrupted.
+What a sentinel finds becomes an ordinary job card, linked back by sentinel, run and a stable finding key (`pr:<number>` for a broken PR). The card runs on the usual worker, with the same logs, usage and budget, and Alice pushes its result to the PR branch itself, so Approve, merge and auto-review do not apply to it. While a finding's card is open, later runs add no second card for it. Once that card is Done and the PR is still broken (a new head or main), the next run makes a new card, up to three per PR. Finishing a card never completes or pauses its sentinel. A run only one process can hold at a time, and a run cut off by a restart is marked interrupted.
 
 Jobs made before sentinels had records are linked to their sentinel on first start, keeping their ids, status, PR locks and any running agent. The link is made in one transaction and is safe to repeat.
 
@@ -257,17 +259,17 @@ Sentinels and GitHub pull requests are optional and **off by default**. Each has
 
 | Switch | Turns on |
 | --- | --- |
-| `BAKERY_FEATURE_SENTINELS=1` | Sentinels: the Sentinels page, their routes and their background scheduler. |
-| `BAKERY_FEATURE_PULL_REQUESTS=1` | GitHub pull request mode: the Pull requests page, the Integration mode choice, publishing, automatic pull requests, GitHub sync and polling. |
+| `ALICE_FEATURE_SENTINELS=1` | Sentinels: the Sentinels page, their routes and their background scheduler. |
+| `ALICE_FEATURE_PULL_REQUESTS=1` | GitHub pull request mode: the Pull requests page, the Integration mode choice, publishing, automatic pull requests, GitHub sync and polling. |
 
-Unset, empty or `0` means off; any other value is an error. Set the switch both when you build the UI and when you start the server, because the UI has it compiled in and the server reads it at start (`/api/status` reports what the server runs with). For example, `BAKERY_FEATURE_PULL_REQUESTS=1 npm run build && BAKERY_FEATURE_PULL_REQUESTS=1 BAKERY_SERVE_UI=1 npm start`; for a service, put both in its environment and in the environment of `scripts/update.sh`. `src/features.ts` is the one definition both sides read.
+Unset, empty or `0` means off; any other value is an error. Set the switch both when you build the UI and when you start the server, because the UI has it compiled in and the server reads it at start (`/api/status` reports what the server runs with). For example, `ALICE_FEATURE_PULL_REQUESTS=1 npm run build && ALICE_FEATURE_PULL_REQUESTS=1 ALICE_SERVE_UI=1 npm start`; for a service, put both in its environment and in the environment of `scripts/update.sh`. `src/features.ts` is the one definition both sides read.
 
 With a feature off:
 
 - Its screens, navigation and settings are not shown, its routes answer `404` with `code: "feature_off"` and the switch to set, its timers never start, and it needs no configuration (`gh` included).
 - Stored data is kept, not deleted. A board set to GitHub pull requests reads as Local while pull requests are off, and goes back to its stored mode when you turn them on; sentinels, their runs and their job cards come back the same way.
 - Cards, runs, local review and Local merge work as usual.
-- Bakery never falls back to merging locally when the board needs a pull request. If the board is set to GitHub pull requests, or `main` on GitHub only accepts them and you haven't chosen Local merge, Approve is refused with a message saying so; set the switch or choose Local merge in the board's settings.
+- Alice never falls back to merging locally when the board needs a pull request. If the board is set to GitHub pull requests, or `main` on GitHub only accepts them and you haven't chosen Local merge, Approve is refused with a message saying so; set the switch or choose Local merge in the board's settings.
 - Sentinels need only a GitHub remote link on the board, not pull request mode, so with only Sentinels on they watch boards that merge locally too. A stored sync error is kept but ignored (it does not pause automatic pickup) while pull requests are off.
 
 ## Watching a run
@@ -276,7 +278,7 @@ Each attempt in a card's **Attempts** list shows:
 
 - The agent that ran it as `provider/model`, for example `anthropic/claude-…` or `openai-codex/gpt-…`. The board card shows the latest run and review agents.
 - A transcript: assistant text, plus one line per turn with tool counts, failures, and changed files. Tool arguments and results aren't stored. Pi's own session has the full conversation.
-- Its cost, as reported by Pi on each assistant message. Hover it for input, output, and cache token counts. Attempts from before Bakery tracked usage show `—`, not `$0.00`. The heading shows the card's total across all attempts and agent reviews.
+- Its cost, as reported by Pi on each assistant message. Hover it for input, output, and cache token counts. Attempts from before Alice tracked usage show `—`, not `$0.00`. The heading shows the card's total across all attempts and agent reviews.
 - The worktree path, with **Copy path**. Failed attempts have **Copy error** instead, which copies a prompt you can paste into an agent: card, repo, worktree, error, and the end of the output.
 
 The clock on a card counts completed Pi turns across attempts. Older runs show an estimate marked with `~` or `?`.
@@ -296,8 +298,8 @@ The board header shows **Last 24h**: the cost of attempts and agent reviews that
 The server starts Ready cards for you, highest priority first, then oldest first. Priority is a whole number from -100 to 100 (default 0); `low`, `normal`, `high` and `urgent` are shorthands for -10, 0, 50 and 100. Set it when you create or edit a card, or from its details. Lanes list higher-priority cards first, and a card with a non-zero priority shows the number in its footer, warmer the higher it is.
 
 - **Concurrency:** 1 to 4 runs at once (default 2). Manually started runs count toward it.
-- **Agents at once, all boards:** card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. Automatic (the default) is a quarter of the CPU cores, at least 2. Set it in **Settings > General** or with `bakery-cli agents N|auto`. Automatic work (pickup, reviewer send-backs, CI, hook and conflict fixes, sentinel jobs, agent reviews) waits for a slot. A run you start yourself counts toward the limit but always starts.
-- **Limits:** the daily limit, the daily cost budget and the agent reviewer's diff caps are spend limits. They apply only when the board's **Limits** switch is on, which is off by default, so a development board runs unthrottled. Turn it on in the board's settings or with `bakery-cli limits on`; the stored values are kept while it's off. Concurrency and the loop guards (reviewer and hook send-backs, CI-fix runs, conflict repairs, automatic retries, the 60-minute run timeout) always apply. All of them are decided in `server/repo-limits.ts`.
+- **Agents at once, all boards:** card runs and agent reviews on every board share this many slots, since each ends with the repository's tests. Automatic (the default) is a quarter of the CPU cores, at least 2. Set it in **Settings > General** or with `alice agents N|auto`. Automatic work (pickup, reviewer send-backs, CI, hook and conflict fixes, sentinel jobs, agent reviews) waits for a slot. A run you start yourself counts toward the limit but always starts.
+- **Limits:** the daily limit, the daily cost budget and the agent reviewer's diff caps are spend limits. They apply only when the board's **Limits** switch is on, which is off by default, so a development board runs unthrottled. Turn it on in the board's settings or with `alice limits on`; the stored values are kept while it's off. Concurrency and the loop guards (reviewer and hook send-backs, CI-fix runs, conflict repairs, automatic retries, the 60-minute run timeout) always apply. All of them are decided in `server/repo-limits.ts`.
 - **Daily limit** (when limits are on): 1 to 99 automatic starts in any rolling 24 hours (default 6), or 0 for no limit (`--limit off` in the CLI). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
 - **Daily cost budget** (when limits are on): optional, off by default. When the board's last-24h cost reaches it, pickup waits and the board says why. Pickup resumes as older spend leaves the window, or when you raise or clear the budget. Running work isn't stopped, and manual starts still work. Cost comes from Pi's own pricing, so it's an estimate and can overshoot by whatever runs were already in progress.
 - **Failed runs:** a card whose automatic run fails waits in Failed, and pickup carries on with the other Ready cards. Pickup never restarts a failed card, except for the automatic retry of a provider error.
@@ -306,7 +308,7 @@ The server starts Ready cards for you, highest priority first, then oldest first
 
 ### Unattended review
 
-A separate Pi agent reviews finished cards without you. It never merges into local `main`: on a local board an approved card waits for your **Approve**, and on a [GitHub pull request](#github-pull-request-mode) board Bakery opens the PR and GitHub decides the merge.
+A separate Pi agent reviews finished cards without you. It never merges into local `main`: on a local board an approved card waits for your **Approve**, and on a [GitHub pull request](#github-pull-request-mode) board Alice opens the PR and GitHub decides the merge.
 
 ```mermaid
 flowchart LR
@@ -318,7 +320,7 @@ flowchart LR
 ```
 
 - It's set per repository. Open the repository's edit (pencil) dialog and enable it.
-- Bakery only considers runs that reach Review after you enable it.
+- Alice only considers runs that reach Review after you enable it.
 - Failed reviews aren't retried.
 - The reviewer reads the repository's `AGENTS.md`, `CLAUDE.md` and review instructions and runs the checks they ask for itself, instead of sending the card back for missing proof. Checks only a person can do, such as device runs, screenshots or staging access, leave the card for you.
 - Turning the setting off stops a review in progress from opening a PR.
@@ -329,38 +331,39 @@ flowchart LR
 The CLI talks to the running server's HTTP API, so it goes through the same checks as the UI.
 
 ```sh
-npm run bakery -- add fix the flaky login test [--priority 80]
-npm run bakery -- doctor
-npm run bakery -- boards
-npm run bakery -- cards [--all] [--watch]
-npm run bakery -- tui
-npm run bakery -- create --title "..." --body "..." [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]...
-npm run bakery -- show CARD_ID
-npm run bakery -- depend CARD_ID --on CARD_ID
-npm run bakery -- undepend CARD_ID --on CARD_ID
-npm run bakery -- edit CARD_ID [--title "..."] [--body "..."]
-npm run bakery -- archive CARD_ID...
-npm run bakery -- restore CARD_ID
-npm run bakery -- stats
-npm run bakery -- ready CARD_ID [--yes]
-npm run bakery -- triage CARD_ID
-npm run bakery -- start CARD_ID... --yes
-npm run bakery -- recover CARD_ID --yes
-npm run bakery -- runs CARD_ID
-npm run bakery -- conflicts
-npm run bakery -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
-npm run bakery -- board [--integration local|github-pr]
-npm run bakery -- pr CARD_ID [URL|off]
+npm run alice -- add fix the flaky login test [--priority 80]
+npm run alice -- doctor
+npm run alice -- boards
+npm run alice -- cards [--all] [--watch]
+npm run alice -- tui
+npm run alice -- create --title "..." --body "..." [--key KEY] [--priority -100..100|low|normal|high|urgent] [--after CARD_ID]...
+npm run alice -- show CARD_ID
+npm run alice -- depend CARD_ID --on CARD_ID
+npm run alice -- undepend CARD_ID --on CARD_ID
+npm run alice -- edit CARD_ID [--title "..."] [--body "..."]
+npm run alice -- archive CARD_ID...
+npm run alice -- restore CARD_ID
+npm run alice -- stats
+npm run alice -- ready CARD_ID [--yes]
+npm run alice -- triage CARD_ID
+npm run alice -- start CARD_ID... --yes
+npm run alice -- recover CARD_ID --yes
+npm run alice -- runs CARD_ID
+npm run alice -- conflicts
+npm run alice -- pickup [on|off|reset] [--concurrency 2] [--limit 6] [--budget 5|off] [--yes]
+npm run alice -- board [--integration local|github-pr]
+npm run alice -- pr CARD_ID [URL|off]
 ```
 
-- `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. The server line comes right after the versions and says which instance you reached and whether it's local or remote. Against a non-loopback `BAKERY_URL` it checks only the server and boards, since tools and paths are on the server's machine, and names each board `<host>:<path>`. After the checks come `INFO` rows that never pass or fail: the CLI's path, every `BAKERY_*` variable the CLI sees (names containing `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `WEBHOOK` or `ENDPOINT` print as `set (hidden)`), and what the server reports about itself: host, build features, active runs, agent models, telemetry and whether a Discord webhook is set. A remote server's own environment variables stay on its machine. `--json` prints the checks.
-- `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body` and `--priority` as `create`.
+- `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. The server line comes right after the versions and says which instance you reached and whether it's local or remote. Against a non-loopback `ALICE_URL` it checks only the server and boards, since tools and paths are on the server's machine, and names each board `<host>:<path>`. After the checks come `INFO` rows that never pass or fail: the CLI's path, every `ALICE_*` variable the CLI sees (names containing `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `WEBHOOK` or `ENDPOINT` print as `set (hidden)`), and what the server reports about itself: host, build features, active runs, agent models, telemetry and whether a Discord webhook is set. A remote server's own environment variables stay on its machine. `--json` prints the checks.
+- `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body`, `--priority` and `--source` as `create`.
 - Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
 - `ready` runs the same check as the board's Move to Ready (see [Card lifecycle](#card-lifecycle)). A flagged card is listed with its flags and stays in Triage; repeat with `--yes` to move it anyway, and the flags still print to stderr. In `tui`, `r` on a flagged card lists the flags and asks `y/N`. The API is `GET /api/boards/BOARD/cards/CARD/ready-check`, which returns `{ flags }` and moves nothing.
 - `create --key KEY` makes re-runs safe. If the board already has a card with that key, in any status including archived, the CLI prints that card instead of creating another. Keys are unique per board and up to 200 characters. The API takes the same value as `idempotencyKey` and returns 200 for an existing card, 201 for a new one.
+- `create --source NAME` (also on `add`) records where the card came from; the CLI sends `cli` when you leave it out. An agent should give its own name, such as `hermes`. The API takes the same value as `source`: a lower-case name of up to 40 letters, digits, dots, dashes or underscores. An API caller that sends none gets the source its `idempotencyKey` prefix implies (`hermes:`, `plan:`, `follow-up:`, `sentinel:`, `request:`), otherwise `api`. Alice itself records `ui`, `plan`, `follow-up`, `sentinel` and `pr-comment`, and callers can't claim `manual`, `plan`, `sentinel` or `pr-comment`. Cards made before sources existed say `manual` unless their key prefix named their path. The card's Details tab shows the source.
 - `cards` on a terminal prints the board's lanes with the web board's badges (failure reason, Your turn, quiet, retries, PR). Archive and all but the 5 newest Done cards need `--all`; `--watch` redraws every 2 seconds. Piped, it prints one tab-separated line per card: ID, status, priority, attempt count, review rounds, and title.
-- `tui` is the board driven by keys: arrows or `j`/`k` move, `h`/`l` jump lanes, enter shows a card's latest attempt, `o` opens it in the browser and `?` lists every key. `s` starts or reruns, `x` stops, `a` approves, accepts findings or updates an open PR, `R` recovers, and `r`/`t` move between Ready and Triage. Paid runs, merges and stops ask for `y` first. Opening a new pull request needs its drafted title and body, so the TUI sends that to the browser.
+- `tui` draws the web app across the whole terminal. A sidebar (on terminals 140 columns or wider, or with `b`) numbers the boards: `1`–`9` open one and `0` opens Today, which lists what's running, what needs you and what's approved on every board, as on the web. It opens on Today when you have several boards and didn't pick one with `--board` or the current directory. The board header shows its spend in the last 24 hours and its merge conflicts. A board has lanes side by side, a tile per card with its title and one live fact (the running tool, a failure reason, what it waits on), and empty or off-screen lanes as thin strips with their counts. `h`/`l` or the arrows move between lanes and `j`/`k` within one; enter opens the card over the board with its description and latest attempt, and tab shows every attempt. `/` finds a card by its title or id, as the web's command palette does: on the board you're on, or on every board from Today. ↑/↓ pick a match and enter opens it, moving the board's selection to it. `o` opens it in the browser and `?` lists every key. The mouse works too: a click selects a card, a board in the sidebar, a Today row, a dialog tab or a key in the footer, a second click on a card opens it, a click outside a dialog closes it, and the wheel scrolls. Hold Shift to select text while the TUI has the mouse. `s` starts or reruns, `x` stops, `a` approves, accepts findings or updates an open PR, `R` recovers, and `r`/`t` move between Ready and Triage. Paid runs, merges and stops ask for `y` first. Opening a new pull request needs its drafted title and body, so the TUI sends that to the browser.
 - `show` prints a card's title, status, repository, description, each attempt's status, agent and error, the latest auto-review verdict, and the cards it depends on and that depend on it, each with its status.
 - `create --after CARD_ID` makes the new card depend on that card. Repeat it for several. `depend` and `undepend` add or remove one dependency on an existing card. See [Dependencies](#dependencies).
 - `edit` changes a card's title, description, or both. `--body ""` clears the description. You can't edit a running card.
@@ -374,14 +377,14 @@ npm run bakery -- pr CARD_ID [URL|off]
 - `pickup` shows the last-24h cost and any budget. `--budget` sets the daily cost budget in USD, and `--budget off` clears it.
 - The CLI can't approve merges.
 - `board [--integration local|github-pr]` shows the board and switches its integration mode. `pr CARD_ID [URL|off]` shows, attaches, or clears a card's PR link. See [GitHub pull request mode](#github-pull-request-mode).
-- To use a different server, set `BAKERY_URL` or `BAKERY_PORT`. To get `bakery-cli` (and its shorter alias `bakery`) on your `PATH`, run `npm link`. `bakery-cli help` lists the commands, and `bakery-cli help COMMAND` shows one command's options. On a terminal the output is laid out in coloured columns (`NO_COLOR` turns the colour off); piped, it stays tab-separated.
+- To use a different server, set `ALICE_URL` or `ALICE_PORT`. To get `alice` on your `PATH`, run `npm link`. `alice help` lists the commands, and `alice help COMMAND` shows one command's options. On a terminal the output is laid out in coloured columns (`NO_COLOR` turns the colour off); piped, it stays tab-separated.
 
 ## Boards and lanes
 
-- Bakery expands `~`, stores the canonical Git root, and shows the absolute path.
+- Alice expands `~`, stores the canonical Git root, and shows the absolute path.
 - To fix a board's path, edit the board. Its cards move only if none has run yet, because attempts keep their worktrees in the original repository.
 - **Remove repository** hides a board without deleting anything, attached files included. Add the same repository again to restore it.
-- Bakery never deletes cards, so a card's attached files stay in `<data dir>/attachments/<card>` until you delete the attachment or purge an archived card's attachments (below). At startup Bakery removes files that no attachment points to, such as an upload cut off by a crash.
+- Alice never deletes cards, so a card's attached files stay in `<data dir>/attachments/<card>` until you delete the attachment or purge an archived card's attachments (below). At startup Alice removes files that no attachment points to, such as an upload cut off by a crash.
 - Any lane can be collapsed, even with active cards. Auto-collapse only applies to lanes without active cards, and a board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
@@ -389,32 +392,34 @@ npm run bakery -- pr CARD_ID [URL|off]
 
 ### Pi models
 
-Bakery starts Pi for three kinds of runs. Each can use its own model and thinking level:
+Alice starts Pi for three kinds of runs. Each can use its own model and thinking level:
 
-- **Card runs**: normal runs and retries.
+- **Card runs**: normal runs and, unless the repository sets Card retries, retries.
 - **Conflict fixes**: runs that repair a merge conflict.
 - **Agent review**: the reviewer used by [unattended review](#unattended-review).
 
 Set global defaults in **Settings → Pi models**. To override them for one repository, use **Pi models** in its Edit repository dialog. A blank field inherits: the repository value comes first, then the global value, then the default in your Pi settings. Model and thinking level inherit separately, so a repository can change only the model and keep the global thinking level.
 
-A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-codex/gpt-5.5`. Bakery passes it as `--model`, and the thinking level as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). It only passes flags you set. The model field suggests the models `pi --list-models` reports. Bakery caches that list for 10 minutes. A change applies to runs that start after you save it. Retries keep their Pi session but use the current model.
+A model is a Pi model pattern such as `anthropic/claude-sonnet-4-5` or `openai-codex/gpt-5.5`. Alice passes it as `--model`, and the thinking level as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). It only passes flags you set. The model field suggests the models `pi --list-models` reports. Alice caches that list for 10 minutes. A change applies to runs that start after you save it. Retries keep their Pi session but use the current model.
+
+A repository can also set **Card retries**, a model ladder for card runs: a card's first attempt uses the Card runs model, and every later attempt (after a failure, a send-back, or a CI, hook or comment fix) uses the Card retries model. A blank Card retries thinking level keeps the Card runs level. Leave Card retries blank to run every attempt on Card runs. It is per repository only and does not change conflict fixes, agent review or PR drafts. The attempt history shows which model each attempt used.
 
 ## Server, data, and restarts
 
 - The server listens only on `127.0.0.1` and has no authentication. Don't expose it on a network.
-- Data and worktrees live in `~/.local/share/bakery/`. To change this, set `BAKERY_DATA_DIR`. You can also set `BAKERY_PORT`, `BAKERY_PI_BIN` to use a different `pi` binary, and `BAKERY_WT_BIN` to use a different `wt` binary. Set `BAKERY_WT_BIN=` (empty) to turn off Worktrunk hooks. Paste a Discord channel webhook into Settings (or set `BAKERY_DISCORD_WEBHOOK_URL`, which applies when Settings has none) and Bakery posts a message when a run finishes: the card title and the run summary for a card ready for review, or the error for a failed run. Stopped runs are not posted. The URL is a secret: Settings hides it, and it must be a discord.com webhook. **Notify this browser when a card needs you** in Settings turns on Web Push for that browser: a notification when a card becomes your turn in Review (nothing else, such as the agent reviewer or GitHub CI, still holds it) or fails, even with no Bakery tab open. Clicking one opens the card. Each browser turns it on separately, it needs HTTPS or localhost (see [HTTPS on a tailnet](#https-on-a-tailnet)), and cards that already needed you are not replayed. Brave needs **Use Google services for push messaging** turned on (Settings → Privacy and security); without it, and in Chromium builds without Google services, subscribing fails with "push service error". The server checks every 10 seconds and keeps its push key in `push-vapid.json` in the data directory. Set `BAKERY_TELEMETRY_ENDPOINT` to an OTLP/HTTP endpoint to show an opt-in Settings toggle for anonymous usage counts; nothing is sent without both. [docs/telemetry.md](telemetry.md) lists every field. Set `BAKERY_METRICS=1` to serve Prometheus metrics on `/metrics` for your own scraper; [docs/metrics.md](metrics.md) lists them.
-- On Windows, Bakery finds `pi`, `wt` and `gh` through `PATH` and `PATHEXT`, and runs npm's `pi.cmd` shim as `node cli.js`. Repository paths can be `C:\\code\\app` or `~\\code\\app`. Data lives in `%USERPROFILE%\\.local\\share\\bakery`. A run's **Stop** ends Pi but not any processes Pi started. An auto-review verification command runs under `cmd.exe`, so write it for that shell.
-- Files attached to cards and discussion messages live in `<data dir>/attachments/<card id>/`. Clicking an image thumbnail opens it in a lightbox: the arrow keys, the side buttons or the thumbnail strip step through the other images in the same list, **Full size** shows the image at its natural size (scroll to pan), and **Open original** opens the file in a new tab. Cmd- or Ctrl-click on a thumbnail still opens the file in a new tab directly. Deleting an attachment removes its file. Archiving a card or removing its board keeps the files, because both can be undone. To reclaim the space, use **Purge attachments** on an archived card or `bakery-cli purge-attachments CARD_ID... --yes`. It deletes the card's folder and its attachment records, and it cannot be undone, even if you restore the card.
-- Agents keep evidence as attachments too. A work run's prompt tells the agent to save screenshots and other generated files with `bakery-cli attach CARD_ID FILE... --board ID` instead of reporting `/tmp` paths. The command reads each file as the agent's own user, uploads it through the normal attachment route (nothing leaves Bakery), and prints a markdown line such as `![before.png](/api/boards/…/cards/…/attachments/…)` to paste into the report. The report shows attached images inline and falls back to a link when a file is missing. Only Bakery's own attachment and chat-image URLs render as images; a local path in report text is never read. In a GitHub pull request body or comment, Bakery rewrites those relative links to plain text saying the file is kept in Bakery, because screenshots are never published to GitHub.
+- Data and worktrees live in `~/.local/share/alice/`. To change this, set `ALICE_DATA_DIR`. You can also set `ALICE_PORT`, `ALICE_PI_BIN` to use a different `pi` binary, and `ALICE_WT_BIN` to use a different `wt` binary. Set `ALICE_WT_BIN=` (empty) to turn off Worktrunk hooks. Paste a Discord channel webhook into Settings (or set `ALICE_DISCORD_WEBHOOK_URL`, which applies when Settings has none) and Alice posts a message when a run finishes: the card title and the run summary for a card ready for review, or the error for a failed run. Stopped runs are not posted. The URL is a secret: Settings hides it, and it must be a discord.com webhook. **Notify this browser when a card needs you** in Settings turns on Web Push for that browser: a notification when a card becomes your turn in Review (nothing else, such as the agent reviewer or GitHub CI, still holds it) or fails, even with no Alice tab open. Clicking one opens the card. At most once a day, and only when some Review card has sat there longer than its board's **Days in Review before a card is stale** (board settings, 3 by default, 0 for off), a digest lists those cards and opens Today, where each has Approve, **Run again on current main** (a run that first brings the work up to date with main) and Close; the board marks them **Stale**. Each browser turns it on separately, it needs HTTPS or localhost (see [HTTPS on a tailnet](#https-on-a-tailnet)), and cards that already needed you are not replayed. Brave needs **Use Google services for push messaging** turned on (Settings → Privacy and security); without it, and in Chromium builds without Google services, subscribing fails with "push service error". The server checks every 10 seconds and keeps its push key in `push-vapid.json` in the data directory. Set `ALICE_TELEMETRY_ENDPOINT` to an OTLP/HTTP endpoint to show an opt-in Settings toggle for anonymous usage counts; nothing is sent without both. [docs/telemetry.md](telemetry.md) lists every field. Set `ALICE_METRICS=1` to serve Prometheus metrics on `/metrics` for your own scraper; [docs/metrics.md](metrics.md) lists them.
+- On Windows, Alice finds `pi`, `wt` and `gh` through `PATH` and `PATHEXT`, and runs npm's `pi.cmd` shim as `node cli.js`. Repository paths can be `C:\\code\\app` or `~\\code\\app`. Data lives in `%USERPROFILE%\\.local\\share\\alice`. A run's **Stop** ends Pi but not any processes Pi started. An auto-review verification command runs under `cmd.exe`, so write it for that shell.
+- Files attached to cards and discussion messages live in `<data dir>/attachments/<card id>/`. Clicking an image thumbnail opens it in a lightbox: the arrow keys, the side buttons or the thumbnail strip step through the other images in the same list, **Full size** shows the image at its natural size (scroll to pan), and **Open original** opens the file in a new tab. Cmd- or Ctrl-click on a thumbnail still opens the file in a new tab directly. Deleting an attachment removes its file. Archiving a card or removing its board keeps the files, because both can be undone. To reclaim the space, use **Purge attachments** on an archived card or `alice purge-attachments CARD_ID... --yes`. It deletes the card's folder and its attachment records, and it cannot be undone, even if you restore the card.
+- Agents keep evidence as attachments too. A work run's prompt tells the agent to save screenshots and other generated files with `alice attach CARD_ID FILE... --board ID` instead of reporting `/tmp` paths. The command reads each file as the agent's own user, uploads it through the normal attachment route (nothing leaves Alice), and prints a markdown line such as `![before.png](/api/boards/…/cards/…/attachments/…)` to paste into the report. The report shows attached images inline and falls back to a link when a file is missing. Only Alice's own attachment and chat-image URLs render as images; a local path in report text is never read. In a GitHub pull request body or comment, Alice rewrites those relative links to plain text saying the file is kept in Alice, because screenshots are never published to GitHub.
 - Only one server can own a data directory, which it locks with `server.lock`. If the PID in the lock is no longer running, the next server takes over the lock.
 - **Stop** ends a run and marks it Failed. Runs time out after 30 minutes.
 
-In `npm run dev`, code changes don't kill running agents. This matters because approving a Bakery card changes Bakery's own server code:
+In `npm run dev`, code changes don't kill running agents. This matters because approving an Alice card changes Alice's own server code:
 
 ```mermaid
 sequenceDiagram
   participant S as dev supervisor
-  participant B as Bakery server
+  participant B as Alice server
   participant P as running Pi agents
   Note over S: server file changes,<br/>for example after a merge
   S->>B: drain
@@ -432,15 +437,15 @@ The browser takes UI changes from a merge as hot updates, so the board and an op
 
 ## Hosting on another machine
 
-By default the server binds to 127.0.0.1 and only accepts local `Host` and `Origin` headers. To run it on an always-on box, put it on a private network such as Tailscale (Bakery has no login of its own):
+By default the server binds to 127.0.0.1 and only accepts local `Host` and `Origin` headers. To run it on an always-on box, put it on a private network such as Tailscale (Alice has no login of its own):
 
 ```sh
-bakery-cli service install --host <tailnet IP>
+alice service install --host <tailnet IP>
 ```
 
-Then add `BAKERY_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net` to `~/.config/bakery/bakery.env` and run `bakery-cli service restart`.
+Then add `ALICE_ALLOWED_HOSTS=mochi,mochi.tailnet.ts.net` to `~/.config/alice/alice.env` and run `alice service restart`.
 
-`BAKERY_HOST` is the bind address (prefer the tailnet IP). `BAKERY_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `BAKERY_URL=mochi BAKERY_ALLOW_REMOTE=1 bakery-cli ...` reaches it. Like the desktop and iOS apps, an address without a scheme tries HTTPS, then HTTP, and one without a port uses 4317. Repository paths and merges are on the server's disk.
+`ALICE_HOST` is the bind address (prefer the tailnet IP). `ALICE_ALLOWED_HOSTS` lists extra hostnames, without ports, accepted in `Host` and `Origin`. From another machine, `ALICE_URL=mochi ALICE_ALLOW_REMOTE=1 alice ...` reaches it. Like the desktop and iOS apps, an address without a scheme tries HTTPS, then HTTP, and one without a port uses 4317. Repository paths and merges are on the server's disk.
 
 ### HTTPS on a tailnet
 
@@ -450,20 +455,20 @@ Browsers only allow notifications, service workers and installing the page as an
 tailscale serve --bg --https=443 http://<tailnet IP>:4317
 ```
 
-Then open `https://<machine>.<tailnet>.ts.net`. Add that name to `BAKERY_ALLOWED_HOSTS`; Bakery accepts HTTPS origins for allowed hosts, so nothing else changes. Serve on a port Bakery isn't using: when `BAKERY_HOST` is the tailnet IP, `--https=4317` collides with Bakery's own listener on that IP and the TLS handshake fails. `tailscale serve status` lists what is served, and `tailscale serve --https=443 off` removes it. The plain HTTP address keeps working for the CLI and the apps.
+Then open `https://<machine>.<tailnet>.ts.net`. Add that name to `ALICE_ALLOWED_HOSTS`; Alice accepts HTTPS origins for allowed hosts, so nothing else changes. Serve on a port Alice isn't using: when `ALICE_HOST` is the tailnet IP, `--https=4317` collides with Alice's own listener on that IP and the TLS handshake fails. `tailscale serve status` lists what is served, and `tailscale serve --https=443 off` removes it. The plain HTTP address keeps working for the CLI and the apps.
 
-**Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u bakery`.
+**Logs** in the sidebar (`g l`) shows the server's own console output: warnings, errors, and a debug line for each API request that fails. It keeps the last 2,000 lines in memory and starts empty after a restart. For older output, read the service manager's log, for example `journalctl --user -u alice`.
 
 ### Running as a service
 
-`bakery-cli service install` runs this checkout in the background: a systemd user service on Linux, or a launchd agent on macOS. It starts at login, restarts after a crash, and checks for updates every 2 minutes. It builds the UI first if `dist/` is missing.
+`alice service install` runs this checkout in the background: a systemd user service on Linux, or a launchd agent on macOS. It starts at login, restarts after a crash, and checks for updates every 2 minutes. It builds the UI first if `dist/` is missing.
 
-- Settings go in `~/.config/bakery/bakery.env`, which install creates once with `BAKERY_SERVE_UI=1` and `BAKERY_HOST` (`--host`, default `127.0.0.1`) and never overwrites. Put feature switches here too, so the server and the update check both read them.
-- `bakery-cli service restart` applies a changed env file. It waits for active runs to finish, as an update does.
+- Settings go in `~/.config/alice/alice.env`. Install creates the file once with `ALICE_SERVE_UI=1` and `ALICE_HOST` (`--host`, default `127.0.0.1`) and never overwrites. Put feature switches here too, so the server and the update check both read them.
+- `alice service restart` applies a changed env file. It waits for active runs to finish, as an update does.
 - `status` and `logs` show the server's state and its last 200 log lines. `stop` and `uninstall` end active runs at once, so they need `--yes`. Uninstall keeps the env file and the data directory.
 - On Linux the service starts at login. To start it at boot and keep it running after logout, run `loginctl enable-linger`; install says so when it is off.
-- The unit records where node, npm, `pi`, `wt`, `gh` and git are. After moving any of them, run install again. `bakery-cli doctor` fails while the recorded npm is missing.
-- Install rewrites `~/.config/systemd/user/bakery.service`. Keep your own changes in drop-ins under `bakery.service.d/`.
+- The unit records where node, npm, `pi`, `wt`, `gh` and git are. After moving any of them, run install again. `alice doctor` fails while the recorded npm is missing.
+- Install rewrites `~/.config/systemd/user/alice.service`. Keep your own changes in drop-ins under `alice.service.d/`.
 - Windows has no `service` command yet. Start `npm start` from Task Scheduler at logon instead.
 
 ### Keeping a hosted server up to date
@@ -476,7 +481,8 @@ When the fetch brings new commits, a notice in the bottom-left corner says how m
 
 - Pi is told not to commit, push, or publish during a run. **That instruction isn't a sandbox.** Only run agents on repositories you trust.
 - The unattended reviewer runs builds and tests with your permissions.
-- Every run, retry, pickup, and review can spend model tokens. Bakery records the tokens and cost Pi reports, but only a daily cost budget stops automatic pickup. Nothing stops a run that is already going.
+- Alice sets `IMPRESSION_SESSION` on every Pi process it starts. Card runs get `read`: [Impression](https://github.com/aglowinthefield/impression), if installed, gives them memories but never uploads their transcripts. Reviewers, PR drafts and chat topics get `off`, so a reviewer judges from the card, the diff and the repository alone. Chats and card discussions run Pi as you would.
+- Every run, retry, pickup, and review can spend model tokens. Alice records the tokens and cost Pi reports, but only a daily cost budget stops automatic pickup. Nothing stops a run that is already going.
 
 ## Development
 
@@ -488,11 +494,11 @@ npm run format         # fixes formatting in the covered frontend files
 
 The formatter check covers the board, card details, review, attempts, usage, API, and model modules. It doesn't cover server or test files yet.
 
-Tests use a fake offline `pi` and temporary Git repositories. They don't call a model or touch repositories you've added to Bakery.
+Tests use a fake offline `pi` and temporary Git repositories. They don't call a model or touch repositories you've added to Alice.
 
 ### Next
 
-- Read-only Linear import into local cards, keyed by issue ID. Bakery won't write to Linear.
+- Read-only Linear import into local cards, keyed by issue ID. Alice won't write to Linear.
 - Better process identity checks for interrupted runs, beyond PID liveness.
 - External CI before approval and automatic card creation.
 
@@ -504,7 +510,7 @@ Review the commit, then `git push origin main v0.2.0`. Pushing the tag runs `.gi
 
 ## Colleagues prototype (fixture data)
 
-A clickable, fixture-backed prototype of persistent colleagues and group rooms, built from the draft spec in PR #13 for operator review. It is not the feature. It calls no Bakery API, starts no agent, creates no card, writes no memory, and keeps all state in the browser tab (the Reset button restores the fixtures). It is a separate page that is not part of the production build or the board.
+A clickable, fixture-backed prototype of persistent colleagues and group rooms, built from the draft spec in PR #13 for operator review. It is not the feature. It calls no Alice API, starts no agent, creates no card, writes no memory, and keeps all state in the browser tab (the Reset button restores the fixtures). It is a separate page that is not part of the production build or the board.
 
 ```sh
 npm run prototype:colleagues

@@ -3,17 +3,17 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 /**
- * Opt-in usage telemetry: counters only, sent as OTLP/HTTP JSON metrics to BAKERY_TELEMETRY_ENDPOINT.
+ * Opt-in usage telemetry: counters only, sent as OTLP/HTTP JSON metrics to ALICE_TELEMETRY_ENDPOINT.
  * docs/telemetry.md lists every field. Counts gather in memory and go out in one batch per interval; a send that fails
  * is dropped, never retried, and never reaches the request or run that produced the count.
  */
 
-/** Every counter Bakery sends. */
-export const telemetryCounters = ["bakery.runs.started", "bakery.runs.finished", "bakery.runs.failed", "bakery.runs.stopped", "bakery.merges", "bakery.pull_requests.opened", "bakery.doctor.failures", "bakery.server.errors"] as const;
+/** Every counter Alice sends. */
+export const telemetryCounters = ["alice.runs.started", "alice.runs.finished", "alice.runs.failed", "alice.runs.stopped", "alice.merges", "alice.pull_requests.opened", "alice.doctor.failures", "alice.server.errors"] as const;
 export type TelemetryCounter = typeof telemetryCounters[number];
 
-/** `bakery-cli doctor` check names. Board checks are named after their repository path, so they all count as "board". */
-export const doctorCheckNames = ["node", "git", "git identity", "pi", "pi models", "worktrunk", "gh", "data dir", "server lock", "server", "board", "bakery-cli", "bakery server"] as const;
+/** `alice doctor` check names. Board checks are named after their repository path, so they all count as "board". */
+export const doctorCheckNames = ["node", "git", "git identity", "pi", "pi models", "worktrunk", "gh", "data dir", "server lock", "server", "board", "alice", "alice server"] as const;
 export type DoctorCheckName = typeof doctorCheckNames[number];
 
 /** The only data point attributes, by counter. Anything else is never recorded. */
@@ -35,7 +35,7 @@ export type TelemetryOptions = {
   now?: () => number;
 };
 
-/** OTel's os.type values for the platforms Bakery runs on. */
+/** OTel's os.type values for the platforms Alice runs on. */
 function osType(platform: NodeJS.Platform): string {
   return platform === "win32" ? "windows" : platform === "darwin" || platform === "linux" || platform === "freebsd" || platform === "openbsd" ? platform : "other";
 }
@@ -46,7 +46,7 @@ export function errorType(error: unknown): string {
   return /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) ? name : "Error";
 }
 
-/** Maps a doctor check name to the reported one, or undefined for a name Bakery does not know. */
+/** Maps a doctor check name to the reported one, or undefined for a name Alice does not know. */
 export function doctorCheck(name: unknown): DoctorCheckName | undefined {
   if (typeof name !== "string") return undefined;
   const normalized = name.startsWith("board ") ? "board" : name;
@@ -171,8 +171,8 @@ export class Telemetry {
     });
     return {
       resourceMetrics: [{
-        resource: { attributes: [string("service.name", "bakery"), string("service.version", this.options.version), string("os.type", osType(this.options.platform ?? process.platform)), string("bakery.install.id", this.id())] },
-        scopeMetrics: [{ scope: { name: "bakery" }, metrics }],
+        resource: { attributes: [string("service.name", "alice"), string("service.version", this.options.version), string("os.type", osType(this.options.platform ?? process.platform)), string("alice.install.id", this.id())] },
+        scopeMetrics: [{ scope: { name: "alice" }, metrics }],
       }],
     };
   }
@@ -182,8 +182,8 @@ export class Telemetry {
  * Classifies a finished run for telemetry: Review is finished, an operator's Stop is stopped, anything else failed.
  * The Worker records a stop as a failure whose error names the "manual stop" it sent.
  */
-export function runOutcome(run: { status: string; error: string | null }): "bakery.runs.finished" | "bakery.runs.failed" | "bakery.runs.stopped" | null {
-  if (run.status === "review") return "bakery.runs.finished";
+export function runOutcome(run: { status: string; error: string | null }): "alice.runs.finished" | "alice.runs.failed" | "alice.runs.stopped" | null {
+  if (run.status === "review") return "alice.runs.finished";
   if (run.status !== "failed") return null;
-  return run.error?.includes("Bakery sent SIGTERM: manual stop") ? "bakery.runs.stopped" : "bakery.runs.failed";
+  return /Alice sent SIGTERM: manual stop/.test(run.error ?? "") ? "alice.runs.stopped" : "alice.runs.failed";
 }

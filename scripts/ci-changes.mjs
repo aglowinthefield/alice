@@ -11,12 +11,12 @@ import { fileURLToPath } from "node:url";
 const docsOnly = [/\.md$/i, /^docs\//, /^\.github\/ISSUE_TEMPLATE\//];
 
 // Code that behaves differently on macOS: platform shims, spawning processes and creating worktrees, and the UI,
-// which the tests drive in WebKit only on macOS (tests/setup.ts). Their tests and the CI setup count too.
+// which the tests drive in WebKit only on macOS (tests/setup.ts), with shared/, which the UI bundles. Their tests and the CI setup count too.
 // These server modules spawn child processes or handle worktrees; a test file named after one (`chat.test.ts`,
 // `chat-images.test.ts`) counts with it.
 const processModules = [
   "platform", "auto-review", "board", "chat", "discuss", "github", "index", "integration", "lock", "origin-main",
-  "origin", "pr-draft", "pr-lock", "run-locks", "run-shim", "sentinel", "sentinel-store", "shared-cache-env", "shared-caches",
+  "origin", "pr-draft", "pr-lock", "run-locks", "run-shim", "sentinel", "sentinel-store", "shared-cache-env",
   "turbo-summary", "updates", "worker",
 ];
 // Tests that launch Playwright without the `-ui.test.ts` suffix (grep -l playwright tests/*.ts).
@@ -29,6 +29,7 @@ const macosSensitive = [
   new RegExp(`^tests/(${processModules.join("|")})(-[\\w-]+)?\\.test\\.ts$`),
   new RegExp(`^tests/(${browserTests.join("|")})\\.test\\.ts$`),
   /^src\//,
+  /^shared\//,
   /^public\//,
   /^index\.html$/,
   /^vite\.config\.ts$/,

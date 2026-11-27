@@ -9,7 +9,7 @@ const messages = [
   { id: "m1", chatId: "c1", role: "user", body: "What is blocked?", parts: [], createdAt: "2025-01-01T00:00:00Z" },
   { id: "m2", chatId: "c1", role: "agent", body: "Card B waits on A.", createdAt: "2025-01-01T00:00:01Z",
     parts: [
-      { type: "tool", id: "t1", name: "bash", input: "bakery-cli cards", output: "A\nB", status: "done" },
+      { type: "tool", id: "t1", name: "bash", input: "alice cards", output: "A\nB", status: "done" },
       { type: "text", text: "Card B waits on A." },
     ] },
 ];
@@ -378,18 +378,25 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
   try {
     const page = await (await browser.newContext()).newPage();
     const patches: unknown[] = [];
+    // Keeps each save like the real server does, so the chat list's periodic refresh never hands back the old choice.
+    let saved = chat;
+    let thirdSave!: () => void;
+    const savedThree = new Promise<void>(resolve => { thirdSave = resolve; });
     await page.route("**/api/**", async route => {
       const request = route.request(), path = new URL(request.url()).pathname;
       if (path === "/api/boards") return route.fulfill({ json: boards });
       if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" } });
       if (path === "/api/models") return route.fulfill({ json: { models: ["openai/gpt-6.1-sol", "anthropic/claude-sonnet-4-5"] } });
-      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [chat] });
+      if (path === "/api/boards/b1/chats") return route.fulfill({ json: [saved] });
       if (path === "/api/boards/b1/chats/c1" && request.method() === "PATCH") {
         const input = request.postDataJSON();
         patches.push(input);
-        return route.fulfill({ json: { ...chat, ...input } });
+        saved = { ...saved, ...input };
+        await route.fulfill({ json: saved });
+        if (patches.length === 3) thirdSave();
+        return;
       }
-      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat, messages: [], live: null } });
+      if (path === "/api/boards/b1/chats/c1") return route.fulfill({ json: { chat: saved, messages: [], live: null } });
       if (path === "/api/boards/b1/chats/c1/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "live", live: null })}\n\n` });
       await route.fulfill({ json: [] });
     });
@@ -402,7 +409,7 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
     await model.fill("anthropic/claude-sonnet-4-5");
     await model.press("Enter");
     await thinking.selectOption("medium");
-    await page.waitForTimeout(200);
+    await savedThree;
     assert.deepEqual(patches, [
       { model: "openai/gpt-6.1-sol", thinking: "high" },
       { model: "anthropic/claude-sonnet-4-5", thinking: "high" },
@@ -414,6 +421,15 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
     await server.close();
   }
 });
+
+/**
+ * Waits for Inter to load and the render it causes to land. The chat list measures its labels in the font on screen,
+ * so a maximum read while the fallback still shows would change under the test once Inter swaps in.
+ */
+async function fontsLoaded(page: Page) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
 
 async function waitUntil(condition: () => boolean | Promise<boolean>, timeout = 10_000) {
   for (const started = Date.now(); !(await condition()); await new Promise(resolve => setTimeout(resolve, 25)))
@@ -695,6 +711,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     const width = async () => Math.round((await nav.boundingBox())!.width);
     const value = async (name: string) => Number(await divider.getAttribute(name));
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     const max = await value("aria-valuemax"), min = await value("aria-valuemin");
     assert.equal(min, 180);
@@ -735,6 +752,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const saved = await width();
     await page.reload();
     await nav.getByRole("button", { name: /^Why is card B/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     assert.equal(await width(), saved, "the chosen width survives a reload");
 
@@ -771,10 +789,10 @@ test("shortening or deleting the longest label lowers the maximum and clamps a w
   try {
     const page = await (await browser.newContext({ viewport: { width: 1400, height: 800 } })).newPage();
     const list = [
-      { id: "c1", topic: "Short", unread: 0 },
+      { id: "c1", topic: "Hi", unread: 0 },
       { id: "c2", topic: "Why is card B still waiting on A", unread: 0 },
     ];
-    await page.addInitScript(() => localStorage.setItem("bakery-chat-sidebar-width", "900"));
+    await page.addInitScript(() => localStorage.setItem("alice-chat-sidebar-width", "900"));
     await unreadHarness(page, list);
     await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
     const nav = page.getByRole("navigation", { name: "Chats" });
@@ -845,6 +863,7 @@ test("at the maximum a wide-glyph label with a badge fits with fractional widths
     const nav = page.getByRole("navigation", { name: "Chats" });
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
     await divider.focus();
     await page.keyboard.press("End");

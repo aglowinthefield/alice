@@ -1,4 +1,4 @@
-// `bakery-cli service`: runs this checkout as a background service that starts at login (or boot, with lingering),
+// `alice service`: runs this checkout as a background service that starts at login (or boot, with lingering),
 // restarts on failure, and checks for updates every 2 minutes. systemd user units on Linux, launchd agents on macOS.
 // Settings live in one env file both service managers read, so reinstalling never loses them.
 import { spawnSync } from "node:child_process";
@@ -8,29 +8,33 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ACTIONS = ["install", "uninstall", "start", "stop", "restart", "status", "logs"];
-const LABEL = "dev.bakery.server", UPDATE_LABEL = "dev.bakery.update";
+const LABEL = "dev.alice.server", UPDATE_LABEL = "dev.alice.update";
+const NAMES = { service: "alice.service", update: "alice-update.service", timer: "alice-update.timer", label: LABEL, updateLabel: UPDATE_LABEL, logs: "alice" };
 
-/** Every path the service uses, from the environment, so tests can point them at a temporary home. */
+/**
+ * Every path the service uses, from the environment, so tests can point them at a temporary home.
+ */
 export function servicePaths(env = process.env, platform = process.platform) {
   const home = env.HOME || homedir();
   const config = env.XDG_CONFIG_HOME || join(home, ".config");
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const node = process.execPath;
+  const units = platform === "darwin" ? join(home, "Library", "LaunchAgents") : join(config, "systemd", "user");
   return {
     root, node, npm: join(dirname(node), "npm"),
-    envFile: join(config, "bakery", "bakery.env"),
-    units: platform === "darwin" ? join(home, "Library", "LaunchAgents") : join(config, "systemd", "user"),
-    logs: join(home, "Library", "Logs", "bakery"),
+    envFile: join(config, "alice", "alice.env"),
+    units, unitFile: join(units, platform === "darwin" ? `${LABEL}.plist` : NAMES.service), names: NAMES,
+    logs: join(home, "Library", "Logs", NAMES.logs),
     home,
   };
 }
 
 /**
  * The PATH the service runs with. A service manager starts with a bare PATH, so keep the directories that hold node
- * and the tools Bakery runs, as they resolve now. Moving any of them means running install again; doctor says so.
+ * and the tools Alice runs, as they resolve now. Moving any of them means running install again; doctor says so.
  */
 export function servicePath(paths, env = process.env) {
-  const found = ["pi", "wt", "gh", "git"].map(bin => env[`BAKERY_${bin.toUpperCase()}_BIN`] || bin).map(bin => {
+  const found = ["pi", "wt", "gh", "git"].map(bin => env[`ALICE_${bin.toUpperCase()}_BIN`] || bin).map(bin => {
     if (bin.includes("/")) return dirname(bin);
     const result = spawnSync("sh", ["-c", 'command -v "$0"', bin], { encoding: "utf8", env });
     return result.status === 0 ? dirname(result.stdout.trim()) : null;
@@ -40,21 +44,21 @@ export function servicePath(paths, env = process.env) {
 }
 
 export function envFileText(host) {
-  return `# Bakery server settings. The service reads this file when it starts; restart it after a change.
+  return `# Alice server settings. The service reads this file when it starts; restart it after a change.
 # Every variable is described in docs/reference.md.
-BAKERY_SERVE_UI=1
-BAKERY_HOST=${host}
-# BAKERY_PORT=4317
+ALICE_SERVE_UI=1
+ALICE_HOST=${host}
+# ALICE_PORT=4317
 # Hostnames other than the bind address that may reach the server, comma-separated (for example a tailnet name).
-# BAKERY_ALLOWED_HOSTS=
+# ALICE_ALLOWED_HOSTS=
 `;
 }
 
 /** systemd user units: the server, and a timer that fetches updates every 2 minutes. */
 export function systemdUnits(paths, path) {
-  const service = `# Written by bakery-cli service install; it rewrites this file. Put your own changes in bakery.service.d/.
+  const service = `# Written by alice service install; it rewrites this file. Put your own changes in alice.service.d/.
 [Unit]
-Description=Bakery
+Description=Alice
 After=network-online.target
 Wants=network-online.target
 
@@ -69,9 +73,9 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 `;
-  const update = `# Written by bakery-cli service install.
+  const update = `# Written by alice service install.
 [Unit]
-Description=Check for Bakery updates
+Description=Check for Alice updates
 
 [Service]
 Type=oneshot
@@ -80,9 +84,9 @@ Environment=PATH=${path}
 EnvironmentFile=-${paths.envFile}
 ExecStart=${join(paths.root, "scripts", "update.sh")}
 `;
-  const timer = `# Written by bakery-cli service install.
+  const timer = `# Written by alice service install.
 [Unit]
-Description=Check for Bakery updates every 2 minutes
+Description=Check for Alice updates every 2 minutes
 
 [Timer]
 OnBootSec=5min
@@ -91,7 +95,7 @@ OnUnitActiveSec=2min
 [Install]
 WantedBy=timers.target
 `;
-  return { "bakery.service": service, "bakery-update.service": update, "bakery-update.timer": timer };
+  return { "alice.service": service, "alice-update.service": update, "alice-update.timer": timer };
 }
 
 const xml = text => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -139,7 +143,7 @@ function writeFiles(dir, files) {
 
 function ensureEnvFile(paths, host, log) {
   if (existsSync(paths.envFile)) {
-    if (host) log(`Kept ${paths.envFile}; --host applies only when it is created. Edit BAKERY_HOST there.`);
+    if (host) log(`Kept ${paths.envFile}; --host applies only when it is created. Edit ALICE_HOST there.`);
     else log(`Kept ${paths.envFile}.`);
     return;
   }
@@ -158,9 +162,9 @@ function buildUi(paths, log) {
 
 const ACTIVE_RUNS = "This stops the server at once and ends any active runs.";
 
-/** Runs one `bakery-cli service` action. `log` prints one line. */
+/** Runs one `alice service` action. `log` prints one line. */
 export function service(action, { host, yes = false, env = process.env, platform = process.platform, log = console.log } = {}) {
-  if (platform !== "linux" && platform !== "darwin") throw new Error("bakery-cli service supports Linux (systemd) and macOS (launchd). On Windows, start `npm start` from Task Scheduler at logon; see docs/reference.md.");
+  if (platform !== "linux" && platform !== "darwin") throw new Error("alice service supports Linux (systemd) and macOS (launchd). On Windows, start `npm start` from Task Scheduler at logon; see docs/reference.md.");
   if ((action === "stop" || action === "uninstall") && !yes) throw new Error(`${ACTIVE_RUNS} Repeat with --yes to confirm.`);
   const paths = servicePaths(env, platform);
   return platform === "linux" ? systemd(action, paths, { host, env, log }) : launchd(action, paths, { host, env, log });
@@ -168,34 +172,36 @@ export function service(action, { host, yes = false, env = process.env, platform
 
 function systemd(action, paths, { host, env, log }) {
   const ctl = (...args) => exec("systemctl", ["--user", ...args]);
-  const active = () => exec("systemctl", ["--user", "is-active", "--quiet", "bakery.service"], { allowFail: true }).status === 0;
+  const { service, update, timer } = paths.names;
+  const active = () => exec("systemctl", ["--user", "is-active", "--quiet", service], { allowFail: true }).status === 0;
   if (action === "install") {
     ensureEnvFile(paths, host, log);
     buildUi(paths, log);
     for (const file of writeFiles(paths.units, systemdUnits(paths, servicePath(paths, env)))) log(`Wrote ${file}.`);
     ctl("daemon-reload");
-    ctl("enable", "--now", "bakery-update.timer");
+    ctl("enable", "--now", timer);
     // Restarting a running server here would end its runs, so the new unit waits for the next update or restart.
-    if (active()) { ctl("enable", "bakery.service"); log("Bakery is already running; the new unit applies at its next restart (bakery-cli service restart waits for active runs)."); }
-    else { ctl("enable", "--now", "bakery.service"); log("Started Bakery."); }
+    if (active()) { ctl("enable", service); log("Alice is already running; the new unit applies at its next restart (alice service restart waits for active runs)."); }
+    else { ctl("enable", "--now", service); log("Started Alice."); }
     const linger = exec("loginctl", ["show-user", userInfo().username, "-p", "Linger", "--value"], { allowFail: true });
-    if (linger.stdout?.trim() === "no") log("Bakery starts when you log in. To start it at boot and keep it running after logout, run: loginctl enable-linger");
+    if (linger.stdout?.trim() === "no") log("Alice starts when you log in. To start it at boot and keep it running after logout, run: loginctl enable-linger");
   } else if (action === "uninstall") {
-    exec("systemctl", ["--user", "disable", "--now", "bakery.service", "bakery-update.timer"], { allowFail: true });
-    for (const name of Object.keys(systemdUnits(paths, ""))) rmSync(join(paths.units, name), { force: true });
+    exec("systemctl", ["--user", "disable", "--now", service, timer], { allowFail: true });
+    for (const name of [service, update, timer]) rmSync(join(paths.units, name), { force: true });
     ctl("daemon-reload");
-    log(`Removed the Bakery units. Settings stay in ${paths.envFile}, and data in the data directory.`);
-  } else if (action === "start") { ctl("start", "bakery.service"); log("Started Bakery."); }
-  else if (action === "stop") { ctl("stop", "bakery.service"); log("Stopped Bakery. It starts again at your next login unless you uninstall it."); }
+    log(`Removed the Alice units. Settings stay in ${paths.envFile}, and data in the data directory.`);
+  } else if (action === "start") { ctl("start", service); log("Started Alice."); }
+  else if (action === "stop") { ctl("stop", service); log("Stopped Alice. It starts again at your next login unless you uninstall it."); }
   // SIGUSR2 drains: no new runs, wait for the active ones, then exit, and Restart=always brings it back.
   else if (action === "restart") {
-    if (!active()) { ctl("start", "bakery.service"); log("Bakery was not running; started it."); }
-    else { ctl("kill", "--signal=SIGUSR2", "bakery.service"); log("Bakery restarts once its active runs finish. The board shows it draining until then."); }
-  } else if (action === "status") exec("systemctl", ["--user", "status", "--no-pager", "bakery.service", "bakery-update.timer"], { inherit: true, allowFail: true });
-  else if (action === "logs") exec("journalctl", ["--user", "-u", "bakery.service", "-n", "200", "--no-pager"], { inherit: true });
+    if (!active()) { ctl("start", service); log("Alice was not running; started it."); }
+    else { ctl("kill", "--signal=SIGUSR2", service); log("Alice restarts once its active runs finish. The board shows it draining until then."); }
+  } else if (action === "status") exec("systemctl", ["--user", "status", "--no-pager", service, timer], { inherit: true, allowFail: true });
+  else if (action === "logs") exec("journalctl", ["--user", "-u", service, "-n", "200", "--no-pager"], { inherit: true });
 }
 
 function launchd(action, paths, { host, env, log }) {
+  const { label: serverLabel, updateLabel } = paths.names;
   const domain = `gui/${process.getuid?.() ?? userInfo().uid}`;
   const loaded = label => exec("launchctl", ["print", `${domain}/${label}`], { allowFail: true }).status === 0;
   const agents = launchdAgents(paths, servicePath(paths, env));
@@ -205,22 +211,22 @@ function launchd(action, paths, { host, env, log }) {
     buildUi(paths, log);
     mkdirSync(paths.logs, { recursive: true });
     for (const file of writeFiles(paths.units, agents)) log(`Wrote ${file}.`);
-    exec("launchctl", ["bootout", `${domain}/${UPDATE_LABEL}`], { allowFail: true });
-    exec("launchctl", ["bootstrap", domain, plistPath(UPDATE_LABEL)]);
-    if (loaded(LABEL)) log("Bakery is already running; the new agent applies at its next restart (bakery-cli service restart waits for active runs).");
-    else { exec("launchctl", ["bootstrap", domain, plistPath(LABEL)]); log("Started Bakery."); }
+    exec("launchctl", ["bootout", `${domain}/${updateLabel}`], { allowFail: true });
+    exec("launchctl", ["bootstrap", domain, plistPath(updateLabel)]);
+    if (loaded(serverLabel)) log("Alice is already running; the new agent applies at its next restart (alice service restart waits for active runs).");
+    else { exec("launchctl", ["bootstrap", domain, plistPath(serverLabel)]); log("Started Alice."); }
   } else if (action === "uninstall") {
-    for (const label of [LABEL, UPDATE_LABEL]) { exec("launchctl", ["bootout", `${domain}/${label}`], { allowFail: true }); rmSync(plistPath(label), { force: true }); }
-    log(`Removed the Bakery agents. Settings stay in ${paths.envFile}, and data in the data directory.`);
+    for (const label of [serverLabel, updateLabel]) { exec("launchctl", ["bootout", `${domain}/${label}`], { allowFail: true }); rmSync(plistPath(label), { force: true }); }
+    log(`Removed the Alice agents. Settings stay in ${paths.envFile}, and data in the data directory.`);
   } else if (action === "start") {
-    if (loaded(LABEL)) exec("launchctl", ["kickstart", `${domain}/${LABEL}`]);
-    else exec("launchctl", ["bootstrap", domain, plistPath(LABEL)]);
-    log("Started Bakery.");
-  } else if (action === "stop") { exec("launchctl", ["bootout", `${domain}/${LABEL}`]); log("Stopped Bakery. It starts again at your next login unless you uninstall it."); }
+    if (loaded(serverLabel)) exec("launchctl", ["kickstart", `${domain}/${serverLabel}`]);
+    else exec("launchctl", ["bootstrap", domain, plistPath(serverLabel)]);
+    log("Started Alice.");
+  } else if (action === "stop") { exec("launchctl", ["bootout", `${domain}/${serverLabel}`]); log("Stopped Alice. It starts again at your next login unless you uninstall it."); }
   // KeepAlive brings the server back after the drain ends.
-  else if (action === "restart") { exec("launchctl", ["kill", "SIGUSR2", `${domain}/${LABEL}`]); log("Bakery restarts once its active runs finish. The board shows it draining until then."); }
+  else if (action === "restart") { exec("launchctl", ["kill", "SIGUSR2", `${domain}/${serverLabel}`]); log("Alice restarts once its active runs finish. The board shows it draining until then."); }
   else if (action === "status") {
-    for (const label of [LABEL, UPDATE_LABEL]) log(`${label}\t${loaded(label) ? "loaded" : "not loaded"}`);
+    for (const label of [serverLabel, updateLabel]) log(`${label}\t${loaded(label) ? "loaded" : "not loaded"}`);
   } else if (action === "logs") {
     const file = join(paths.logs, "server.log");
     if (!existsSync(file)) throw new Error(`No log yet at ${file}`);
@@ -232,10 +238,10 @@ function launchd(action, paths, { host, env, log }) {
 export function serviceCheck(env = process.env, platform = process.platform) {
   if (platform !== "linux" && platform !== "darwin") return null;
   const paths = servicePaths(env, platform);
-  const file = platform === "linux" ? join(paths.units, "bakery.service") : join(paths.units, `${LABEL}.plist`);
-  if (!existsSync(file)) return { status: "info", name: "service", detail: "not installed; bakery-cli service install keeps the server running and up to date" };
+  const file = paths.unitFile;
+  if (!existsSync(file)) return { status: "info", name: "service", detail: "not installed; alice service install keeps the server running and up to date" };
   const text = readFileSync(file, "utf8");
   const npm = platform === "linux" ? /^ExecStart=(\S+) start$/m.exec(text)?.[1] : /exec "([^"]+)" start/.exec(text)?.[1];
-  if (npm && !existsSync(npm)) return { status: "fail", name: "service", detail: `${file} runs ${npm}, which no longer exists; run bakery-cli service install again` };
+  if (npm && !existsSync(npm)) return { status: "fail", name: "service", detail: `${file} runs ${npm}, which no longer exists; run alice service install again` };
   return { status: "pass", name: "service", detail: file };
 }

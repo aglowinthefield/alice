@@ -8,13 +8,13 @@ import { describeToolCall, summarizeFailure } from "../server/failure-summary.js
 
 test("a failed run's error reads as a few words on why it failed", () => {
   const cases: [string | null, string | null, string | null][] = [
-    ["Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout; no settlement event; stderr: Warning: No project session found", null, "Timed out after 60 min"],
-    ["Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout; stuck in bash for 31 min: timeout 1800 sh -c 'x'; no settlement event", null, "Timed out: bash ran 31 min"],
-    ["Pi exited (143); Bakery sent SIGTERM: 60-minute run timeout; stuck in bash for 0 min: ls; no settlement event", null, "Timed out after 60 min"],
-    ["Pi exited (143); Bakery sent SIGTERM: manual stop; no settlement event", null, "Stopped by hand"],
-    ["Pi exited (143); Bakery sent SIGTERM: server received SIGTERM; no settlement event", null, "Server restarted mid-run"],
+    ["Pi exited (143); Alice sent SIGTERM: 60-minute run timeout; no settlement event; stderr: Warning: No project session found", null, "Timed out after 60 min"],
+    ["Pi exited (143); Alice sent SIGTERM: 60-minute run timeout; stuck in bash for 31 min: timeout 1800 sh -c 'x'; no settlement event", null, "Timed out: bash ran 31 min"],
+    ["Pi exited (143); Alice sent SIGTERM: 60-minute run timeout; stuck in bash for 0 min: ls; no settlement event", null, "Timed out after 60 min"],
+    ["Pi exited (143); Alice sent SIGTERM: manual stop; no settlement event", null, "Stopped by hand"],
+            ["Pi exited (143); Alice sent SIGTERM: server received SIGTERM; no settlement event", null, "Server restarted mid-run"],
     ["Server restarted while this run was active", null, "Server restarted mid-run"],
-    ["Pi exited (SIGKILL); termination source unknown (Bakery did not send SIGTERM); no settlement event", null, "Killed by unknown signal"],
+    ["Pi exited (SIGKILL); termination source unknown (Alice did not send SIGTERM); no settlement event", null, "Killed by unknown signal"],
     ["Provider request failed (HTTP 400): 400 {\"type\":\"error\"} [invalid-history: ...]; Pi exited (0); settled", "invalid-history", "Session history rejected"],
     ["Provider request failed (HTTP 502): 502 {\"error\":\"acp-proxy failure\"}", "transient", "Provider or network error"],
     ["Pi exited (0); settled; Provider request failed; stderr logged on server", "unknown", "Provider request failed"],
@@ -25,7 +25,7 @@ test("a failed run's error reads as a few words on why it failed", () => {
     ["Pi exited (1); no settlement event", null, "Pi crashed (exit 1)"],
     ["Pi exited (0); no settlement event", null, "Pi ended without finishing"],
     ["Pi exited (0); settled; Invalid Pi event stream", null, "Garbled Pi output"],
-    ["Error: fatal: 'bakery/x' is already checked out at '/somewhere/very/long'", null, "Error: fatal: 'bakery/x' is already che…"],
+    ["Error: fatal: 'alice/x' is already checked out at '/somewhere/very/long'", null, "Error: fatal: 'alice/x' is already chec…"],
   ];
   for (const [error, failureKind, expected] of cases)
     assert.equal(summarizeFailure({ error, failureKind }), expected, String(error));
@@ -34,12 +34,12 @@ test("a failed run's error reads as a few words on why it failed", () => {
 });
 
 test("only Failed cards carry a failure summary, from their latest attempt", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Fix the feed", body: "", repo: dir });
     board.setStatus(card.id, "ready");
-    board.finish(board.claim(card.id).id, "failed", "Pi exited (143); Bakery sent SIGTERM: 30-minute run timeout; no settlement event");
+    board.finish(board.claim(card.id).id, "failed", "Pi exited (143); Alice sent SIGTERM: 30-minute run timeout; no settlement event");
     assert.equal(board.getCard(card.id)?.failureSummary, "Timed out after 30 min");
     board.setStatus(card.id, "ready");
     assert.equal(board.getCard(card.id)?.failureSummary, null, "a retried card no longer shows the old failure");

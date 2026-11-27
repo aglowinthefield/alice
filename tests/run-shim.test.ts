@@ -46,7 +46,7 @@ const lines = (events: object[]) => events.map(event => `${JSON.stringify(event)
  * exists, like a Pi that takes a while to shut down.
  */
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-detached-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-detached-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   writeFileSync(join(repo, "README.md"), "fixture\n");
@@ -121,7 +121,7 @@ test("a stop signals the shim's process group, so Pi's own children stop too", {
     const tool = Number(readFileSync(grandchild, "utf8"));
     worker.stop(run.id);
     await waitFor(() => board.getRun(run.id)?.status === "failed");
-    assert.match(board.getRun(run.id)!.error!, /Bakery sent SIGTERM: manual stop/);
+    assert.match(board.getRun(run.id)!.error!, /Alice sent SIGTERM: manual stop/);
     await waitFor(() => !alive(tool));
   } finally {
     board.close();
@@ -156,7 +156,7 @@ test("killing the server mid-run does not stop Pi, and the next server stops a P
     const url = `http://127.0.0.1:${port}/api`;
     const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
       cwd: process.cwd(),
-      env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_PI_BIN: f.fakePi, BAKERY_WT_BIN: join(f.dir, "no-wt") },
+      env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_PI_BIN: f.fakePi, ALICE_WT_BIN: join(f.dir, "no-wt") },
       stdio: ["ignore", "pipe", "pipe"],
     });
     children.push(child);
@@ -212,7 +212,7 @@ test("killing the server mid-run does not stop Pi, and the next server stops a P
     // match). It waits for that Pi to exit before marking the run interrupted, clearing its files or serving requests.
     const second = await startServer();
     await waitFor(() => existsSync(join(f.dir, `term-${orphaned}`)), 20_000);
-    const db = new DatabaseSync(join(dataDir, "bakery.sqlite"), { readOnly: true });
+    const db = new DatabaseSync(join(dataDir, "alice.sqlite"), { readOnly: true });
     try { assert.equal((db.prepare("SELECT status FROM runs WHERE id=?").get(runs[1].id) as { status: string }).status, "running", "not interrupted while its Pi is still exiting"); }
     finally { db.close(); }
     assert.ok(existsSync(runDir(dataDir, runs[1].id)), "its files stay while Pi is still exiting");
@@ -295,8 +295,8 @@ test("a failed write rolls back the whole batch and its offset, and stops the ru
     await waitFor(() => board.getRun(run.id)?.status !== "running");
     const failed = board.getRun(run.id)!;
     assert.equal(failed.status, "failed");
-    assert.match(failed.error!, /Bakery sent SIGTERM: Bakery could not save the run's events/);
-    assert.match(failed.error!, /Bakery could not save Pi's events: disk I\/O error/);
+    assert.match(failed.error!, /Alice sent SIGTERM: Alice could not save the run's events/);
+    assert.match(failed.error!, /Alice could not save Pi's events: disk I\/O error/);
     assert.equal(failed.eventsOffset, 0, "the offset did not move past the failed batch");
     assert.equal(failed.turns, 0);
     assert.equal(failed.agent, "");

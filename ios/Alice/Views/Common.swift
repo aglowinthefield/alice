@@ -31,8 +31,8 @@ struct BrandIcon: View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.28).fill(T.card)
             RoundedRectangle(cornerRadius: size * 0.28).stroke(T.border)
-            if let image = RepoBadge.image("sprinkle_donut") {
-                Image(uiImage: image).interpolation(.none).resizable().scaledToFit().padding(size * 0.15)
+            if let image = RepoBadge.image("alice") {
+                Image(uiImage: image).resizable().scaledToFit().padding(size * 0.1)
             }
         }
         .frame(width: size, height: size)

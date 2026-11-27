@@ -1,6 +1,6 @@
 # Persistent colleagues and rooms
 
-Status: draft product spec, not authorization for implementation runs. Product direction is agreed; proposals and open decisions below are not implementation requirements yet.
+Status: parked on 2026-11-27. Alice stays a runner (cards, worktrees, the review gate and cost) until a concrete failure needs colleagues that a domain Persona and a Pi session can't cover. This spec is not authorization for implementation runs.
 
 ## Purpose
 

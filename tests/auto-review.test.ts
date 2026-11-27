@@ -27,7 +27,7 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
   const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
   const piBin = join(dir, "fake-pi");
   // The fake emits the same JSON events as --mode json; it never calls a model.
-  writeFileSync(piBin, `#!/bin/sh\ncat <<'EVENTS'\n${settle(verdict)}EVENTS\n`); chmodSync(piBin, 0o755);
+  writeFileSync(piBin, `#!/bin/sh\nprintf '%s' "$IMPRESSION_SESSION" > '${join(dir, "impression-session")}'\ncat <<'EVENTS'\n${settle(verdict)}EVENTS\n`); chmodSync(piBin, 0o755);
   const integration = new Integration(board, data), auto = new AutoReview(board, integration, piBin);
   function reviewedCard() {
     const card = board.createCard({ repo, title: "Add a new line", body: "Include a regression test" });
@@ -70,6 +70,7 @@ test("a Review card is the agent's turn until its auto-review finishes, then you
     assert.deepEqual(item.board.cardCounts()[item.repo], { reviewWaiting: 1 });
     await item.auto.tick();
     assert.equal(item.board.getCard(card.id)!.reviewWait, null);
+    assert.equal(readFileSync(join(item.dir, "impression-session"), "utf8"), "off", "the reviewer runs without Impression");
     assert.equal(item.board.getCard(card.id)!.reviewAction, "needs_you", "a hand-off reads as needing you");
     assert.deepEqual(item.board.cardCounts()[item.repo], { review: 1 });
     item.board.setAutoReview(item.repoBoard.id, false);

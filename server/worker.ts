@@ -404,7 +404,8 @@ export class Worker {
     try {
       mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
       const models = piModelArgs(this.board.agentModelFor(card.repo, phase, run.attempt));
-      child = spawnPi(run.id, this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, ALICE_WRAP_UP_FILE: wrapUpFile, ALICE_SESSION_RECORD: sessionRecord } });
+      // IMPRESSION_SESSION=read: the agent gets Impression's memories, but its transcript is never uploaded or extracted.
+      child = spawnPi(run.id, this.piBin, ["--mode", "json", "--session-id", run.sessionId, ...models, "-e", wrapUpExtension, "--", prompt], { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(card.repo), ...this.attach?.env, IMPRESSION_SESSION: "read", ALICE_WRAP_UP_FILE: wrapUpFile, ALICE_SESSION_RECORD: sessionRecord } });
     } catch (error) { this.board.finish(run.id, "failed", String(error)); return this.board.getRun(run.id)!; }
     this.active.set(run.id, child);
     if (child.pid) this.board.attach(run.id, child.pid, worktree);

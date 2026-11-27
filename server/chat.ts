@@ -103,7 +103,7 @@ export function parseTopic(stream: string): string {
 export function writeTopic(piBin: string, cwd: string, models: string[], message: string): Promise<string> {
   const args = ["--print", "--mode", "json", "--no-session", "--no-tools", "--no-mcp", "--no-skills", "--no-context-files", "--thinking", "off", ...models, "--", topicPrompt(message)];
   return new Promise((resolve, reject) => {
-    const child = spawnPi(randomUUID(), piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnPi(randomUUID(), piBin, args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, IMPRESSION_SESSION: "off" } });
     let stdout = "", stderr = "";
     const timer = setTimeout(() => killTree(child), 60_000);
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); if (stdout.length > 200_000) killTree(child); });

@@ -1,6 +1,6 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { command } from "./platform.js";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
 import { piModelArgs, type AgentPhase } from "./agent-models.js";
@@ -11,7 +11,27 @@ import { isRunTimeout } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 import { commitIdentityArgs } from "./git-identity.js";
 import { loopGuards } from "./repo-limits.js";
+import { STUCK_MESSAGE, StuckDetector } from "./stuck.js";
 import { cardBranch } from "./legacy-names.js";
+
+/**
+ * What the worktree's uncommitted work looks like now: the changed and untracked paths with a hash of each file's
+ * content. It changes whenever a turn edits a file, whichever tool did it, including an edit that keeps the line count
+ * and a write to a file that was already untracked. Null when Git cannot answer, so a Git hiccup is not a change.
+ */
+function worktreeFingerprint(worktree: string): string | null {
+  const gitOut = (args: string[], input?: string) => execFileSync("git", ["-C", worktree, ...args], { encoding: "utf8", input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+  try {
+    const paths = [
+      ...gitOut(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]).split("\0"),
+      ...gitOut(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
+    ].filter(Boolean).sort();
+    // Deleted paths and directories (submodules) have no content to hash; their names alone are in the fingerprint.
+    // `--stdin-paths` reads one path per line, so a name holding a newline is left to the name list too.
+    const files = paths.filter(path => !path.includes("\n") && statSync(join(worktree, path), { throwIfNoEntry: false })?.isFile());
+    return `${paths.join("\0")}\n${files.length ? gitOut(["hash-object", "--no-filters", "--stdin-paths"], `${files.join("\n")}\n`) : ""}`;
+  } catch { return null; }
+}
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -359,6 +379,23 @@ export class Worker {
     // Chunks stay as Buffers until a newline arrives, so a long line is concatenated once rather than rescanned per chunk.
     let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
     let stream = initialPiStreamState(), stderr = "", lastWorktreeSnapshot = "";
+    // Stuck detection: the worktree at the last turn end, whether the run is flagged now, and whether the wrap-up went out.
+    const stuck = new StuckDetector();
+    let lastFingerprint = worktreeFingerprint(worktree), flaggedStuck = false, wrapUpSent = false;
+    const steer = (message: string) => {
+      mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
+      writeFileSync(`${wrapUpFile}.tmp`, message);
+      renameSync(`${wrapUpFile}.tmp`, wrapUpFile);
+    };
+    const flagStuck = (reason: string | null) => {
+      if (!reason) return;
+      flaggedStuck = true;
+      this.board.markStuck(run.id, reason);
+      // The wrap-up message matters more; once it is sent, a step-back message would only distract from the report.
+      let steered = false;
+      if (!wrapUpSent) try { steer(STUCK_MESSAGE); steered = true; } catch (error) { console.error(`Could not steer run ${run.id} out of a loop:`, error); }
+      this.board.append(run.id, `\nThis run may be stuck: it ${reason}.${steered ? " Alice asked Pi to step back and try a different approach." : ""}\n`);
+    };
     const applyEffect = (effect: PiEffect) => {
       switch (effect.type) {
         case "append": this.board.append(run.id, effect.text); break;
@@ -367,6 +404,19 @@ export class Worker {
         case "recordReport": this.board.recordReport(run.id, effect.text); break;
         case "completeTurn": this.board.completeTurn(run.id); break;
         case "live": this.live.set(run.id, effect.activity); break;
+        case "toolStarted": flagStuck(stuck.toolCall(effect.name, effect.args)); break;
+        case "turnEnded": {
+          const fingerprint = worktreeFingerprint(worktree);
+          const changed = effect.edited || (fingerprint !== null && fingerprint !== lastFingerprint);
+          if (fingerprint !== null) lastFingerprint = fingerprint;
+          if (changed && flaggedStuck) {
+            flaggedStuck = false;
+            this.board.markStuck(run.id, null);
+            this.board.append(run.id, "\nThe run changed files again, so Alice no longer marks it as maybe stuck.\n");
+          }
+          flagStuck(stuck.turnEnd(changed));
+          break;
+        }
         case "snapshotWorktree":
           try {
             const paths = [
@@ -415,9 +465,8 @@ export class Worker {
     // Steer the run to write its report before the timeout kills it; a SIGTERM loses the report and the next attempt starts blind.
     const wrapUpTimer = setTimeout(() => {
       try {
-        mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
-        writeFileSync(`${wrapUpFile}.tmp`, WRAP_UP_MESSAGE);
-        renameSync(`${wrapUpFile}.tmp`, wrapUpFile);
+        wrapUpSent = true;
+        steer(WRAP_UP_MESSAGE);
         this.board.append(run.id, `\nAlice asked Pi to stop starting new work and write its report: the ${timeoutLabel} is ${Math.round(wrapUpLeadMs / 60_000)} min away.\n`);
       } catch (error) { console.error(`Could not ask run ${run.id} to wrap up:`, error); }
     }, Math.max(0, runTimeoutMs - wrapUpLeadMs));

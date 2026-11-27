@@ -5,6 +5,7 @@ import {
   Archive,
   CircleCheck,
   CirclePause,
+  Repeat,
   CircleX,
   Eye,
   Inbox,
@@ -4448,7 +4449,7 @@ function OriginMainBadge({ state }: { state: "pushed" | "local" }) {
     </span>
   );
 }
-/** Says a Review card is your turn, who has it if not, or how long a running agent has been quiet. */
+/** Says a Review card is your turn, who has it if not, or that a running agent may be stuck or has been quiet. */
 function ActivityBadge({
   card,
   activity,
@@ -4509,6 +4510,17 @@ function ActivityBadge({
       >
         <Eye size={10} aria-hidden />
         {reviewActionText(card) || "Your turn"}
+      </span>
+    );
+  if (card.status === "running" && card.stuck)
+    return (
+      <span
+        data-testid="activity-badge"
+        title={`The run ${card.stuck}. Alice asked the agent to step back; check the attempt log, and stop the run if it keeps going in circles.`}
+        className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
+      >
+        <Repeat size={10} aria-hidden />
+        May be stuck
       </span>
     );
   if (activity !== "quiet" || !card.lastActivityAt) return null;

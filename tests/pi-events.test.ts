@@ -80,7 +80,7 @@ test("a line that is not a Pi event marks the stream invalid and the rest still 
   assert.equal(state.protocolError, "Invalid Pi event stream");
   assert.equal(state.settled, true);
   assert.equal(state.aborted, false);
-  assert.deepEqual(effects, [{ type: "append", text: "Working." }, { type: "completeTurn" }]);
+  assert.deepEqual(effects, [{ type: "append", text: "Working." }, { type: "turnEnded", edited: false }, { type: "completeTurn" }]);
 });
 
 test("the reducer leaves the state it was given untouched", () => {

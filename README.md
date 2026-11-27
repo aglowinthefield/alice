@@ -1,5 +1,7 @@
 # Alice
 
+<img src="docs/images/alice.png" alt="Alice" width="160" align="right" />
+
 A local kanban board that hands coding tasks to [Pi](https://pi.dev) agents, one Git worktree per card. Nothing reaches your `main` branch until you approve it.
 
 ![The Alice board: cards in Triage and Ready lanes](docs/images/board.png)

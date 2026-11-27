@@ -30,13 +30,13 @@ export type Board = {
   integrationConfigured?: "local" | "github-pr";
   /** Why GitHub sync last failed; auto pickup waits while it is set. */
   integrationError?: string;
-  /** A sync problem Bakery is retrying (a failed fetch); pickup is not paused. */
+  /** A sync problem Alice is retrying (a failed fetch); pickup is not paused. */
   integrationWarning?: string;
   /** When GitHub sync last completed. */
   integrationSyncedAt?: string | null;
   /** The operator picked the integration mode; detection leaves it alone. */
   integrationChosen?: boolean;
-  /** Whether GitHub main only accepts pull requests; null until Bakery could check. */
+  /** Whether GitHub main only accepts pull requests; null until Alice could check. */
   githubMainProtected?: boolean | null;
   /** What the GitHub main check found, or why it could not run. */
   integrationNote?: string;
@@ -88,7 +88,7 @@ export type AutoReviewJob = {
   /** JSON list of `{ path, line?, comment }` the agent reviewer sent the card back with; empty when none. */
   changes: string;
 } & UsageFields;
-export type BakerySettings = {
+export type AliceSettings = {
   confirmRunStart: boolean;
   notifyOnReview: boolean;
   cardDetailsLayout: "dialog" | "side";
@@ -103,7 +103,7 @@ export type BakerySettings = {
   /** The limit in force (automatic resolved) and the agents running now. */
   activeAgentsLimit?: number;
   activeAgents?: number;
-  /** False when the server has no BAKERY_TELEMETRY_ENDPOINT; the toggle is then hidden. */
+  /** False when the server has no ALICE_TELEMETRY_ENDPOINT; the toggle is then hidden. */
   telemetryAvailable?: boolean;
 };
 export type ReviewComment = {
@@ -254,7 +254,7 @@ export type Card = {
   reviewRounds: number;
   runAgent: string;
   reviewAgent: string;
-  /** The latest run ended with a `bakery-plan` block: this card produced a plan, not code. */
+  /** The latest run ended with a `alice-plan` block: this card produced a plan, not code. */
   planOnly?: boolean;
   usageIncomplete?: number;
   /** Spend on every run after the first attempt; null when there were none. */
@@ -263,7 +263,7 @@ export type Card = {
   dependsOn?: string[];
   /** True while any card in dependsOn is not Done or archived. */
   blocked?: boolean;
-  /** A PR link attached by the operator; overrides the bakery/<id> branch lookup. */
+  /** A PR link attached by the operator; overrides the alice/<id> branch lookup. */
   prOverrideUrl?: string | null;
   prNumber?: number | null;
   prUrl?: string | null;
@@ -275,9 +275,9 @@ export type Card = {
    * as of the last fetch. "local" means merged into local main but not pushed.
    */
   originMain?: "pushed" | "local";
-  /** Times Bakery sent this card back because its PR failed CI. */
+  /** Times Alice sent this card back because its PR failed CI. */
   ciReworks?: number;
-  /** Bakery merged this card into local main (local integration), not through a PR. */
+  /** Alice merged this card into local main (local integration), not through a PR. */
   locallyMerged?: boolean;
   /** Set on Review cards that are not your turn yet; see `reviewWaitLabels`. */
   reviewWait?: ReviewWait | null;
@@ -352,7 +352,7 @@ export const needsYourReview = (card: Card) =>
 export const quietAfterMs = 5 * 60_000;
 /**
  * Whether work is happening on the card right now: an agent is `working`, the card is `waiting` on something
- * outside Bakery, or a running agent has gone `quiet`. Null when nothing is in flight.
+ * outside Alice, or a running agent has gone `quiet`. Null when nothing is in flight.
  */
 export function cardActivity(
   card: Card,

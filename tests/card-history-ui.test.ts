@@ -14,7 +14,7 @@ test("Details shows where the card came from and has a collapsed History that li
       { at: "2026-01-01T10:00:00.000Z", from: null, to: null, text: "Card created" },
       { at: "2026-01-01T10:05:00.000Z", from: "running", to: "review", text: "Attempt 1 finished; waiting for review" },
       { at: "2026-01-01T10:09:00.000Z", from: null, to: null, text: "Agent reviewer requested changes of attempt 1", detail: "Fix the budget check" },
-      { at: "2026-01-01T10:09:01.000Z", from: null, to: null, text: "The agent reviewer sent this back, but Bakery could not start the new attempt: Repository is at its 2-run concurrency limit" },
+      { at: "2026-01-01T10:09:01.000Z", from: null, to: null, text: "The agent reviewer sent this back, but Alice could not start the new attempt: Repository is at its 2-run concurrency limit" },
     ];
     const data: Record<string, unknown> = {
       "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],

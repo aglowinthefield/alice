@@ -1,5 +1,7 @@
 import { readFeatures, type Features } from "./features.js";
 
+declare const __ALICE_FEATURES__: Features | undefined;
+// The constant's name before the rename, in case vite.config.ts still defines it.
 declare const __BAKERY_FEATURES__: Features | undefined;
 
 /**
@@ -7,6 +9,8 @@ declare const __BAKERY_FEATURES__: Features | undefined;
  * Outside Vite (unit tests run under Node) it reads the same switches from the environment.
  */
 export const features: Features =
-  typeof __BAKERY_FEATURES__ !== "undefined"
-    ? __BAKERY_FEATURES__
-    : readFeatures(globalThis.process?.env ?? {});
+  typeof __ALICE_FEATURES__ !== "undefined"
+    ? __ALICE_FEATURES__
+    : typeof __BAKERY_FEATURES__ !== "undefined"
+      ? __BAKERY_FEATURES__
+      : readFeatures(globalThis.process?.env ?? {});

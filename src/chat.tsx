@@ -43,7 +43,7 @@ import {
 
 type ChatState = { messages: ChatMessage[]; live: ChatLive };
 
-const railKey = "bakery-chat-sidebar";
+const railKey = "alice-chat-sidebar";
 // How often the chat list refreshes its per-chat unread counts, and how long a dropped event stream waits to reconnect.
 const listPollMs = 3000;
 const reconnectMs = 3000;
@@ -115,7 +115,7 @@ function Parts({ parts }: { parts: ChatPart[] }) {
   );
 }
 
-/** General-purpose agent chats for one board. The agent can read and change the board through bakery-cli. */
+/** General-purpose agent chats for one board. The agent can read and change the board through alice. */
 export function ChatView({
   boardId,
   onError,
@@ -135,7 +135,7 @@ export function ChatView({
 }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [chatId, setChatId] = useState<string | null>(() =>
-    sessionStorage.getItem(`bakery-chat-${boardId}`),
+    sessionStorage.getItem(`alice-chat-${boardId}`),
   );
   const [state, setState] = useState<ChatState>({ messages: [], live: null });
   const [draft, setDraft] = useState("");
@@ -348,8 +348,8 @@ export function ChatView({
     localStorage.setItem(groupingKey, grouping);
   }, [grouping]);
   useEffect(() => {
-    if (chatId) sessionStorage.setItem(`bakery-chat-${boardId}`, chatId);
-    else sessionStorage.removeItem(`bakery-chat-${boardId}`);
+    if (chatId) sessionStorage.setItem(`alice-chat-${boardId}`, chatId);
+    else sessionStorage.removeItem(`alice-chat-${boardId}`);
   }, [chatId, boardId]);
 
   // The transcript comes from one fetch, then the event stream carries the live reply and each saved message.

@@ -1,5 +1,4 @@
-// First, so every module below sees ALICE_* settings filled from BAKERY_* ones.
-import { databaseFile, dataDir as defaultDataDir } from "./legacy-names.js";
+import { dataDir as defaultDataDir } from "./data-dir.js";
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
 import { featureOffMessage, type Feature } from "../src/features.js";
 import { readyFlags } from "../src/card-lint.js";
@@ -56,7 +55,7 @@ const lockPath = join(dataDir, "server.lock");
 const lock = acquireLock(lockPath);
 if (promoteStagedUi(process.cwd())) console.log("Serving the UI built by the last update.");
 let board: Board;
-try { board = new Board(databaseFile(dataDir)); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
+try { board = new Board(join(dataDir, "alice.sqlite")); board.recoverInterruptedRuns(); board.recoverAutoReviews(); sweepOrphanAttachments(dataDir, board.allAttachmentKeys()); }
 catch (error) { closeSync(lock); unlinkSync(lockPath); throw error; }
 const piBin = process.env.ALICE_PI_BIN ?? "pi";
 /** Cards whose discussion reply is being written; one at a time per card. */
@@ -283,12 +282,12 @@ function extraOrigin(origin: string): boolean {
 const server = createServer(async (req, res) => {
   try {
     const host = req.headers.host?.split(":")[0];
-    if (host !== "127.0.0.1" && host !== "localhost" && host !== "alice.localhost" && host !== "bakery.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "alice.localhost" && !extraHosts.includes(host?.toLowerCase() ?? "")) { send(res, 403, { error: "Local access only" }); return; }
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (req.method !== "GET") {
       const origin = req.headers.origin;
       // The dev proxy preserves the public Host, which can differ from the internal listening port.
-      if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://alice.localhost:${port}`, `http://bakery.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
+      if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://alice.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
     // Match gated paths before checking methods, then reuse these captures in the handlers.
     const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);

@@ -1,5 +1,3 @@
-// First, so ALICE_* settings are filled from BAKERY_* ones before anything reads them.
-import "../server/legacy-names.js";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { chromium, webkit } from "playwright";
@@ -9,9 +7,6 @@ import { posixShell } from "../server/platform.js";
 // environment carries Alice's own remote-hosting settings, which would bind the test server to another address.
 delete process.env.ALICE_HOST;
 delete process.env.ALICE_ALLOWED_HOSTS;
-// An agent of a server from before the rename carries the old names, which servers the tests spawn would adopt.
-delete process.env.BAKERY_HOST;
-delete process.env.BAKERY_ALLOWED_HOSTS;
 // An Alice agent on a board with shared caches inherits them too; the worker tests check that only an enabled board sets them.
 delete process.env.TURBO_CACHE_DIR;
 delete process.env.TURBO_RUN_SUMMARY;

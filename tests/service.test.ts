@@ -102,30 +102,3 @@ test("doctor's service check fails when the unit's npm is gone", { skip: process
     assert.match(service.serviceCheck(env, "linux").detail, /\/gone\/npm, which no longer exists; run alice service install again/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-
-test("a service installed before the rename keeps running under its Bakery names until it is uninstalled", { skip: process.platform !== "linux" }, () => {
-  const h = home(true);
-  try {
-    const units = join(h.dir, "config", "systemd", "user");
-    mkdirSync(units, { recursive: true });
-    for (const name of ["bakery.service", "bakery-update.service", "bakery-update.timer"]) writeFileSync(join(units, name), "[Service]\n");
-    mkdirSync(join(h.dir, "config", "bakery"), { recursive: true });
-    writeFileSync(join(h.dir, "config", "bakery", "bakery.env"), "BAKERY_HOST=10.0.0.1\n");
-    const env = { HOME: h.dir, XDG_CONFIG_HOME: join(h.dir, "config") };
-    assert.equal(service.servicePaths(env, "linux").envFile, join(h.dir, "config", "bakery", "bakery.env"));
-    assert.equal(service.serviceCheck(env, "linux").detail, join(units, "bakery.service"));
-    assert.equal(h.run("restart").status, 0);
-    assert.equal(h.calls().at(-1), "systemctl --user kill --signal=SIGUSR2 bakery.service");
-    const refused = h.run("install");
-    assert.equal(refused.status, 1);
-    assert.match(refused.stderr, /Bakery's service is installed .*bakery\.service.*alice service uninstall --yes first/);
-    assert.equal(h.run("uninstall", "--yes").status, 0);
-    assert.ok(h.calls().includes("systemctl --user disable --now bakery.service bakery-update.timer"));
-    assert.ok(!existsSync(join(units, "bakery.service")) && !existsSync(join(units, "bakery-update.timer")));
-    assert.ok(existsSync(join(h.dir, "config", "bakery", "bakery.env")), "settings stay");
-    assert.equal(h.run("install").status, 0);
-    assert.ok(existsSync(join(units, "alice.service")));
-    assert.ok(!existsSync(join(h.dir, "config", "alice", "alice.env")), "the old env file is still the one in use");
-    assert.match(readFileSync(join(units, "alice.service"), "utf8"), /^EnvironmentFile=-.*\/config\/bakery\/bakery\.env$/m);
-  } finally { h.cleanup(); }
-});

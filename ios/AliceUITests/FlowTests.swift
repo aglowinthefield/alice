@@ -4,14 +4,14 @@ import XCTest
 ///   ALICE_URL    server address (default http://mochi:4317)
 ///   ALICE_BOARD  board id to open (use a scratch board; these tests create and move cards)
 ///   ALICE_CARD   a card in Review, for the review flows
-/// Each also reads its old BAKERY_ name. Screenshots are written to /tmp/alice-uitest-<name>.png.
+/// Screenshots are written to /tmp/alice-uitest-<name>.png.
 final class FlowTests: XCTestCase {
     var app: XCUIApplication!
 
-    /// The launch setting `ALICE_<key>`, else its old name `BAKERY_<key>`, else nil.
+    /// The launch setting `ALICE_<key>`, else nil.
     static func setting(_ key: String) -> String? {
         let env = ProcessInfo.processInfo.environment
-        return env["ALICE_\(key)"] ?? env["SIMCTL_CHILD_ALICE_\(key)"] ?? env["BAKERY_\(key)"] ?? env["SIMCTL_CHILD_BAKERY_\(key)"]
+        return env["ALICE_\(key)"] ?? env["SIMCTL_CHILD_ALICE_\(key)"]
     }
 
     override func setUp() {

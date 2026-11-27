@@ -6,7 +6,7 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { serviceCheck } from "./service.mjs";
 import { formatVersion } from "./version.mjs";
-import { dataDir } from "../server/legacy-names.ts";
+import { dataDir } from "../server/data-dir.ts";
 import { worktrunkVersion } from "../server/platform.ts";
 
 // Bare names like `pi` are npm `.cmd` shims on Windows, which only a shell can run.

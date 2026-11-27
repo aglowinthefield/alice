@@ -660,7 +660,7 @@ test("help lists every command the CLI runs, and renders plain off a terminal", 
   const variadic = source.match(/const variadic = \[([^\]]*)\]/)![1];
   const handled = new Set([...expected.matchAll(/"?([a-z][a-z-]*)"?:/g), ...variadic.matchAll(/"([a-z-]+)"/g)].map(m => m[1]).concat("pickup", "help"));
   assert.deepEqual([...handled].sort(), COMMANDS.map((item: { name: string }) => item.name).sort());
-  assert.doesNotMatch(overview("1.0.0"), /\x1b\[|⣿|b a k e r y/, "no banner or colour when piped");
+  assert.doesNotMatch(overview("1.0.0"), /\x1b\[|⣿|a l i c e/, "no banner or colour when piped");
   for (const item of COMMANDS) assert.match(commandHelp(item.name)!, new RegExp(`alice ${item.name}`));
   assert.equal(suggest("crate"), "create");
   assert.equal(suggest("zzzzzzzz"), undefined);

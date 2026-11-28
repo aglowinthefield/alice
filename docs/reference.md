@@ -55,8 +55,8 @@ To run a single production server instead, run `npm run build && ALICE_SERVE_UI=
 Then:
 
 1. Add a repository by entering its Git root, either an absolute path or a `~/` path. The repository needs at least one commit, because worktrees start from `HEAD`.
-2. Create a card. New cards start in **Triage**.
-3. Move the card to **Ready**, then start it. Starting a run uses paid model tokens.
+2. Create a card. New cards start in **Ready**; tick **Start in Triage** to hold one you're unsure of.
+3. Start it. Starting a run uses paid model tokens, and with auto pickup on, Alice starts Ready cards itself within the board's limits.
 4. When Pi finishes, the card moves to **Review**. Read the diff, then **Approve and merge into local main** (or **Approve and open PR** on a github-pr board) or **Request changes**.
 
 Uncommitted or untracked files in your checkout don't appear in card worktrees.
@@ -66,7 +66,7 @@ Uncommitted or untracked files in your checkout don't appear in card worktrees.
 Alice opens on **Today**, which covers every repository at once. After you open a board, Alice reopens on that board until you click **Today** in the sidebar again.
 
 - **Since your last visit** gives a count of cards merged since you last opened Alice, how many cards need you, and the last-24h cost across repositories.
-- **Capture** adds a Triage card to the repository you pick. Alice remembers the repository. From a terminal, `alice add ...` does the same thing for the repository you're in.
+- **Capture** adds a Ready card to the repository you pick, or a Triage card with **Triage** ticked. Alice remembers the repository. From a terminal, `alice add ...` does the same thing for the repository you're in.
 - **Needs you** lists Review cards (longest-waiting first), then Failed and Interrupted cards. The sidebar shows the same count next to **Today**.
 - **Review N cards** opens Review cards one at a time, oldest first. When a card leaves Review, either because you approved it or because it ran again, the next card opens. **Next card** skips ahead. Closing the card ends the queue.
 - **Running** and **Finished since your last visit** list the rest. Click any card to open its details.
@@ -86,7 +86,8 @@ If [Worktrunk](https://worktrunk.dev) is installed, Alice runs your repository's
 ```mermaid
 stateDiagram-v2
   direction LR
-  [*] --> Triage
+  [*] --> Ready: you, an agent you directed, or a plan
+  [*] --> Triage: follow-up, unnamed API caller, or --triage
   Triage --> Ready: approve
   Ready --> Running: start
   Running --> Review: Pi finished
@@ -316,7 +317,8 @@ npm run alice -- pr CARD_ID [URL|off]
 ```
 
 - `doctor` runs setup checks and prints `PASS`, `WARN` or `FAIL` for each, then a count; it exits 1 if any check fails. It checks Node 24, git and its committer identity, `pi` and its model list, Worktrunk (optional), `gh` sign-in (a failure only on boards using GitHub pull requests), the data directory and its lock, whether the server answers, and each board's repository and integration or pickup errors. The server line comes right after the versions and says which instance you reached and whether it's local or remote. Against a non-loopback `ALICE_URL` it checks only the server and boards, since tools and paths are on the server's machine, and names each board `<host>:<path>`. After the checks come `INFO` rows that never pass or fail: the CLI's path, every `ALICE_*` variable the CLI sees (names containing `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `WEBHOOK` or `ENDPOINT` print as `set (hidden)`), and what the server reports about itself: host, active runs, agent models, telemetry and whether a Discord webhook is set. A remote server's own environment variables stay on its machine. `--json` prints the checks.
-- `add` is quick capture: the words after it become the title of a new Triage card. It takes the same `--body`, `--priority` and `--source` as `create`.
+- `add` is quick capture: the words after it become the title of a new Ready card. It takes the same `--body`, `--priority`, `--source` and `--triage` as `create`.
+- New cards start in Ready, since a card you type, a plan task you accept and a card an agent such as Hermes files are already decided. Follow-ups, which an agent suggests at the end of a run, start in Triage, and so do cards from an API caller that names no `source` or key prefix, since nothing says who decided them. `--triage` (`"triage": true` in the API) starts any card in Triage. Plan tasks wait on the tasks they depend on, and auto pickup's concurrency, daily start and budget limits still decide when a Ready card runs.
 - Without `--board`, commands use the board whose repository contains your current directory. Outside every repository, they use the only board, or ask for `--board ID|PATH` if you have several. Add `--json` for full API responses.
 - Commands that can start paid runs need `--yes`: `start`, `pickup on`, `pickup reset`, and `ready` on a board with pickup enabled.
 - `ready` runs the same check as the board's Move to Ready (see [Card lifecycle](#card-lifecycle)). A flagged card is listed with its flags and stays in Triage; repeat with `--yes` to move it anyway, and the flags still print to stderr. In `tui`, `r` on a flagged card lists the flags and asks `y/N`. The API is `GET /api/boards/BOARD/cards/CARD/ready-check`, which returns `{ flags }` and moves nothing.

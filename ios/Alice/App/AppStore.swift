@@ -15,6 +15,8 @@ final class AppStore: ObservableObject {
     @Published var connectionError: String?
     @Published var loaded = false
     @Published var toast: String?
+    /// Whether the toast reports a failure. A confirmation, such as a captured card, is not one.
+    @Published var toastFailed = true
     /// Boards the current screen wants card lists for.
     var watchedBoard: String?
     var watchingToday = false
@@ -140,7 +142,8 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func show(_ message: String) {
+    func show(_ message: String, failed: Bool = true) {
+        toastFailed = failed
         toast = message
         Task {
             try? await Task.sleep(for: .seconds(4))

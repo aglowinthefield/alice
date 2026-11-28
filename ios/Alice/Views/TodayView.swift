@@ -6,6 +6,7 @@ struct TodayView: View {
     @State private var title = ""
     @State private var boardId = ""
     @State private var adding = false
+    @State private var triage = false
     @State private var reviewQueue: [CardRoute] = []
 
     private var cards: [Card] { store.allCards }
@@ -50,34 +51,48 @@ struct TodayView: View {
     }
 
     private var capture: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             TextField("What needs doing?", text: $title)
                 .padding(.horizontal, 12).frame(height: 40)
                 .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(T.foreground.opacity(0.85), lineWidth: 1.5))
                 .submitLabel(.send).onSubmit { Task { await add() } }
-            Menu {
-                Picker("Repository", selection: $boardId) { ForEach(store.boards) { Text($0.name).tag($0.id) } }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(store.board(boardId)?.name ?? store.boards.first?.name ?? "—").lineLimit(1)
-                    Image(systemName: "chevron.down").font(.system(size: 10))
+            HStack(spacing: 8) {
+                Menu {
+                    Picker("Repository", selection: $boardId) { ForEach(store.boards) { Text($0.name).tag($0.id) } }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(store.board(boardId)?.name ?? store.boards.first?.name ?? "—").lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 10))
+                    }
+                    .font(.ui(14)).foregroundStyle(T.foreground).padding(.horizontal, 10).frame(height: 40)
+                    .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(T.foreground.opacity(0.85), lineWidth: 1.5))
                 }
-                .font(.ui(14)).foregroundStyle(T.foreground).padding(.horizontal, 10).frame(height: 40)
-                .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(T.foreground.opacity(0.85), lineWidth: 1.5))
+                .accessibilityIdentifier("capture-board")
+                // Holds the next capture in Triage instead of Ready, so auto pickup does not start it.
+                Button { triage.toggle() } label: { Label("Triage", systemImage: triage ? "tray.fill" : "tray").labelStyle(.titleAndIcon) }
+                    .buttonStyle(.pill(triage ? .primary : .outline))
+                    .accessibilityValue(triage ? "On" : "Off").accessibilityHint("Holds the card in Triage so auto pickup does not start it")
+                    .accessibilityAddTraits(triage ? .isSelected : []).accessibilityIdentifier("capture-triage")
+                Spacer(minLength: 0)
+                Button("Add") { Task { await add() } }
+                    .buttonStyle(.pill).disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || adding)
             }
-            Button("Add") { Task { await add() } }
-                .buttonStyle(.pill).disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || adding)
         }
     }
 
     private func add() async {
-        guard let api = store.api, let board = store.board(boardId) ?? store.boards.first else { return }
+        // A second submit before the first reply would create a second card, and with pickup on a second paid run.
+        guard !adding, let api = store.api, let board = store.board(boardId) ?? store.boards.first else { return }
         let text = title.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
         adding = true
-        struct Body: Encodable { let title: String; let body: String; let origin: String }
-        if await store.act({ let _: Card = try await api.post("/boards/\(board.id)/cards", Body(title: text, body: "", origin: "ui")) }) {
-            title = ""; store.show("Added to \(board.name) Triage")
+        struct Body: Encodable { let title: String; let body: String; let origin: String; let triage: Bool }
+        var lane = CardStatus.ready
+        if await store.act({
+            let card: Card = try await api.post("/boards/\(board.id)/cards", Body(title: text, body: "", origin: "ui", triage: triage))
+            lane = card.status
+        }) {
+            title = ""; triage = false; store.show("Added to \(board.name) \(lane.label)", failed: false)
             if let t = store.toast { store.toast = nil; store.toast = t }
         }
         adding = false

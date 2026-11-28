@@ -49,6 +49,15 @@ test("the system prompt names the board, its CLI and its cards, busiest first", 
   } finally { done(); }
 });
 
+test("the system prompt says new cards start in Ready and undecided ones use --triage", () => {
+  const { repoBoard, done } = fixture();
+  try {
+    const prompt = chatSystemPrompt(repoBoard, [], "cli");
+    for (const text of ["Cards you create with add or create start in Ready", "auto pickup may start a paid run on it when there is capacity", "create it with --triage"]) assert.ok(prompt.includes(text), text);
+    assert.ok(!prompt.includes("move it to Ready"), "a decided card needs no separate ready step");
+  } finally { done(); }
+});
+
 test("the system prompt asks for a Markdown card description template", () => {
   const { repoBoard, done } = fixture();
   try {

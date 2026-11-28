@@ -67,12 +67,17 @@ struct BoardCounts: View {
 
 struct Toast: View {
     let message: String
+    var failed = true
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "xmark.circle").foregroundStyle(T.destructive)
+            Image(systemName: failed ? "xmark.circle" : "checkmark.circle").foregroundStyle(failed ? T.destructive : T.status(.done))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Action failed").font(.ui(14, .semibold))
-                Text(message).font(.ui(13)).foregroundStyle(T.mutedFg)
+                if failed {
+                    Text("Action failed").font(.ui(14, .semibold))
+                    Text(message).font(.ui(13)).foregroundStyle(T.mutedFg)
+                } else {
+                    Text(message).font(.ui(14))
+                }
             }
             Spacer(minLength: 0)
         }

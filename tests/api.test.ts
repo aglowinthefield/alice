@@ -303,9 +303,16 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(closedBare.status, 200);
     assert.equal((await closedBare.json()).status, "done");
     assert.deepEqual((await request(`/stats?days=30`)).data.closeReasons, [{ reason: "superseded", count: 1 }, { reason: "", count: 1 }]);
-    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Typed", body: "", origin: "ui" })).data.source, "ui");
-    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Agent", body: "", source: "hermes" })).data.source, "hermes");
-    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Follow-up", body: "", source: "follow-up", idempotencyKey: "follow-up:run:0" })).data.source, "follow-up");
+    // A card starts in Ready unless it is a follow-up or its caller asks for Triage.
+    const create = async (input: object) => { const { source, status } = (await request(`/boards/${first.id}/cards`, "POST", { title: "New", body: "", ...input })).data; return [source, status]; };
+    assert.deepEqual(await create({}), ["api", "triage"], "a caller that does not say who it is has not decided anything");
+    assert.deepEqual(await create({ idempotencyKey: "hermes:lane" }), ["hermes", "ready"]);
+    assert.deepEqual(await create({ origin: "ui" }), ["ui", "ready"]);
+    assert.deepEqual(await create({ source: "hermes" }), ["hermes", "ready"]);
+    assert.deepEqual(await create({ source: "follow-up", idempotencyKey: "follow-up:run:0" }), ["follow-up", "triage"]);
+    assert.deepEqual(await create({ origin: "ui", triage: true }), ["ui", "triage"]);
+    assert.deepEqual(await create({ source: "cli", triage: false }), ["cli", "ready"]);
+    assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Bad", body: "", triage: "yes" })).data.error, /triage must be true or false/);
   } catch (error) {
     // A reset connection says nothing about why the server went away, so keep what it printed and how it ended.
     throw new Error(`${error instanceof Error ? error.stack : error}\nserver exit=${child.exitCode} signal=${child.signalCode} stderr: ${output}`, { cause: error });

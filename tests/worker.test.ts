@@ -363,6 +363,36 @@ test("Pi termination distinguishes Alice stop and shutdown from an unexplained e
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("shutdown finishes a run whose Pi exited while a descendant still holds its output pipe", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-worker-"));
+  const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake"), sleeper = join(dir, "sleeper.pid");
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", repo, "add", "README.md"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+    const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
+    const card = board.createCard({ title: "Inherited pipe", body: "", repo });
+    board.setStatus(card.id, "ready");
+    // The background sleep inherits Pi's stdout and stderr, so they stay open after Pi exits.
+    writeFileSync(fakePi, `#!/bin/sh\nsleep 300 &\necho $! > '${sleeper}.tmp' && mv '${sleeper}.tmp' '${sleeper}'\nexit 0\n`);
+    chmodSync(fakePi, 0o755);
+    const finished: string[] = [];
+    board.onRun((event, run) => { if (event === "finished") finished.push(run.id); });
+    const run = worker.start(board.getCard(card.id)!);
+    await waitFor(() => existsSync(sleeper));
+    const piExited = () => { try { process.kill(board.getRun(run.id)!.pid!, 0); return false; } catch { return true; } };
+    await waitFor(piExited);
+    await worker.shutdown("server received SIGTERM");
+    assert.notEqual(board.getRun(run.id)!.status, "running");
+    assert.deepEqual(finished, [run.id], "the finish event fired before shutdown resolved");
+    board.close();
+  } finally {
+    try { process.kill(Number(readFileSync(sleeper, "utf8")), "SIGKILL"); } catch { /* never started, or already gone */ }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a killed run's error names the tool call it was stuck in", async () => {
   const dir = mkdtempSync(join(tmpdir(), "alice-worker-"));
   const repo = join(dir, "repo"), fakePi = join(dir, "pi-fake");

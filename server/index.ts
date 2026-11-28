@@ -1,6 +1,5 @@
 import { dataDir as defaultDataDir } from "./data-dir.js";
 import { Discord, isDiscordWebhookUrl } from "./discord.js";
-import { featureOffMessage, type Feature } from "../src/features.js";
 import { readyFlags } from "../src/card-lint.js";
 import { isTheme, themeNames, type ThemeName } from "../src/themes.js";
 import { command } from "./platform.js";
@@ -10,7 +9,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, extname, isAbsolute, resolve, sep } from "node:path";
-import { Board, closeReasons, isCloseReason, isSentinelJob, parseCardSource, parsePriority, type Card } from "./board.js";
+import { Board, closeReasons, isCloseReason, parseCardSource, parsePriority, type Card } from "./board.js";
 import { buildStats } from "./stats.js";
 import { renderMetrics } from "./metrics.js";
 import { turboCacheUsage } from "./turbo-summary.js";
@@ -29,10 +28,6 @@ import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAtt
 
 import { PullRequestFeed } from "./pull-request-feed.js";
 import { cardHistory } from "./card-history.js";
-import { PrLocks } from "./pr-locks.js";
-import { RunLocks } from "./run-locks.js";
-import { Sentinel } from "./sentinel.js";
-import { SentinelStore } from "./sentinel-store.js";
 import { GitHub, GitHubSync, boardGithubRepo, detectGithubIntegration } from "./github.js";
 import { acquireLock } from "./lock.js";
 import { parseDiff } from "../src/diff-lines.js";
@@ -160,24 +155,14 @@ const push = new PushNotifications(board, board.sqlite, dataDir);
 // github-pr boards: `gh` resolves from PATH unless ALICE_GH_BIN names it. ALICE_GITHUB_SYNC_MS sets the per-board interval.
 const github = new GitHub(process.env.ALICE_GH_BIN || "gh");
 const pullFeed = new PullRequestFeed(board, github);
-const sentinelStore = new SentinelStore(board.sqlite);
-const prLocks = new PrLocks(sentinelStore, github);
 const githubSync = new GitHubSync(board, dataDir, github, process.env.ALICE_WT_BIN ?? "wt", Number(process.env.ALICE_GITHUB_SYNC_MS) || 60_000,
   card => worker.start(card, "manual", board.getCiFeedback(card.id)?.source === "comment" ? "to make the changes requested on the pull request" : "to fix failing CI on the pull request"),
   card => sendBackRefusedPush(card, () => openPullRequest(card, integration.reviewFingerprint(card), undefined, "ci-fix")));
 githubSync.onMerged = cardId => integration.updateDependents(cardId);
-// Optional features (src/features.ts). Off, a feature's routes answer 404, its timers never start and its screens are not built.
-const features = board.features;
 /** The machine-wide agent limit in force and how many agents run now, for Settings and the CLI. */
 const agentSlots = () => { const { limit, active } = board.machineCapacity(); return { activeAgentsLimit: limit, activeAgents: active }; };
-// Fallback for PRs the card-bound CI-fix and conflict-repair triggers cannot reach. ALICE_SENTINEL=0 turns it off;
-// ALICE_OWNER names the PR author it acts for (default: the signed-in `gh` user).
-const sentinelsOn = board.features.sentinels && process.env.ALICE_SENTINEL !== "0";
-const runLocks = new RunLocks(board, prLocks, sentinelStore, sentinelsOn);
 // Posts a message to a Discord channel when a run finishes. The webhook comes from Settings, or ALICE_DISCORD_WEBHOOK_URL when Settings has none.
 new Discord(board, () => board.getSettings().discordWebhookUrl || process.env.ALICE_DISCORD_WEBHOOK_URL);
-const sentinel = new Sentinel(board, github, sentinelStore, prLocks, dataDir, process.env.ALICE_OWNER, Number(process.env.ALICE_SENTINEL_MS) || 5 * 60_000, 60_000,
-  card => worker.start(card, "manual", "by Alice's sentinel"), 15_000, sentinelsOn);
 /**
  * Runs a push. When the repository's pre-push hook refuses it, the hook's output goes back to the card's coding agent
  * as a new run, like failed CI, and the card (now running) is returned. At the run limit the output waits for a free
@@ -289,20 +274,13 @@ const server = createServer(async (req, res) => {
       // The dev proxy preserves the public Host, which can differ from the internal listening port.
       if (origin && !extraOrigin(origin) && ![`http://${req.headers.host}`, "http://127.0.0.1:5173", "http://localhost:5173", `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://alice.localhost:${port}`].includes(origin)) { send(res, 403, { error: "Origin rejected" }); return; }
     }
-    // Match gated paths before checking methods, then reuse these captures in the handlers.
-    const sentinelsRoute = path.match(/^\/api\/boards\/([\w-]+)\/sentinels$/);
-    const sentinelRoute = path.match(/^\/api\/sentinels\/([\w-]+)(?:\/(runs|run))?$/);
+    // Match these paths before checking methods, then reuse the captures in the handlers.
     const pullMergeRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests\/(\d{1,9})\/merge$/);
     const pullsRoute = path.match(/^\/api\/boards\/([\w-]+)\/pull-requests$/);
     const syncRoute = path.match(/^\/api\/boards\/([\w-]+)\/sync$/);
     const localMergesRoute = path.match(/^\/api\/boards\/([\w-]+)\/local-merges$/);
     const mainResetRoute = path.match(/^\/api\/boards\/([\w-]+)\/main\/reset$/);
     const cardRoute = path.match(/^\/api\/boards\/([\w-]+)\/cards(?:\/([\w-]+)(?:\/(start|status|runs|resolve|stop|review|approve|approval|withdraw|conflict|comments|request-changes|auto-review|push-progress|dependencies|(?<pullRequestAction>pull-request|publish|pr-draft)|accept-findings|create-plan|close|discussion|history|ready-check))?)?$/);
-    const disabled: Feature | undefined =
-      !features.sentinels && (sentinelsRoute || sentinelRoute) ? "sentinels" :
-      !features.pullRequests && (pullMergeRoute || pullsRoute || syncRoute || localMergesRoute || mainResetRoute || cardRoute?.groups?.pullRequestAction) ? "pullRequests" :
-      undefined;
-    if (disabled) { send(res, 404, { code: "feature_off", feature: disabled, error: featureOffMessage(disabled) }); return; }
     // Prometheus metrics for the operator's own monitoring; off unless ALICE_METRICS=1. See docs/metrics.md.
     if (path === "/metrics" && req.method === "GET") {
       if (process.env.ALICE_METRICS !== "1") { send(res, 404, { error: "Metrics are off. Set ALICE_METRICS=1 to serve them." }); return; }
@@ -318,7 +296,7 @@ const server = createServer(async (req, res) => {
         for (const cardId of autoReview.activeCardIds) cardIds.add(cardId);
       }
       const cards = [...cardIds].flatMap(id => { const card = board.getCard(id); return card ? [{ id: card.id, title: card.title, repo: card.repo }] : []; });
-      send(res, 200, { hostname: hostname().split(".")[0], ...agentSlots(), draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, features, ...version });
+      send(res, 200, { hostname: hostname().split(".")[0], ...agentSlots(), draining: draining.on, activeRuns: worker.activeCount + autoReview.activeCount + autoPullRequest.activeCount, cards, updates: updates?.state ?? null, ...version });
       return;
     }
     if (path === "/api/push/key" && req.method === "GET") { send(res, 200, { publicKey: push.publicKey() }); return; }
@@ -398,11 +376,11 @@ const server = createServer(async (req, res) => {
     if (path === "/api/repository-root" && req.method === "GET") {
       send(res, 200, { root: repoRoot(new URL(req.url ?? "/", "http://localhost").searchParams.get("path")) }); return;
     }
-    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), sentinels = board.sentinelInProgressCounts(), hotspots = board.conflictHotspots(); send(res, 200, board.listBoards().map(item => ({ ...item, conflictHotspots: hotspots[item.repo] ?? [], cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0, sentinelsInProgress: sentinels[item.repo] ?? 0 }))); return; }
+    if (path === "/api/boards" && req.method === "GET") { const counts = board.cardCounts(), fresh = board.newCardCounts(), unread = board.chatUnreadCounts(), hotspots = board.conflictHotspots(); send(res, 200, board.listBoards().map(item => ({ ...item, conflictHotspots: hotspots[item.repo] ?? [], cardCounts: counts[item.repo] ?? {}, newCards: fresh[item.repo] ?? 0, chatUnread: unread[item.id] ?? 0 }))); return; }
     if (path === "/api/cards" && req.method === "GET") {
-      // Every visible board's cards, for the Today view. Removed boards, archived cards and sentinel jobs stay out.
+      // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
-      send(res, 200, worker.withLive(board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived" && !isSentinelJob(card)))); return;
+      send(res, 200, worker.withLive(board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived"))); return;
     }
     if (path === "/api/stats" && req.method === "GET") {
       const params = new URL(req.url ?? "/", "http://localhost").searchParams;
@@ -511,7 +489,6 @@ const server = createServer(async (req, res) => {
       }
       if ("autoPullRequestEnabled" in input) {
         if (Object.keys(input).length !== 1 || typeof input.autoPullRequestEnabled !== "boolean") throw new Error("Update autoPullRequestEnabled as a boolean, separately from other board settings");
-        if (input.autoPullRequestEnabled && !features.pullRequests) throw new Error(featureOffMessage("pullRequests"));
         if (input.autoPullRequestEnabled && repoBoard.integration !== "github-pr") throw new Error("Automatic pull requests need a board that integrates through GitHub pull requests");
         send(res, 200, board.setAutoPullRequest(repoBoard.id, input.autoPullRequestEnabled)); return;
       }
@@ -706,31 +683,6 @@ const server = createServer(async (req, res) => {
         }
       }
     }
-    // Sentinels are monitors, not cards: they have their own list, runs, pause/resume and run-now.
-    if (sentinelsRoute && req.method === "GET") {
-      const repoBoard = board.getBoard(sentinelsRoute[1]);
-      if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
-      send(res, 200, sentinel.describe(repoBoard.id)); return;
-    }
-    if (sentinelRoute) {
-      const record = sentinelStore.getSentinel(sentinelRoute[1]), action = sentinelRoute[2];
-      if (!record) { send(res, 404, { error: "Sentinel not found" }); return; }
-      if (req.method === "GET" && action === "runs") { send(res, 200, sentinelStore.listRuns(record.id, 50)); return; }
-      if (req.method === "POST" && action === "run") {
-        if (!sentinel.active) { send(res, 409, { error: "Sentinels are turned off (ALICE_SENTINEL=0)" }); return; }
-        sentinelStore.runSoon(record.id); void sentinel.dispatchDue(); send(res, 202, sentinelStore.getSentinel(record.id)); return;
-      }
-      if (req.method === "PATCH" && !action) {
-        const input = await body(req);
-        if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("enabled must be true or false");
-        if (input.instructions !== undefined && typeof input.instructions !== "string") throw new Error("instructions must be text");
-        if (input.intervalMs !== undefined && typeof input.intervalMs !== "number") throw new Error("intervalMs must be a number");
-        const updated = sentinelStore.updateSentinel(record.id, { enabled: input.enabled, instructions: input.instructions, intervalMs: input.intervalMs });
-        if (updated.enabled && !record.enabled) void sentinel.dispatchDue();
-        send(res, 200, updated); return;
-      }
-      if (req.method === "GET" && !action) { send(res, 200, record); return; }
-    }
     if (cardRoute) {
       const repoBoard = board.getBoard(cardRoute[1]), id = cardRoute[2], action = cardRoute[3];
       if (!repoBoard) { send(res, 404, { error: "Board not found" }); return; }
@@ -746,9 +698,6 @@ const server = createServer(async (req, res) => {
       } else {
         const item = board.getCard(id);
         if (!item || item.repo !== repoBoard.repo) { send(res, 404, { error: "Card not found on this board" }); return; }
-        // A sentinel job is delivered by its sentinel, never reviewed, approved, merged or published through a card flow.
-        if (isSentinelJob(item) && req.method !== "GET" && action && ["approve", "approval", "pr-draft", "publish", "accept-findings", "pull-request", "request-changes", "auto-review", "create-plan", "conflict"].includes(action))
-          throw new Error("This card is a sentinel job. Its sentinel delivers the result; it is not reviewed or merged here");
         if (req.method === "GET" && action === "runs") { send(res, 200, board.listRunsWithKinds(id)); return; }
         if (req.method === "GET" && action === "auto-review") { send(res, 200, board.listAutoReviewJobs(id)); return; }
         if (req.method === "GET" && action === "history") { send(res, 200, cardHistory(item, board.listCardEvents(id), board.listRuns(id), board.listAutoReviewJobs(id))); return; }
@@ -924,8 +873,8 @@ const server = createServer(async (req, res) => {
   }
 });
 server.on("error", (error) => { board.close(); closeSync(lock); unlinkSync(lockPath); console.error(error); process.exitCode = 1; });
-server.listen(port, bindHost, () => { console.log(`Alice listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); sentinel.start(); push.start();
-  if (features.pullRequests) { autoPullRequest.start(); githubSync.start(); pullFeed.start(); }
+server.listen(port, bindHost, () => { console.log(`Alice listening on http://${bindHost}:${port}`); process.send?.({ type: "listening" }); autoReview.start(); autoPickup.start(); telemetry.start(); push.start();
+  autoPullRequest.start(); githubSync.start(); pullFeed.start();
   if (updates) {
     void updates.poll();
     // UI-only updates install on their own; ones that restart the server wait for the button.
@@ -955,7 +904,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM" | "SIGBREAK" | "SIGHUP") => {
   if (shuttingDown) return;
   shuttingDown = true;
   // Open keep-alive and event-stream connections would keep the process alive, and their requests would hit a closed database.
-  server.close(); server.closeAllConnections(); clearInterval(updateTimer); push.stop(); autoPickup.shutdown(); githubSync.shutdown(); sentinel.shutdown(); runLocks.shutdown(); pullFeed.shutdown(); chats.shutdown();
+  server.close(); server.closeAllConnections(); clearInterval(updateTimer); push.stop(); autoPickup.shutdown(); githubSync.shutdown(); pullFeed.shutdown(); chats.shutdown();
   // No new runs from here on: a push refused by a hook would otherwise start a fix run after the workers were stopped. The refusal stays recorded for the next start.
   worker.stopStarts(); void Promise.all([autoReview.shutdown(), autoPullRequest.drain()]).then(() => worker.shutdown(`server received ${signal}`)).then(() => telemetry.shutdown()).then(() => { board.close(); closeSync(lock); unlinkSync(lockPath); if (process.connected) process.disconnect(); process.exit(); }); };
 // The dev supervisor (scripts/dev-server.mjs) asks for a drain before reloading code, so

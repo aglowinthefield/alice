@@ -94,15 +94,14 @@ function quoteAround(text: string, index: number, length: number): string {
 
 /**
  * The flags to show as a card moves to Ready. Only Triage cards are checked: a card that already ran was committed to
- * before. Sentinel cards are skipped too, since Alice wrote their text from its own template.
+ * before.
  */
 export function readyFlags(card: {
   title: string;
   body: string;
   status: string;
-  sentinelId?: string | null;
 }): ReadyFlag[] {
-  return card.status === "triage" && !card.sentinelId ? lintCard(card) : [];
+  return card.status === "triage" ? lintCard(card) : [];
 }
 
 /** Flags for a card's text, at most one per message. An empty list means nothing stood out. */

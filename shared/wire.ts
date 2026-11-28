@@ -75,7 +75,7 @@ export type CardPullRequest = {
 };
 
 /**
- * Where a card came from: `ui`, `cli`, `plan`, `follow-up`, `sentinel`, `pr-comment`, `api` (an API caller that named
+ * Where a card came from: `ui`, `cli`, `plan`, `follow-up`, `api` (an API caller that named
  * none) or the agent name an API caller supplied (Hermes sends `hermes`). `manual` marks older cards whose source is unknown.
  */
 export type CardSource = string;
@@ -89,10 +89,6 @@ export type Card = {
   source: CardSource;
   priority: CardPriority;
   idempotencyKey: string | null;
-  /** Set on a job card made by a sentinel: which sentinel, which of its runs, and the finding. Null on every other card. */
-  sentinelId: string | null;
-  sentinelRunId: string | null;
-  findingKey: string | null;
   /** Cards made from this card's plan report; null until the plan is used. Stays set if those cards are deleted. */
   createdCardIds: string[] | null;
   createdAt: string;

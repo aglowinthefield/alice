@@ -92,12 +92,11 @@ test("both rules can flag the same card", () => {
   assert.deepEqual(rules("Polish onboarding", "Try it on a physical iPhone."), ["person-only", "no-acceptance"]);
 });
 
-test("only Triage cards written by people are checked on the way to Ready", () => {
+test("only Triage cards are checked on the way to Ready", () => {
   const card = { title: "Polish onboarding", body: "Try it on a physical iPhone.", status: "triage" };
   assert.deepEqual(readyFlags(card).map(flag => flag.rule), ["person-only", "no-acceptance"]);
   assert.deepEqual(readyFlags({ ...card, status: "failed" }), [], "a retry was committed to before");
   assert.deepEqual(readyFlags({ ...card, status: "done" }), [], "reopening is not a first move to Ready");
-  assert.deepEqual(readyFlags({ ...card, sentinelId: "sentinel-1" }), [], "sentinel cards come from Alice's own template");
 });
 
 const tenRoutes = ["/settings", "/settings/profile", "/settings/billing", "/settings/team", "/settings/keys", "/boards/:id",

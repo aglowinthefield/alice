@@ -26,7 +26,7 @@ test("a change to the CI plan itself runs everywhere, and an empty diff is not s
 });
 
 test("every server module that spawns processes selects macOS, and so do its tests", () => {
-  for (const file of ["server/chat.ts", "server/auto-review.ts", "server/github.ts", "server/discuss.ts", "server/pr-draft.ts", "server/board.ts", "server/sentinel.ts", "tests/chat.test.ts", "tests/auto-review.test.ts", "tests/github-pr.test.ts", "tests/discuss.test.ts", "tests/pr-draft.test.ts"]) {
+  for (const file of ["server/chat.ts", "server/auto-review.ts", "server/github.ts", "server/discuss.ts", "server/pr-draft.ts", "server/board.ts", "tests/chat.test.ts", "tests/auto-review.test.ts", "tests/github-pr.test.ts", "tests/discuss.test.ts", "tests/pr-draft.test.ts"]) {
     assert.deepEqual(plan([file]), { test: true, os: [linux, macos] }, file);
   }
 });

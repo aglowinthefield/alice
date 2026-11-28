@@ -206,7 +206,7 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, sentinels: 0, "sentinel-pause": 1, "sentinel-resume": 1, "sentinel-run": 1, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw unknown(command);
   if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
@@ -434,19 +434,6 @@ async function main() {
     const card = args.length === 1 ? await findCard(origin, path, args[0])
       : await request(origin, `${path}/cards/${encodeURIComponent(args[0])}/pull-request`, "PUT", { url: args[1] === "off" ? "" : args[1] });
     print(card, opts.json, [`${card.id}\t${card.prUrl ?? "no pull request"}${card.prOverrideUrl ? "\t(linked)" : ""}${card.prState ? `\t${card.prState.toLowerCase()}` : ""}${card.prChecks ? `\tchecks:${card.prChecks}` : ""}${card.prError ? `\t${card.prError}` : ""}`]);
-  } else if (command === "sentinels") {
-    const sentinels = await request(origin, `${path}/sentinels`);
-    print(sentinels, opts.json, sentinels.map(item => {
-      const last = item.runs[0];
-      return `${item.sentinel.id}\t${item.sentinel.kind}\t${item.sentinel.enabled ? "enabled" : "paused"}\tevery:${Math.round(item.sentinel.intervalMs / 1000)}s\tnext:${item.sentinel.enabled ? item.sentinel.nextRunAt : "-"}\tlast-run:${last ? `${last.status} ${last.startedAt}` : "none"}\tjobs:${item.jobs.length}`;
-    }));
-  } else if (command === "sentinel-pause" || command === "sentinel-resume" || command === "sentinel-run") {
-    const id = encodeURIComponent(args[0]);
-    const sentinels = await request(origin, `${path}/sentinels`);
-    if (!sentinels.some(item => item.sentinel.id === args[0])) throw new Error(`Sentinel not found on this board: ${args[0]}`);
-    const updated = command === "sentinel-run" ? await request(origin, `/api/sentinels/${id}/run`, "POST")
-      : await request(origin, `/api/sentinels/${id}`, "PATCH", { enabled: command === "sentinel-resume" });
-    print(updated, opts.json, [`${updated.id}\t${updated.kind}\t${updated.enabled ? "enabled" : "paused"}\tnext:${updated.nextRunAt}`]);
   } else if (command === "conflicts") {
     const conflicts = await request(origin, `${path}/conflicts`);
     print(conflicts, opts.json, conflicts.map(item => `${item.cardId}\t${item.details ?? ""}`));

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An interrupted run no longer pauses automatic pickup. Its card waits in Interrupted for you, and pickup carries on with the next Ready card.
 - Empty lanes stay collapsed and can't be expanded, and lanes holding only Done or archived cards always start collapsed. The board's Auto-collapse checkbox and its `autoCollapseEmptySwimlanes` setting are gone.
 - Repository icons are Alice's nine expressions instead of the bakery set, in the web app, on iOS and on Alice's PR comments. Each board on a bakery icon moves to an expression once; the bakery images stay in `public/icons` so old PR comments still show theirs.
 - Sentinels are gone: the Sentinels page, the `/api/sentinels` routes, `alice sentinels` and the `sentinel-*` commands, the PR lock comments, `/alice` comments on PRs Alice didn't open, and `ALICE_FEATURE_SENTINELS`, `ALICE_SENTINEL`, `ALICE_SENTINEL_MS` and `ALICE_OWNER`. On first start, Alice archives the job cards sentinels made; their history keeps the status they had. `/alice` comments on a card's own PR still send it back.

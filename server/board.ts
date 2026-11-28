@@ -906,16 +906,14 @@ export class Board {
   }
 
   /**
-   * Why pickup must stop on this board. A failed run on its own is not a reason: its card waits in Failed like any
-   * other and the next Ready card starts. Only an authentication or billing refusal stops pickup, because every
+   * Why pickup must stop on this board. A failed or interrupted run on its own is not a reason: its card waits like
+   * any other and the next Ready card starts. Only an authentication or billing refusal stops pickup, because every
    * card would fail the same way until a person fixes the account.
    */
-  autoPickupBlocker(repoBoard: RepoBoard): { kind: "interrupted" | "account"; reason: string } | undefined {
-    if (this.db.prepare(`SELECT 1 FROM cards WHERE repo=? AND status='interrupted' LIMIT 1`).get(repoBoard.repo))
-      return { kind: "interrupted", reason: "An interrupted run needs inspection before automatic pickup" };
+  autoPickupBlocker(repoBoard: RepoBoard): string | undefined {
     if (this.db.prepare(`SELECT 1 FROM runs JOIN cards ON cards.id=runs.cardId WHERE cards.repo=? AND runs.startedBy='auto' AND runs.status='failed'
         AND runs.failureKind IN ('auth', 'billing') AND runs.startedAt>=? AND cards.status='failed' LIMIT 1`).get(repoBoard.repo, repoBoard.autoPickupEnabledAt ?? ""))
-      return { kind: "account", reason: "The provider refused an automatic run for authentication or billing; fix the account, then turn pickup back on" };
+      return "The provider refused an automatic run for authentication or billing; fix the account, then turn pickup back on";
     return undefined;
   }
   listAutoReviewCandidates(): { card: Card; run: Run; board: RepoBoard }[] {

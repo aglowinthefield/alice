@@ -251,7 +251,7 @@ Provider errors show only their HTTP status. Pi's stderr goes to the server cons
 
 Both features are off by default and set per repository in **Settings**. Both can start paid Pi runs, and both need the server to keep running.
 
-The board header shows **Last 24h**: the cost of attempts and agent reviews that are running or finished in the last 24 hours.
+The board header shows **Last 24 hours**: the cost of attempts and agent reviews that are running or finished in the last 24 hours.
 
 ### Automatic pickup
 

@@ -75,7 +75,7 @@ function pushServiceError(error: unknown): Error {
   if (!/push service/i.test(message))
     return error instanceof Error ? error : new Error(message);
   return new Error(
-    `This browser could not reach its push service (${message}). In Brave, turn on Settings → Privacy and security → Use Google services for push messaging, then try again. Chromium builds without Google services cannot receive push notifications; use Chrome, Edge, Firefox or Safari.`,
+    `This browser could not reach its push service (${message}). In Brave, turn on Settings → Privacy and security → Use Google services for push messaging. Then try again. Chromium builds without Google services cannot receive push notifications. Use Chrome, Edge, Firefox or Safari.`,
   );
 }
 

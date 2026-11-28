@@ -43,7 +43,7 @@ test("Review cards marked as your turn come first, cards an agent or GitHub stil
     assert.doesNotMatch(await tile("busy").innerText(), /May be stuck/);
     const stuck = tile("looping").getByTestId("activity-badge");
     assert.equal(await stuck.innerText(), "May be stuck");
-    assert.match(await stuck.getAttribute("title") ?? "", /^The run repeated the same bash call 5 times in its last 20 tool calls\. Alice asked the agent to step back/);
+    assert.match(await stuck.getAttribute("title") ?? "", /^The run repeated the same bash call 5 times in its last 20 tool calls\. Alice told the agent to try a different approach/);
     assert.equal(await tile("github").getAttribute("data-activity"), "waiting");
     assert.match(await tile("github").innerText(), /Waiting on GitHub/);
     assert.equal(await tile("mine").getAttribute("data-activity"), null);

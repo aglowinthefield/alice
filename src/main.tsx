@@ -1422,7 +1422,7 @@ export function App() {
     if (!target.autoPickupEnabled) return;
     if (
       !(await confirmAction(
-        `Reset the ${target.pickupDailyLimit}-start rolling limit for ${target.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs will remain in history.`,
+        `Reset the ${target.pickupDailyLimit}-start rolling limit for ${target.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs stay in history.`,
       ))
     )
       return;
@@ -2496,7 +2496,7 @@ export function App() {
                 }}
                 className="accent-primary"
               />{" "}
-              Auto-collapse lanes without active cards
+              Collapse lanes with no active cards
             </label>
           </div>
           {currentBoard?.autoPickupEnabled && (
@@ -2513,7 +2513,7 @@ export function App() {
                   : ""
               }
             >
-              Last 24h: {formatCost(currentBoard.cost24h ?? 0)}
+              Last 24 hours: {formatCost(currentBoard.cost24h ?? 0)}
               {currentBoard.limitsEnabled &&
                 typeof currentBoard.pickupCostBudget === "number" &&
                 ` of ${formatCost(currentBoard.pickupCostBudget)} budget`}
@@ -2560,9 +2560,9 @@ export function App() {
                 {formatCost(currentBoard.pickupCostBudget)} in the last 24
                 hours).
               </strong>{" "}
-              Pickup resumes as older spend leaves the 24-hour window, or raise
-              the budget in this repository's settings. Manual starts still
-              work.
+              Auto pickup starts again when older spend leaves the 24-hour
+              window. To start sooner, raise the budget in this repository's
+              settings. Manual starts still work.
             </div>
           )}
         {currentBoard?.autoPickupError && (
@@ -2607,7 +2607,7 @@ export function App() {
                 <strong>
                   {currentBoard.integrationError
                     ? "GitHub sync stopped and auto pickup is waiting:"
-                    : "Can't reach GitHub right now; retrying every minute:"}
+                    : "Alice cannot reach GitHub and tries again every minute:"}
                 </strong>{" "}
                 {currentBoard.integrationError ||
                   currentBoard.integrationWarning}
@@ -3023,7 +3023,7 @@ export function App() {
                                   {!!item.autoRetries && (
                                     <span
                                       data-testid="auto-retry"
-                                      title="Automatic pickup retries a run that failed on a temporary provider or network error, at most 3 times"
+                                      title="Auto pickup retries a run that failed on a temporary provider or network error, at most 3 times"
                                       className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
                                     >
                                       <RotateCcw size={10} aria-hidden />
@@ -3106,7 +3106,7 @@ export function App() {
                                   className="flex items-center gap-1"
                                   title={
                                     item.turnsIncomplete
-                                      ? "Estimated from older transcripts; may be inaccurate. New turns are counted exactly."
+                                      ? "Estimated from older transcripts, so it can be wrong. Alice counts new turns exactly."
                                       : "Completed Pi turns across all attempts"
                                   }
                                 >
@@ -3510,13 +3510,14 @@ export function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Integration</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Local: Approve merges the card into local main. GitHub pull
-                requests: Approve pushes alice/&lt;card&gt; and opens a PR with
-                gh; the card is Done once the PR merges and the merge is on
-                origin/main. Local main is then only fast-forwarded to
-                origin/main. Needs gh signed in and a GitHub remote link. When a
-                GitHub remote is set, Alice picks GitHub pull requests if main
-                only accepts pull requests.
+                Local merge: Approve merges the card into local main. GitHub
+                pull requests: Approve pushes alice/&lt;card&gt; and opens a
+                pull request with gh. The card is Done when the pull request
+                merges and the merge is on origin/main. Alice then only
+                fast-forwards local main to origin/main. This mode needs gh
+                signed in and a GitHub remote link. If a GitHub remote is set
+                and main accepts only pull requests, Alice selects GitHub pull
+                requests.
               </p>
 
               <label className="mt-4 block text-xs">
@@ -3675,8 +3676,8 @@ export function App() {
                 <span>
                   Days in Review before a card is stale
                   <span className="block text-muted-foreground">
-                    Stale cards get a mark on the board and a daily push digest.
-                    0 turns this off.
+                    Alice marks stale cards on the board and sends a daily push
+                    digest. Enter 0 to turn this off.
                   </span>
                 </span>
               </label>
@@ -3753,13 +3754,14 @@ export function App() {
                   <span>
                     Open pull requests automatically
                     <span className="block text-muted-foreground">
-                      Pushes the card branch and opens its pull request when a
-                      run reaches Review, without waiting for Approve. Only runs
-                      that finish after you turn this on are pushed. With
-                      auto-review on, the agent reviewer goes first: its
-                      approval opens the pull request, a card it sends back
-                      reruns, and a card it hands to a person (or that is out of
-                      reruns) gets a draft pull request with its findings.
+                      When a run reaches Review, Alice pushes the card branch
+                      and opens its pull request without waiting for Approve.
+                      This applies only to runs that finish after you turn it
+                      on. If unattended review is on, the agent reviewer goes
+                      first. Its approval opens the pull request, and a card it
+                      sends back runs again. A card it hands to a person, or a
+                      card with no reruns left, gets a draft pull request with
+                      its findings.
                     </span>
                   </span>
                 </label>
@@ -3890,8 +3892,8 @@ export function App() {
                     {typeof pickupBoard.pickupCostBudget === "number"
                       ? ` of ${formatCost(pickupBoard.pickupCostBudget)}.`
                       : "."}{" "}
-                    Leave blank for no budget. At the budget, automatic pickup
-                    waits; running work and manual starts continue.
+                    Leave blank for no budget. When spend reaches the budget,
+                    auto pickup waits. Running work and manual starts continue.
                   </p>
                   {pickupBoard.autoPickupEnabled &&
                     pickupBoard.pickupDailyLimit > 0 &&
@@ -4005,12 +4007,12 @@ export function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Auto pickup</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Automatically start Ready cards in priority order, up to the
-                concurrency limit including manual runs. A failed card waits in
-                Failed; an interrupted run pauses pickup. Starting Pi may spend
-                model tokens. Turn on Limits above to cap daily starts and
-                spend. Turn off pickup to stop new starts; existing runs
-                continue.
+                Alice starts Ready cards in priority order, up to the concurrent
+                run limit. Manual runs count toward that limit. A failed card
+                waits in Failed, and an interrupted run pauses auto pickup. Each
+                run can spend model tokens. To cap daily starts and spend, turn
+                on Limits above. To stop new starts, turn off auto pickup. Runs
+                in progress continue.
               </p>
               <label className="mt-4 flex items-center gap-2 text-xs">
                 Concurrent runs{" "}
@@ -4052,7 +4054,7 @@ export function App() {
                   if (
                     enable &&
                     !(await confirmAction(
-                      `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${!pickupBoard.limitsEnabled ? "with limits off (no daily start limit or budget)" : pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
+                      `Turn on auto pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${!pickupBoard.limitsEnabled ? "with limits off (no daily start limit or budget)" : pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
                     ))
                   )
                     return;
@@ -4072,8 +4074,8 @@ export function App() {
                 }}
               >
                 {pickupBoard.autoPickupEnabled
-                  ? "Disable auto pickup"
-                  : "Enable auto pickup"}
+                  ? "Turn off auto pickup"
+                  : "Turn on auto pickup"}
               </Button>
               {pickupBoard.autoPickupError && (
                 <p role="alert" className="mt-2 text-xs text-destructive">
@@ -4086,15 +4088,15 @@ export function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Unattended review</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                A Pi reviewer with full tools inspects new Review cards in their
-                worktrees and runs the repository's checks itself. It can send a
-                card back to its implementer. When it approves, a pull-request
-                board opens the pull request; on a local board the card waits
-                for your Approve. Nothing merges into main without you. With
-                automatic pull requests on, a card the reviewer hands to a
-                person still gets a draft pull request with its findings, and
-                the reviewer never blocks it. Auto-review alone does not start
-                Ready cards; enable Auto pickup above.
+                A Pi reviewer with full tools checks new Review cards in their
+                worktrees and runs the repository's checks. It can send a card
+                back to its implementer. When it approves, a pull request board
+                opens the pull request, and a local board waits for your
+                Approve. Nothing merges into main without you. With automatic
+                pull requests on, a card the reviewer hands to a person still
+                gets a draft pull request with its findings. Unattended review
+                does not start Ready cards. To start them, turn on Auto pickup
+                above.
               </p>
               <label className="mt-3 flex items-center gap-2 text-xs">
                 Agent reviews at the same time
@@ -4135,7 +4137,7 @@ export function App() {
                   if (
                     enable &&
                     !(await confirmAction(
-                      `Enable agent review for ${editingBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
+                      `Turn on unattended review for ${editingBoard.repo}? This may spend model tokens. It reviews only runs that finish after you turn it on.`,
                     ))
                   )
                     return;
@@ -4150,12 +4152,12 @@ export function App() {
                 }}
               >
                 {editingBoard.autoReviewEnabled
-                  ? "Disable auto-review"
-                  : "Enable auto-review"}
+                  ? "Turn off unattended review"
+                  : "Turn on unattended review"}
               </Button>
               {editingBoard.autoReviewEnabled && (
                 <p className="mt-2 text-xs text-primary">
-                  Enabled since{" "}
+                  On since{" "}
                   {editingBoard.autoReviewEnabledAt &&
                     date(editingBoard.autoReviewEnabledAt)}
                   .
@@ -4168,9 +4170,10 @@ export function App() {
               <div className="font-medium">Pi models</div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Overrides for this repository's Pi runs. Blank fields inherit
-                the global setting from Settings. Card retries sets a model for
-                a card's second and later attempts (after a failure, send-back
-                or CI fix); leave it blank to run every attempt on Card runs.
+                the global setting from Settings. Card retries sets the model
+                for a card's second and later attempts, after a failure,
+                send-back or CI fix. Leave it blank to use Card runs for every
+                attempt.
               </p>
               <AgentModelFields
                 key={`${editingBoard.id}-${JSON.stringify(editingBoard.agentModels)}`}
@@ -4529,7 +4532,7 @@ function ActivityBadge({
     return (
       <span
         data-testid="activity-badge"
-        title={`The run ${card.stuck}. Alice asked the agent to step back; check the attempt log, and stop the run if it keeps going in circles.`}
+        title={`The run ${card.stuck}. Alice told the agent to try a different approach. Check the attempt log, and stop the run if it repeats the same steps.`}
         className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
       >
         <Repeat size={10} aria-hidden />
@@ -4543,7 +4546,7 @@ function ActivityBadge({
   return (
     <span
       data-testid="activity-badge"
-      title="The agent has reported nothing for a while. A long command can be quiet; check the attempt log if it stays quiet."
+      title="The agent has not reported anything for a while. A long command can be quiet. If it stays quiet, check the attempt log."
       className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
     >
       <CirclePause size={10} aria-hidden />
@@ -4558,7 +4561,7 @@ function StaleBadge({ card }: { card: Card }) {
   return (
     <span
       data-testid="stale-badge"
-      title={`In Review for ${days} ${days === 1 ? "day" : "days"}, so main has likely moved on. Approve it, run it again on current main, or close it.`}
+      title={`In Review for ${days} ${days === 1 ? "day" : "days"}, so main has probably changed. Approve it, run it again on current main, or close it.`}
       className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
     >
       <CalendarClock size={10} aria-hidden />
@@ -4602,7 +4605,7 @@ const shortcutList: [string, string][] = [
   ["g l", "Go to Logs"],
   [`${modKey} K`, "Command palette"],
   [`${modKey} Enter`, "Create or save card in the form"],
-  ["?", "Show or hide this cheat sheet"],
+  ["?", "Show or hide keyboard shortcuts"],
 ];
 function CardForm({
   onSubmit,

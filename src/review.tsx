@@ -178,9 +178,9 @@ export function ReviewPanel({
         </div>
       )}
       <p className="mt-2 text-xs text-muted-foreground">
-        Card changes since its shared commit with main. Press + beside a code
-        line to annotate it. Comments stay on this exact diff; older comments
-        are kept as history, not moved to new lines.
+        Card changes since its shared commit with main. To comment on a line,
+        press + beside it. Comments stay on this diff. Alice keeps older
+        comments as history and does not move them to new lines.
       </p>
       {error && (
         <p role="alert" className="mt-3 text-xs text-destructive">
@@ -637,8 +637,8 @@ export function MergeConflictPanel({
         <div className="min-w-0 flex-1">
           <h3 className="font-semibold">Merge blocked by conflicts</h3>
           <p className="mt-1 text-muted-foreground">
-            Alice has not merged these changes into main. The card worktree
-            remains available.
+            Alice did not merge these changes into main. The card worktree is
+            still available.
           </p>
         </div>
         <button

@@ -198,7 +198,7 @@ function Breakdown({
                 <th className="py-1 font-normal">Name</th>
                 <th className="py-1 text-right font-normal">Runs</th>
                 <th className="py-1 text-right font-normal">Failed</th>
-                <th className="py-1 text-right font-normal">Avg run</th>
+                <th className="py-1 text-right font-normal">Average run</th>
                 <th className="py-1 text-right font-normal">Tokens</th>
                 <th className="py-1 text-right font-normal">Spend</th>
               </tr>
@@ -383,7 +383,7 @@ export function Statistics({ boards }: { boards: Board[] }) {
                 hint="Runs that did not fail"
               />
               <Tile
-                label="Avg run time"
+                label="Average run time"
                 value={minutes(summary.avgRunMinutes)}
               />
               <Tile

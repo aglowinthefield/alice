@@ -64,7 +64,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
     // "idea" has no description, so the Ready check asks first. Closing the dialog moves nothing.
     const check = page.getByRole("dialog", { name: "This card may need another pass" });
     await tile("idea").dragTo(lane("ready"));
-    await check.getByText("The card has no description, so nothing says what done looks like").waitFor();
+    await check.getByText("The card has no description, so nothing describes the finished result").waitFor();
     await page.keyboard.press("Escape");
     await check.waitFor({ state: "hidden" });
     assert.deepEqual(requests, [], "closing the check leaves the card in Triage");

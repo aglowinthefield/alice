@@ -95,7 +95,8 @@ export function PullRequestDialog({
         <DialogDescription className="mt-1 text-sm text-muted-foreground">
           Alice commits unignored files on alice/{card.id}, pushes that branch
           to origin, and runs gh pr create with this title and body. Nothing
-          merges locally; the card is Done once the PR merges on GitHub.
+          merges locally. The card is Done when the pull request merges on
+          GitHub.
         </DialogDescription>
         {error && <ErrorMessage error={error} />}
         {!draft && !error && (
@@ -135,8 +136,8 @@ export function PullRequestDialog({
               {draft.source === "agent"
                 ? `Drafted by the agent from ${[draft.templatePath, draft.semantic?.source].filter(Boolean).join(" and ")}. Review and edit before opening.`
                 : draft.templatePath || draft.semantic
-                  ? "Could not draft with the agent; edit the card text and template by hand."
-                  : "This repository has no pull request template or semantic-PR check; the card title and description are used."}
+                  ? "The agent could not draft the pull request. Edit the card text and template by hand."
+                  : "This repository has no pull request template or semantic PR check, so Alice uses the card title and description."}
             </div>
             {draft.problem && draft.source === "card" && (
               <div role="status" className="text-xs text-destructive">

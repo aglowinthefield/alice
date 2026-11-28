@@ -88,7 +88,7 @@ export function Logs() {
             This Alice server's output
             {startedAt &&
               ` since it started ${new Date(startedAt).toLocaleString()}`}
-            . The last 2,000 lines are kept.
+            . Alice keeps the last 2,000 lines.
           </p>
         </div>
         <div className="flex items-center gap-2">

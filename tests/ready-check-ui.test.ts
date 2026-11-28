@@ -27,7 +27,7 @@ async function board(page: Page, initial: ReturnType<typeof card>[]) {
       await route.fulfill({ json: cards.find(item => item.id === status?.[1]) ?? {} }); return;
     }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": cards,
       "/api/boards/board/conflicts": [],

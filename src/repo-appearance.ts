@@ -1,9 +1,34 @@
 // Keep the persisted choices in one place for the API and the picker.
+// Alice's expressions: plain, cross and worried brows, each with a closed, smiling and open mouth.
 export const repoIcons = [
-  "sprinkle_donut", "baguette", "bread_loaf", "cake_slice",
-  "cherry_pie", "choc_cookie", "cinnamon_roll", "croissant",
-  "cupcake", "fried_egg", "green_teapot", "hot_coffee",
-  "iced_latte", "jam_jar", "milk_bottle", "wheat_bundle",
+  "alice_smile",
+  "alice_calm",
+  "alice_surprised",
+  "alice_stern",
+  "alice_smirk",
+  "alice_huh",
+  "alice_worried",
+  "alice_wry",
+  "alice_gasp",
+] as const;
+/** The bakery icons boards used before, oldest first. Their images stay in public/icons for links in old PR comments. */
+export const retiredRepoIcons = [
+  "sprinkle_donut",
+  "baguette",
+  "bread_loaf",
+  "cake_slice",
+  "cherry_pie",
+  "choc_cookie",
+  "cinnamon_roll",
+  "croissant",
+  "cupcake",
+  "fried_egg",
+  "green_teapot",
+  "hot_coffee",
+  "iced_latte",
+  "jam_jar",
+  "milk_bottle",
+  "wheat_bundle",
 ] as const;
 export type RepoIcon = (typeof repoIcons)[number];
 
@@ -30,4 +55,5 @@ export const repoTint = (color: string) =>
   `color-mix(in srgb, ${color} 16%, transparent)`;
 
 /** Last folder of a repository path, whether the server is on POSIX or Windows. */
-export const repoName = (repo: string) => repo.split(/[\\/]/).filter(Boolean).at(-1) ?? repo;
+export const repoName = (repo: string) =>
+  repo.split(/[\\/]/).filter(Boolean).at(-1) ?? repo;

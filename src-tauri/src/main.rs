@@ -4,7 +4,6 @@ mod server;
 
 use std::{path::PathBuf, sync::RwLock};
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     webview::{DownloadEvent, NewWindowResponse},
     Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
@@ -96,8 +95,8 @@ fn open_remote(app: &tauri::AppHandle, state: &Connection, url: url::Url) -> Res
     } else {
         create_remote(app, url)
     };
-    if let Err(error) = allow_window_dragging(app, &url_for_drag) {
-        eprintln!("Cannot enable window dragging: {error}");
+    if let Err(error) = allow_window_controls(app, &url_for_drag) {
+        eprintln!("Cannot enable the window controls: {error}");
     }
     let remote = match result {
         Ok(remote) => remote,
@@ -134,16 +133,18 @@ async fn auto_connect(app: tauri::AppHandle) {
     }
 }
 
-/// The hosted page may start a window drag from its title-bar strip and nothing else.
+/// The hosted page paints the title bar, so it may drag the window and work its window controls.
 /// The grant is scoped to the connected origin and added when the user connects.
-fn allow_window_dragging(app: &tauri::AppHandle, url: &url::Url) -> Result<(), String> {
+fn allow_window_controls(app: &tauri::AppHandle, url: &url::Url) -> Result<(), String> {
     let origin = url.origin().ascii_serialization();
-    let capability = tauri::ipc::CapabilityBuilder::new(format!("remote-drag-{}", origin))
+    let capability = tauri::ipc::CapabilityBuilder::new(format!("remote-window-{}", origin))
         .remote(format!("{origin}/*"))
         .window("remote")
         .permission("core:window:allow-start-dragging")
-        // Tauri's drag region zooms or restores the window on double-click through this one.
-        .permission("core:window:allow-toggle-maximize");
+        .permission("core:window:allow-toggle-maximize")
+        .permission("core:window:allow-is-maximized")
+        .permission("core:window:allow-minimize")
+        .permission("core:window:allow-close");
     app.add_capability(capability)
         .map_err(|error| error.to_string())
 }
@@ -154,14 +155,25 @@ fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow,
     let download_app = app.clone();
     let builder = WebviewWindowBuilder::new(app, "remote", WebviewUrl::External(url))
         .title("Alice")
-        // The page paints its own title bar; see docs/desktop.md.
-        .initialization_script(
-            "document.documentElement.dataset.desktop = navigator.platform.startsWith('Mac') ? 'macos' : 'other';",
-        );
+        // The page paints its own title bar on macOS and Windows; see docs/desktop.md.
+        // WebView2 runs this before <html> exists, so on Windows it waits for the element.
+        .initialization_script(format!(
+            "(() => {{ const mark = () => {{ document.documentElement.dataset.desktop = '{}'; }}; if (document.documentElement) mark(); else new MutationObserver((_, observer) => {{ if (document.documentElement) {{ observer.disconnect(); mark(); }} }}).observe(document, {{ childList: true }}); }})();",
+            if cfg!(target_os = "macos") {
+                "macos"
+            } else if cfg!(windows) {
+                "windows"
+            } else {
+                "other"
+            }
+        ));
     #[cfg(target_os = "macos")]
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true);
+    // Windows gets no native frame: the page draws the strip and the minimise, maximise and close buttons.
+    #[cfg(windows)]
+    let builder = builder.decorations(false);
     let remote = builder
         // Keep HTML5 card dragging and file drops available in WebView2.
         .disable_drag_drop_handler()
@@ -213,6 +225,11 @@ fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow,
     let close_app = app.clone();
     remote.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            // Closing the main window quits on Windows, as Windows apps do.
+            if cfg!(windows) {
+                close_app.exit(0);
+                return;
+            }
             api.prevent_close();
             if let Some(window) = remote_window(&close_app) {
                 if let Err(error) = window.hide() {
@@ -227,6 +244,7 @@ fn create_remote(app: &tauri::AppHandle, url: url::Url) -> Result<WebviewWindow,
 
 /// Cmd-, opens the hosted Settings page. Without a connected server there is nothing to open,
 /// so it falls back to the connection window.
+#[cfg(not(windows))]
 fn open_settings(app: &tauri::AppHandle) {
     let Some(remote) = remote_window(app) else {
         show_connection(app);
@@ -240,6 +258,87 @@ fn open_settings(app: &tauri::AppHandle) {
     if let Err(error) = remote.show().and_then(|_| remote.set_focus()) {
         eprintln!("Cannot show Alice: {error}");
     }
+}
+
+#[cfg(not(windows))]
+fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+    let connection_item = MenuItem::with_id(
+        app,
+        "connection",
+        "Connect to another server…",
+        true,
+        None::<&str>,
+    )?;
+    let reload = MenuItem::with_id(app, "reload", "Reload Alice", true, Some("CmdOrCtrl+R"))?;
+    let browser = MenuItem::with_id(app, "browser", "Open Alice in browser", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = PredefinedMenuItem::quit(app, None)?;
+    let mut alice_items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+        vec![&settings, &connection_item, &reload, &browser, &separator];
+    // A custom menu replaces the default one, so restore macOS's Cmd+H items.
+    #[cfg(target_os = "macos")]
+    let (hide, hide_others, show_all, hide_separator) = (
+        PredefinedMenuItem::hide(app, None)?,
+        PredefinedMenuItem::hide_others(app, None)?,
+        PredefinedMenuItem::show_all(app, None)?,
+        PredefinedMenuItem::separator(app)?,
+    );
+    #[cfg(target_os = "macos")]
+    alice_items.extend([
+        &hide as &dyn tauri::menu::IsMenuItem<_>,
+        &hide_others,
+        &show_all,
+        &hide_separator,
+    ]);
+    alice_items.push(&quit);
+    let alice = Submenu::with_items(app, "Alice", true, &alice_items)?;
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let window = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::fullscreen(app, None)?,
+        ],
+    )?;
+    app.set_menu(Menu::with_items(app, &[&alice, &edit, &window])?)?;
+    app.on_menu_event(|app, event| match event.id().as_ref() {
+        "connection" => show_connection(app),
+        "settings" => open_settings(app),
+        "reload" => {
+            if let Some(window) = remote_window(app) {
+                if let Err(error) = window.reload() {
+                    eprintln!("Cannot reload Alice: {error}");
+                    show_connection(app);
+                }
+            }
+        }
+        "browser" => {
+            if let Some(window) = remote_window(app) {
+                if let Ok(url) = window.url() {
+                    open_in_browser(app, &url);
+                }
+            }
+        }
+        _ => {}
+    });
+    Ok(())
 }
 
 fn main() {
@@ -288,84 +387,9 @@ fn main() {
                     }
                 }
             });
-            let settings =
-                MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
-            let connection_item = MenuItem::with_id(
-                app,
-                "connection",
-                "Connect to another server…",
-                true,
-                None::<&str>,
-            )?;
-            let reload =
-                MenuItem::with_id(app, "reload", "Reload Alice", true, Some("CmdOrCtrl+R"))?;
-            let browser =
-                MenuItem::with_id(app, "browser", "Open Alice in browser", true, None::<&str>)?;
-            let separator = PredefinedMenuItem::separator(app)?;
-            let quit = PredefinedMenuItem::quit(app, None)?;
-            let mut alice_items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
-                vec![&settings, &connection_item, &reload, &browser, &separator];
-            // A custom menu replaces the default one, so restore macOS's Cmd+H items.
-            #[cfg(target_os = "macos")]
-            let (hide, hide_others, show_all, hide_separator) = (
-                PredefinedMenuItem::hide(app, None)?,
-                PredefinedMenuItem::hide_others(app, None)?,
-                PredefinedMenuItem::show_all(app, None)?,
-                PredefinedMenuItem::separator(app)?,
-            );
-            #[cfg(target_os = "macos")]
-            alice_items.extend([
-                &hide as &dyn tauri::menu::IsMenuItem<_>,
-                &hide_others,
-                &show_all,
-                &hide_separator,
-            ]);
-            alice_items.push(&quit);
-            let alice = Submenu::with_items(app, "Alice", true, &alice_items)?;
-            let edit = Submenu::with_items(
-                app,
-                "Edit",
-                true,
-                &[
-                    &PredefinedMenuItem::undo(app, None)?,
-                    &PredefinedMenuItem::redo(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::cut(app, None)?,
-                    &PredefinedMenuItem::copy(app, None)?,
-                    &PredefinedMenuItem::paste(app, None)?,
-                    &PredefinedMenuItem::select_all(app, None)?,
-                ],
-            )?;
-            let window = Submenu::with_items(
-                app,
-                "Window",
-                true,
-                &[
-                    &PredefinedMenuItem::minimize(app, None)?,
-                    &PredefinedMenuItem::fullscreen(app, None)?,
-                ],
-            )?;
-            app.set_menu(Menu::with_items(app, &[&alice, &edit, &window])?)?;
-            app.on_menu_event(|app, event| match event.id().as_ref() {
-                "connection" => show_connection(app),
-                "settings" => open_settings(app),
-                "reload" => {
-                    if let Some(window) = remote_window(app) {
-                        if let Err(error) = window.reload() {
-                            eprintln!("Cannot reload Alice: {error}");
-                            show_connection(app);
-                        }
-                    }
-                }
-                "browser" => {
-                    if let Some(window) = remote_window(app) {
-                        if let Ok(url) = window.url() {
-                            open_in_browser(app, &url);
-                        }
-                    }
-                }
-                _ => {}
-            });
+            // Windows has no menu bar: the page draws the title bar, WebView2 reloads on Ctrl+R and the page opens Settings on Ctrl+,.
+            #[cfg(not(windows))]
+            install_menu(app)?;
             Ok(())
         })
         .run(tauri::generate_context!())

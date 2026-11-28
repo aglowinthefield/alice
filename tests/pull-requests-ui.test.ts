@@ -4,9 +4,9 @@ import { chromium } from "playwright";
 import { createServer } from "vite";
 
 const boards = [
-  { id: "gh", repo: "/tmp/gh", remoteUrl: "https://github.com/acme/gh", autoCollapseEmptySwimlanes: false },
-  { id: "gl", repo: "/tmp/gl", remoteUrl: "https://gitlab.com/acme/gl", autoCollapseEmptySwimlanes: false },
-  { id: "none", repo: "/tmp/none", autoCollapseEmptySwimlanes: false },
+  { id: "gh", repo: "/tmp/gh", remoteUrl: "https://github.com/acme/gh" },
+  { id: "gl", repo: "/tmp/gl", remoteUrl: "https://gitlab.com/acme/gl" },
+  { id: "none", repo: "/tmp/none" },
 ];
 const merged: string[] = [];
 const pulls = [
@@ -30,13 +30,16 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
       await route.fulfill({ json: [] });
     });
     await page.goto(server.resolvedUrls!.local[0]);
-    for (const name of ["gh", "gl", "none"]) {
+    // Opening a repository closes the others, so check each one's links in turn.
+    const prLink = page.getByRole("button", { name: "Pull requests" });
+    for (const [name, count] of [["gl", 0], ["none", 0], ["gh", 1]] as const) {
       const row = page.getByRole("button", { name, exact: true });
-      await row.waitFor();
       if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+      if (count) await prLink.waitFor();
+      else await prLink.waitFor({ state: "hidden" });
+      assert.equal(await prLink.count(), count, name);
     }
-    assert.equal(await page.getByRole("button", { name: "Pull requests" }).count(), 1);
-    await page.getByRole("button", { name: "Pull requests" }).click();
+    await prLink.click();
     await page.getByRole("list", { name: "Pull requests" }).waitFor();
     assert.equal(await page.locator("[data-pr]").count(), 2);
     assert.equal(await page.locator("[data-pr='7']").getByText("CI passing").count(), 1);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium, type Locator, type Page, type Route } from "playwright";
 import { createServer } from "vite";
 
-const boards = [{ id: "b1", repo: "/tmp/b1", remoteUrl: "", autoCollapseEmptySwimlanes: false }];
+const boards = [{ id: "b1", repo: "/tmp/b1", remoteUrl: "" }];
 const chat = { id: "c1", boardId: "b1", title: "What is blocked?", model: "openai/gpt-6.1-sol", thinking: "low", createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" };
 const messages = [
   { id: "m1", chatId: "c1", role: "user", body: "What is blocked?", parts: [], createdAt: "2025-01-01T00:00:00Z" },
@@ -214,7 +214,8 @@ test("unread replies show per chat and as board totals, and looking at a chat cl
     assert.equal(await row.locator("[data-chat-unread]").count(), 0, "an open repository shows the total on its Chat entry only");
     await row.click();
     await row.locator("[data-chat-unread='1']").waitFor();
-    assert.equal(await sidebarChat.count(), 0, "a collapsed repository hides its Chat entry and shows the total on its row");
+    // The entry slides shut before it hides.
+    await sidebarChat.waitFor({ state: "hidden" });
   } finally {
     await browser.close();
     await server.close();

@@ -78,7 +78,6 @@ async function run(
           {
             id: "board",
             repo: "/tmp/repo",
-            autoCollapseEmptySwimlanes: false,
             newCards: options.count
               ? options.count(state)
               : state.acknowledged

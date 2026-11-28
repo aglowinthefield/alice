@@ -27,7 +27,7 @@ test("the card lists its attachments with image thumbnails and download links fo
       { id: "a2", cardId: "card", messageId: null, name: "run.log", type: "text/plain", size: 5 * 1024 * 1024, createdAt: "2026-01-01" },
     ];
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],
@@ -72,7 +72,7 @@ test("an agent report shows attached screenshots inline, links a missing file, a
     const base = "/api/boards/board/cards/card/attachments";
     const run = { id: "run", cardId: "card", attempt: 1, status: "review", output: "", error: null, worktree: "/tmp/wt", startedBy: "manual", agent: "", inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, cost: null, report: `Before and after:\n\n![Before](${base}/shot)\n\n![After](${base}/lost)\n\n![Temp](/tmp/b05cap/after.png)\n\n[run.log](${base}/log) and [tmp.log](/tmp/b05cap/run.log)`, startedAt: "2026-01-01", finishedAt: "2026-01-01", changedFiles: 0 };
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],
@@ -130,7 +130,7 @@ test("deleting an attachment asks first: Cancel or Escape keeps it, Delete remov
       { id: "a2", cardId: "card", messageId: null, name: "run.log", type: "text/plain", size: 5, createdAt: "2026-01-01" },
     ];
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],
@@ -165,8 +165,8 @@ test("deleting an attachment asks first: Cancel or Escape keeps it, Delete remov
 
     await remove.click();
     await confirm.waitFor();
-    assert.match(await confirm.textContent() ?? "", /"screen\.png" will be permanently deleted/);
-    assert.equal(await confirm.getByRole("button", { name: "Delete" }).count(), 1);
+    assert.match(await confirm.textContent() ?? "", /Alice permanently deletes "screen.png"/);
+    assert.equal(await confirm.getByRole("button", { name: "Delete attachment" }).count(), 1);
     await confirm.getByRole("button", { name: "Cancel" }).click();
     await confirm.waitFor({ state: "hidden" });
 
@@ -181,7 +181,7 @@ test("deleting an attachment asks first: Cancel or Escape keeps it, Delete remov
     assert.equal(await section.getByRole("img", { name: "screen.png" }).count(), 1);
 
     await remove.click();
-    await confirm.getByRole("button", { name: "Delete" }).click();
+    await confirm.getByRole("button", { name: "Delete attachment" }).click();
     await section.getByRole("img", { name: "screen.png" }).waitFor({ state: "detached" });
     assert.deepEqual(deleted, ["/api/boards/board/cards/card/attachments/a1"]);
     // The other attachment stays.
@@ -198,7 +198,7 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
     const page = await browser.newPage();
     const card = { id: "card", title: "Old work", body: "", repo: "/tmp/repo", source: "manual", status: "archived", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false, attachmentCount: 2 };
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],
@@ -233,7 +233,7 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
 
     await purge.click();
     await confirm.waitFor();
-    assert.match(await confirm.textContent() ?? "", /All 2 attachments of "Old work" will be permanently deleted/);
+    assert.match(await confirm.textContent() ?? "", /Alice permanently deletes all 2 attachments of "Old work" from disk/);
     await confirm.getByRole("button", { name: "Cancel" }).click();
     await confirm.waitFor({ state: "hidden" });
 
@@ -246,7 +246,7 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
     assert.deepEqual(purges, [], "Cancel and Escape send no purge request");
 
     await purge.click();
-    await confirm.getByRole("button", { name: "Delete" }).click();
+    await confirm.getByRole("button", { name: "Delete attachments" }).click();
     for (let i = 0; i < 50 && !purges.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(purges, [{ cardIds: ["card"] }]);
     assert.equal(nativeDialogs, 0);
@@ -267,7 +267,7 @@ test("clicking a thumbnail opens a lightbox carousel over the card's images, wit
       { id: "a4", cardId: "card", messageId: null, name: "wide.svg", type: "image/svg+xml", size: 300, createdAt: "2026-01-01" },
     ];
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],
@@ -346,7 +346,7 @@ test("clicking an image in an agent report opens the lightbox over the report's 
     const base = "/api/boards/board/cards/card/attachments";
     const run = { id: "run", cardId: "card", attempt: 1, status: "review", output: "", error: null, worktree: "/tmp/wt", startedBy: "manual", agent: "", inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, cost: null, report: `![Before](${base}/one)\n\n![After](${base}/two)`, startedAt: "2026-01-01", finishedAt: "2026-01-01", changedFiles: 0 };
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],

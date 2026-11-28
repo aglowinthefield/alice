@@ -11,7 +11,7 @@ test("a repository's Card retries model is saved with its other models and is no
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
-    let board: Record<string, unknown> = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", remoteUrl: "", autoCollapseEmptySwimlanes: false, agentModels: { ...emptyAgentModels(), work: { model: "anthropic/claude-sonnet-4-5", thinking: "" } } };
+    let board: Record<string, unknown> = { id: "board", repo: "/tmp/example", icon: "sprinkle_donut", color: "violet", remoteUrl: "", agentModels: { ...emptyAgentModels(), work: { model: "anthropic/claude-sonnet-4-5", thinking: "" } } };
     const patches: unknown[] = [];
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;

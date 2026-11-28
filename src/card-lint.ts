@@ -130,7 +130,7 @@ export function lintCard(card: { title: string; body: string }): ReadyFlag[] {
   if (width.wide)
     flags.push({
       rule: "wide",
-      message: `Looks too wide for one run (${width.reasons.join(", ")}): cards like this often take several attempts, so consider turning it into a plan`,
+      message: `Looks too wide for one run (${width.reasons.join(", ")}). Cards like this often take several attempts. Consider turning it into a plan`,
       ...(width.quote ? { quote: width.quote } : {}),
     });
   const body = prose(card.body ?? "");
@@ -138,8 +138,8 @@ export function lintCard(card: { title: string; body: string }): ReadyFlag[] {
     flags.push({
       rule: "no-acceptance",
       message: body.trim()
-        ? "No acceptance criteria: say what done looks like, for example under an Acceptance heading"
-        : "The card has no description, so nothing says what done looks like",
+        ? "No acceptance criteria. Describe the finished result, for example under an Acceptance heading"
+        : "The card has no description, so nothing describes the finished result",
     });
   return flags;
 }

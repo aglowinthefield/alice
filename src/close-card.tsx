@@ -55,8 +55,8 @@ export function CloseCardDialog({
           Close without merging?
         </DialogTitle>
         <DialogDescription className="mt-2 text-sm text-muted-foreground">
-          Its worktree and branch stay, and Reopen brings it back. Why is it
-          being closed?
+          Its worktree and branch stay, and Reopen brings it back. Why are you
+          closing it?
         </DialogDescription>
         <div
           className="mt-4 flex flex-wrap gap-2"

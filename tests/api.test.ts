@@ -135,8 +135,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync.native(alpha));
-    assert.deepEqual([first.icon, first.color], ["sprinkle_donut", "violet"]);
-    assert.equal(first.autoCollapseEmptySwimlanes, false);
+    assert.deepEqual([first.icon, first.color], ["alice_smile", "violet"]);
     assert.equal(first.autoReviewEnabled, false);
     assert.equal(first.autoPickupEnabled, false);
     assert.equal(first.pickupConcurrency, 2);
@@ -157,30 +156,28 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${second.id}/chats/${chat.id}`, "PATCH", { model: "has space", thinking: "low" })).status, 400);
     assert.equal((await request(`/boards/${second.id}/chats`)).data.find((item: { id: string }) => item.id === chat.id).thinking, "minimal");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "unknown", color: "coral" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "red; background:url(x)" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral", autoCollapseEmptySwimlanes: true })).status, 400);
-    const appearance = await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral" });
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "red; background:url(x)" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "coral", limitsEnabled: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral" })).status, 400, "the bakery icons are retired");
+    const appearance = await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "coral" });
     assert.equal(appearance.status, 200);
-    assert.deepEqual([appearance.data.icon, appearance.data.color], ["croissant", "coral"]);
+    assert.deepEqual([appearance.data.icon, appearance.data.color], ["alice_stern", "coral"]);
     assert.deepEqual([(await request("/boards")).data.find((item: { id: string }) => item.id === first.id).icon,
-      (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["croissant", "violet"]);
+      (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["alice_stern", "violet"]);
     assert.equal(first.remoteUrl, "");
     for (const remoteUrl of ["javascript:alert(1)", "github.com/owner/repo", `https://example.com/${"x".repeat(500)}`, 42])
       assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "https://github.com/o/r", autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "https://github.com/o/r", limitsEnabled: true })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: " https://github.com/o/r " })).data.remoteUrl, "https://github.com/o/r");
     assert.deepEqual((await request("/boards")).data.map((item: { id: string; remoteUrl: string }) => [item.id, item.remoteUrl]).sort(),
       [[first.id, "https://github.com/o/r"], [second.id, ""]].sort());
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "" })).data.remoteUrl, "");
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: "yes" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: true })).status, 400, "the removed setting is refused");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", {})).status, 400);
-    assert.equal((await request(`/boards/missing/settings`, "PATCH", { autoCollapseEmptySwimlanes: true })).status, 404);
-    const settings = await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: true });
-    assert.equal(settings.status, 200);
-    assert.equal(settings.data.autoCollapseEmptySwimlanes, true);
+    assert.equal((await request(`/boards/missing/settings`, "PATCH", { limitsEnabled: true })).status, 404);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: "yes" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true, autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true, limitsEnabled: true })).status, 400);
     const auto = await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true });
     assert.equal(auto.status, 200);
     assert.equal(auto.data.autoReviewEnabled, true);
@@ -212,7 +209,6 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/auto-pickup/reset-limit`, "POST")).status, 400);
     assert.equal((await request(`/boards/missing/auto-pickup/reset-limit`, "POST")).status, 404);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: false, pickupConcurrency: 2 })).data.pickupDailyLimit, 99);
-    assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
     execFileSync("git", ["-C", alpha, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
     assert.equal(card.repo, realpathSync.native(alpha));
@@ -279,8 +275,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const moved = await request(`/boards/${first.id}`, "PATCH", { repo: "~/code/gamma" });
     assert.equal(moved.data.repo, realpathSync.native(gamma));
     assert.equal(moved.status, 200);
-    assert.equal(moved.data.autoCollapseEmptySwimlanes, true);
-    assert.deepEqual([moved.data.icon, moved.data.color], ["croissant", "coral"]);
+    assert.deepEqual([moved.data.icon, moved.data.color], ["alice_stern", "coral"]);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync.native(gamma));
     assert.equal((await request(`/boards/${first.id}`, "DELETE")).status, 200);
     assert.equal((await request(`/boards/${first.id}/cards`)).status, 404);
@@ -288,8 +283,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards")).data.length, 1);
     const restored = await request("/boards", "POST", { repo: gamma });
     assert.equal(restored.data.id, first.id);
-    assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
-    assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
+    assert.deepEqual([restored.data.icon, restored.data.color], ["alice_stern", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
     // Close without merging takes an optional reason from a fixed list, and a note only alongside one.
     const dropped = (await request(`/boards/${first.id}/cards`, "POST", { title: "Dropped", body: "" })).data;
@@ -365,7 +359,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
     assert.deepEqual((await request("/settings", "PATCH", { agentModels: global })).data.agentModels, global);
     const board = (await request("/boards", "POST", { repo })).data;
     assert.deepEqual(board.agentModels, emptyAgentModels());
-    assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: {}, autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: {}, limitsEnabled: true })).status, 400);
     assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { conflict: { model: "-x" } } })).status, 400);
     const updated = await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { conflict: { model: " openai-codex/gpt-5.5 ", thinking: "xhigh" } } });
     assert.equal(updated.status, 200);

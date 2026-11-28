@@ -176,12 +176,14 @@ export function Visualizer({
       />
       {layout.failed ? (
         <div>
-          {notice("The graph could not be drawn, so it is shown as a list.")}
+          {notice(
+            "Alice could not draw the graph, so it shows the cards as a list.",
+          )}
           <CardList cards={cards} onOpenCard={onOpenCard} />
         </div>
       ) : (
         <div
-          className="relative h-[calc(100vh-170px)] min-h-[360px] overflow-hidden"
+          className="relative h-[calc(100vh_-_170px_-_var(--titlebar-h))] min-h-[360px] overflow-hidden"
           aria-label="Card dependency graph"
         >
           {!nodes.length ? (

@@ -62,13 +62,11 @@ test("new cards from elsewhere badge the sidebar, then highlight on the board an
           {
             id: "board",
             repo: "/tmp/repo",
-            autoCollapseEmptySwimlanes: false,
             newCards: unseen.length,
           },
           {
             id: "other",
             repo: "/tmp/other",
-            autoCollapseEmptySwimlanes: false,
             newCards: 3,
           },
         ],

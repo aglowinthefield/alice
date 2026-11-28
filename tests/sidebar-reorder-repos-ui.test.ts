@@ -26,8 +26,8 @@ test("dragging a repo in the sidebar reorders it and remembers the order", async
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {
         "/api/boards": [
-          { id: "one", repo: "/tmp/alpha", autoCollapseEmptySwimlanes: false },
-          { id: "two", repo: "/tmp/beta", autoCollapseEmptySwimlanes: false },
+          { id: "one", repo: "/tmp/alpha" },
+          { id: "two", repo: "/tmp/beta" },
         ],
         "/api/settings": {
           confirmRunStart: false,

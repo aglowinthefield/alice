@@ -298,6 +298,8 @@ test("a second Board connection does not interrupt live runs; explicit server re
     item.worker.start(another);
     afterRestart.recoverInterruptedRuns(); // Only the exclusive-lock server calls this after startup.
     assert.equal(afterRestart.getCard(another.id)?.status, "interrupted");
+    afterRestart.setAutoPickup(item.repoBoard.id, true, 1);
+    assert.equal(afterRestart.autoPickupBlocker(afterRestart.getBoard(item.repoBoard.id)!), undefined, "an interrupted card waits without pausing pickup");
     item.release();
     afterRestart.close();
   } finally { await item.close(); }

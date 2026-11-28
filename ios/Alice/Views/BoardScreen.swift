@@ -130,7 +130,7 @@ struct BoardScreen: View {
         if let m = manual[lane.id] { return m }
         let idle = lane.cards.allSatisfy { $0.status == .done || $0.status == .archived }
         if lane.id == "archived" { return idle }
-        return (board.autoCollapseEmptySwimlanes ?? true) && idle && lane.id != "done"
+        return idle && lane.id != "done"
             && lane.cards.isEmpty
     }
 

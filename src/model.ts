@@ -47,7 +47,6 @@ export type Board = {
   githubMainProtected?: boolean | null;
   /** What the GitHub main check found, or why it could not run. */
   integrationNote?: string;
-  autoCollapseEmptySwimlanes: boolean;
   pushMainAfterMerge?: boolean;
   /** Build caches card worktrees share with the main checkout (shared/shared-caches.ts). */
   sharedCaches?: string[];

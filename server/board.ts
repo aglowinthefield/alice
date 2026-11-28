@@ -14,7 +14,7 @@ import { parsePlan } from "../src/plan.js";
 import { defaultStaleReviewDays, validateStaleReviewDays } from "../src/stale-review.js";
 import { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot } from "../src/model.js";
 import { classifyRuns, type RunKind } from "../src/run-kinds.js";
-import { repoColors, repoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
+import { repoColors, repoIcons, retiredRepoIcons, type RepoColor, type RepoIcon } from "../src/repo-appearance.js";
 import type { StatsInput } from "./stats.js";
 import type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields } from "../shared/wire.js";
 export type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields };
@@ -172,7 +172,7 @@ export class Board {
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', ${usageDefinitions}, UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'alice_smile', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
@@ -299,7 +299,12 @@ export class Board {
     if (!boardColumns.has("autoPullRequestEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPullRequestEnabled INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoPullRequestEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPullRequestEnabledAt TEXT");
     if (!boardColumns.has("archived")) this.db.exec("ALTER TABLE boards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
-    if (!boardColumns.has("icon")) this.db.exec("ALTER TABLE boards ADD COLUMN icon TEXT NOT NULL DEFAULT 'sprinkle_donut'");
+    if (!boardColumns.has("icon")) this.db.exec("ALTER TABLE boards ADD COLUMN icon TEXT NOT NULL DEFAULT 'alice_smile'");
+    // The bakery icons are retired: each board moves to an Alice expression once, spread so boards keep telling apart.
+    if ((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version < 4) {
+      const cases = retiredRepoIcons.map((icon, index) => `WHEN '${icon}' THEN '${repoIcons[index % repoIcons.length]}'`).join(" ");
+      this.db.exec(`UPDATE boards SET icon = CASE icon ${cases} ELSE '${repoIcons[0]}' END WHERE icon NOT IN (${repoIcons.map(icon => `'${icon}'`).join(", ")}); PRAGMA user_version = 4`);
+    }
     if (!boardColumns.has("color")) this.db.exec("ALTER TABLE boards ADD COLUMN color TEXT NOT NULL DEFAULT 'violet'");
     if (!boardColumns.has("remoteUrl")) this.db.exec("ALTER TABLE boards ADD COLUMN remoteUrl TEXT NOT NULL DEFAULT ''");
     if (!boardColumns.has("autoCollapseEmptySwimlanes")) this.db.exec("ALTER TABLE boards ADD COLUMN autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0");
@@ -506,7 +511,7 @@ export class Board {
       return this.getBoard(existing.id)!;
     }
     const id = randomUUID();
-    this.db.prepare("INSERT INTO boards(id, repo) VALUES (?, ?)").run(id, repo);
+    this.db.prepare("INSERT INTO boards(id, repo, icon) VALUES (?, ?, ?)").run(id, repo, repoIcons[0]);
     return this.getBoard(id)!;
   }
   setAppearance(id: string, icon: string, color: string): RepoBoard {

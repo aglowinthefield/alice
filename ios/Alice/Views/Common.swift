@@ -7,7 +7,7 @@ struct RepoBadge: View {
     var size: CGFloat = 32
 
     var body: some View {
-        let name = icon ?? "sprinkle_donut"
+        let name = icon ?? "alice_smile"
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.31).fill(T.repoColor(color).opacity(0.16))
             if let image = Self.image(name) {
@@ -18,7 +18,7 @@ struct RepoBadge: View {
     }
 
     static func image(_ name: String) -> UIImage? {
-        for n in [name, "sprinkle_donut"] {
+        for n in [name, "alice_smile"] {
             if let path = Bundle.main.path(forResource: n, ofType: "png", inDirectory: "Icons") { return UIImage(contentsOfFile: path) }
         }
         return nil

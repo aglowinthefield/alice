@@ -135,7 +135,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync.native(alpha));
-    assert.deepEqual([first.icon, first.color], ["sprinkle_donut", "violet"]);
+    assert.deepEqual([first.icon, first.color], ["alice_smile", "violet"]);
     assert.equal(first.autoCollapseEmptySwimlanes, false);
     assert.equal(first.autoReviewEnabled, false);
     assert.equal(first.autoPickupEnabled, false);
@@ -157,14 +157,15 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${second.id}/chats/${chat.id}`, "PATCH", { model: "has space", thinking: "low" })).status, 400);
     assert.equal((await request(`/boards/${second.id}/chats`)).data.find((item: { id: string }) => item.id === chat.id).thinking, "minimal");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "unknown", color: "coral" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "red; background:url(x)" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral", autoCollapseEmptySwimlanes: true })).status, 400);
-    const appearance = await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral" });
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "red; background:url(x)" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "coral", autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral" })).status, 400, "the bakery icons are retired");
+    const appearance = await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "coral" });
     assert.equal(appearance.status, 200);
-    assert.deepEqual([appearance.data.icon, appearance.data.color], ["croissant", "coral"]);
+    assert.deepEqual([appearance.data.icon, appearance.data.color], ["alice_stern", "coral"]);
     assert.deepEqual([(await request("/boards")).data.find((item: { id: string }) => item.id === first.id).icon,
-      (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["croissant", "violet"]);
+      (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["alice_stern", "violet"]);
     assert.equal(first.remoteUrl, "");
     for (const remoteUrl of ["javascript:alert(1)", "github.com/owner/repo", `https://example.com/${"x".repeat(500)}`, 42])
       assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl })).status, 400);
@@ -280,7 +281,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal(moved.data.repo, realpathSync.native(gamma));
     assert.equal(moved.status, 200);
     assert.equal(moved.data.autoCollapseEmptySwimlanes, true);
-    assert.deepEqual([moved.data.icon, moved.data.color], ["croissant", "coral"]);
+    assert.deepEqual([moved.data.icon, moved.data.color], ["alice_stern", "coral"]);
     assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync.native(gamma));
     assert.equal((await request(`/boards/${first.id}`, "DELETE")).status, 200);
     assert.equal((await request(`/boards/${first.id}/cards`)).status, 404);
@@ -289,7 +290,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     const restored = await request("/boards", "POST", { repo: gamma });
     assert.equal(restored.data.id, first.id);
     assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
-    assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
+    assert.deepEqual([restored.data.icon, restored.data.color], ["alice_stern", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
     // Close without merging takes an optional reason from a fixed list, and a note only alongside one.
     const dropped = (await request(`/boards/${first.id}/cards`, "POST", { title: "Dropped", body: "" })).data;

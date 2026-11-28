@@ -688,7 +688,7 @@ export function App() {
     }, 150);
   };
   const [repoPath, setRepoPath] = useState("");
-  const [iconDraft, setIconDraft] = useState<RepoIcon>("sprinkle_donut");
+  const [iconDraft, setIconDraft] = useState<RepoIcon>("alice_smile");
   const [colorDraft, setColorDraft] = useState<RepoColor>("violet");
   const [repoCheck, setRepoCheck] = useState<{
     path: string;
@@ -3411,7 +3411,7 @@ export function App() {
                 Choose an icon and color for this repository.
               </p>
               <div
-                className="mt-4 grid grid-cols-8 gap-2"
+                className="mt-4 grid grid-cols-9 gap-2"
                 role="group"
                 aria-label="Repository icon"
               >
@@ -3436,8 +3436,8 @@ export function App() {
                     >
                       <img
                         src={`/icons/${name}.png`}
-                        width={20}
-                        height={20}
+                        width={26}
+                        height={26}
                         alt=""
                         className="object-contain"
                       />

@@ -310,7 +310,23 @@ test("existing boards gain default appearance without losing settings", () => {
     legacy.prepare("INSERT INTO boards(id, repo, autoCollapseEmptySwimlanes) VALUES (?, ?, 1)").run("old", dir);
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes, board.getBoard("old")?.remoteUrl], ["sprinkle_donut", "violet", true, ""]);
+    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes, board.getBoard("old")?.remoteUrl], ["alice_smile", "violet", true, ""]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("boards on a retired bakery icon move to an Alice expression once, and new boards start on one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-appearance-retired-"));
+  const path = join(dir, "board.sqlite");
+  try {
+    const legacy = new DatabaseSync(path);
+    legacy.exec("CREATE TABLE boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut')");
+    const add = legacy.prepare("INSERT INTO boards(id, repo, icon) VALUES (?, ?, ?)");
+    for (const [id, icon] of [["donut", "sprinkle_donut"], ["baguette", "baguette"], ["latte", "iced_latte"], ["odd", "pretzel"], ["kept", "alice_gasp"]]) add.run(id, join(dir, id), icon);
+    legacy.close();
+    const board = new Board(path);
+    assert.deepEqual(["donut", "baguette", "latte", "odd", "kept"].map(id => board.getBoard(id)?.icon), ["alice_smile", "alice_calm", "alice_stern", "alice_smile", "alice_gasp"]);
+    assert.equal(board.addRepo(join(dir, "new")).icon, "alice_smile", "the table's old default is not used");
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -322,18 +338,18 @@ test("repository appearance is independent, survives restart, and stays with an 
     const board = new Board(path);
     const first = board.addRepo(join(dir, "first"));
     const second = board.addRepo(join(dir, "second"));
-    assert.equal(first.icon, "sprinkle_donut");
+    assert.equal(first.icon, "alice_smile");
     assert.equal(first.color, "violet");
-    assert.deepEqual([second.icon, second.color], ["sprinkle_donut", "violet"]);
-    assert.deepEqual([board.setAppearance(first.id, "croissant", "coral").icon, board.getBoard(first.id)?.color], ["croissant", "coral"]);
-    assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["sprinkle_donut", "violet"]);
+    assert.deepEqual([second.icon, second.color], ["alice_smile", "violet"]);
+    assert.deepEqual([board.setAppearance(first.id, "alice_stern", "coral").icon, board.getBoard(first.id)?.color], ["alice_stern", "coral"]);
+    assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["alice_smile", "violet"]);
     assert.equal(board.setRemoteUrl(first.id, "https://github.com/o/first").remoteUrl, "https://github.com/o/first");
     assert.throws(() => board.setRemoteUrl(first.id, "file:///etc/passwd"), /http/);
     assert.equal(board.getBoard(second.id)?.remoteUrl, "");
     board.archiveBoard(first.id);
     board.close();
     const reopened = new Board(path);
-    assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["croissant", "coral"]);
+    assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["alice_stern", "coral"]);
     assert.equal(reopened.getBoard(first.id)?.remoteUrl, "https://github.com/o/first");
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }

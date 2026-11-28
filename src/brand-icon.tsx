@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { repoIcons } from "./repo-appearance.js";
 
-// Alice is the default brand mark; the repo icons stay available as alternatives.
-const brandIcons: readonly string[] = ["alice", ...repoIcons];
+// Alice is the default brand mark; her other expressions are the alternatives. alice_smile is the same face as alice.
+const brandIcons: readonly string[] = [
+  "alice",
+  ...repoIcons.filter((name) => name !== "alice_smile"),
+];
 
 const storageKey = "alice-icon";
 

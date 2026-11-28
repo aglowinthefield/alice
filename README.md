@@ -20,7 +20,7 @@ A local kanban board that hands coding tasks to [Pi](https://pi.dev) agents, one
 You write down tasks. Agents work on them in the background, each in its own checkout, and you review the diffs when you're ready. You stay the one who decides what lands.
 
 - **Safe by default.** Every card gets its own worktree and branch (`alice/CARD_ID`). Your checkout is never touched while an agent works.
-- **You approve.** A finished run only reaches **Review**. Alice doesn't push, deploy, or write to an issue tracker unless you turn that on.
+- **You approve.** A finished run only reaches **Review**. New boards start with unattended review on: an agent reviewer checks each finished card, and on a GitHub pull-request board its approval pushes the branch and opens a PR. Turn it off per board in its settings. Otherwise Alice doesn't push, deploy, or write to an issue tracker unless you turn that on.
 - **Local.** One server on `127.0.0.1`, one SQLite file, no account.
 - **Parallel.** Several cards can run at once, and cards can wait on other cards.
 
@@ -44,7 +44,7 @@ flowchart LR
 - **Changes land unreviewed.** Review shows the diff, lets you comment on lines and send the card back, and only your approval merges it.
 - **Work gets lost between sessions.** Cards, attempts, transcripts, costs and review history stay on the board, and a retry continues the same Pi session.
 - **Spend is invisible.** Each attempt shows its tokens and cost, the board shows the last 24 hours, and an optional daily budget stops automatic pickup.
-- **Babysitting.** Opt-in automatic pickup starts Ready cards for you, and opt-in unattended review checks finished cards, sends fixable problems back, and opens the PR on pull-request boards without you.
+- **Babysitting.** Opt-in automatic pickup starts Ready cards for you, and unattended review (on for new boards) checks finished cards, sends fixable problems back, and opens the PR on pull-request boards without you.
 
 ## Alice and Hermes
 
@@ -61,7 +61,7 @@ flowchart LR
 | Line comments on the diff, sent back as feedback | ✅ | ❌ |
 | One-click merge into local `main` | ✅ | ❌ |
 | Open a PR on approval | ✅ | ✅ |
-| Unattended reviewer agent | ✅ Opt-in, runs the repository's checks itself | ✅ Automatic `sdlc-review` reviewer |
+| Unattended reviewer agent | ✅ On for new boards, runs the repository's checks itself | ✅ Automatic `sdlc-review` reviewer |
 | Per-attempt tokens and cost | ✅ | ❌ |
 | 24-hour spend and a daily budget that stops pickup | ✅ | ❌ |
 | Dependency graph visualizer | ✅ | ❌ |

@@ -425,7 +425,8 @@ export class Board {
     if (!approvalColumns.has("preparedHead")) this.db.exec("ALTER TABLE approvals ADD COLUMN preparedHead TEXT");
     if (!approvalColumns.has("merged")) this.db.exec("ALTER TABLE approvals ADD COLUMN merged INTEGER NOT NULL DEFAULT 0");
     // Preserve old cards and runs. A stored repository path is never reinterpreted against today's cwd.
-    for (const row of this.db.prepare("SELECT DISTINCT repo FROM cards WHERE repo NOT IN (SELECT repo FROM boards)").all() as { repo: string }[]) this.addRepo(row.repo);
+    // These boards existed before as card groups, so they keep auto-review off rather than taking the new-board default.
+    for (const row of this.db.prepare("SELECT DISTINCT repo FROM cards WHERE repo NOT IN (SELECT repo FROM boards)").all() as { repo: string }[]) this.addRepo(row.repo, false);
   }
   /** The database handle, for stores that keep their own tables beside the board's. */
   get sqlite(): DatabaseSync { return this.db; }
@@ -503,7 +504,7 @@ export class Board {
     const row = this.db.prepare(`SELECT ${boardFields} FROM boards WHERE id=? AND archived=0`).get(id) as BoardRow | undefined;
     return row && this.toBoard(row);
   }
-  addRepo(repo: string): RepoBoard {
+  addRepo(repo: string, autoReview = true): RepoBoard {
     const existing = this.db.prepare("SELECT id FROM boards WHERE repo=?").get(repo) as { id: string } | undefined;
     if (existing) {
       this.db.prepare("UPDATE boards SET archived=0 WHERE id=?").run(existing.id);
@@ -511,7 +512,7 @@ export class Board {
     }
     const id = randomUUID();
     // New boards start with auto-review on; the column default stays 0 so older rows are never flipped.
-    this.db.prepare("INSERT INTO boards(id, repo, icon, autoReviewEnabled, autoReviewEnabledAt) VALUES (?, ?, ?, 1, ?)").run(id, repo, repoIcons[0], now());
+    this.db.prepare("INSERT INTO boards(id, repo, icon, autoReviewEnabled, autoReviewEnabledAt) VALUES (?, ?, ?, ?, ?)").run(id, repo, repoIcons[0], autoReview ? 1 : 0, autoReview ? now() : null);
     return this.getBoard(id)!;
   }
   setAppearance(id: string, icon: string, color: string): RepoBoard {

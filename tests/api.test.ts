@@ -132,13 +132,14 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.deepEqual(prefs((await request("/settings", "PATCH", { theme: "compline" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "compline", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.deepEqual(prefs((await request("/settings", "PATCH", { theme: "light" })).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
     assert.deepEqual(prefs((await request("/settings")).data), { confirmRunStart: true, notifyOnReview: true, cardDetailsLayout: "side", theme: "light", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, telemetryAvailable: false, maxActiveAgents: 0 });
+    const beforeAdd = new Date().toISOString();
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const addedAt = new Date().toISOString();
     const first = (await request("/boards")).data[0];
     assert.equal(first.repo, realpathSync.native(alpha));
     assert.deepEqual([first.icon, first.color], ["alice_smile", "violet"]);
     assert.equal(first.autoReviewEnabled, true, "a new board starts with auto-review on");
-    assert.ok(first.autoReviewEnabledAt && first.autoReviewEnabledAt <= addedAt, "auto-review is on from when the board was added");
+    assert.ok(first.autoReviewEnabledAt && first.autoReviewEnabledAt >= beforeAdd && first.autoReviewEnabledAt <= addedAt, "auto-review is on from when the board was added");
     assert.equal(first.autoPickupEnabled, false);
     assert.equal(first.pickupConcurrency, 2);
     assert.equal(first.pickupDailyLimit, 6);

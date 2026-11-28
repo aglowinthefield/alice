@@ -4,7 +4,7 @@ The full feature reference. For an overview, see the [README](../README.md).
 
 Alice is a local kanban board that hands coding tasks to Pi agents, one Git worktree per card. Nothing reaches your `main` branch until you approve it.
 
-Alice doesn't push, deploy, or write to an issue tracker unless you turn it on. PRs open only on GitHub pull request boards, and a board can opt in to pushing `main` after each local merge (see [Reviewing and merging](#reviewing-and-merging)).
+New boards start with [unattended review](#unattended-review) on. On a GitHub pull request board, an agent reviewer's approval pushes `alice/<card>` and opens a PR without you; turn review off in the board's settings to stop that. Apart from that, Alice doesn't push, deploy, or write to an issue tracker unless you turn it on. PRs open only on GitHub pull request boards, and a board can opt in to pushing `main` after each local merge (see [Reviewing and merging](#reviewing-and-merging)).
 
 ```mermaid
 flowchart LR
@@ -29,7 +29,7 @@ flowchart LR
 - [Reviewing and merging](#reviewing-and-merging)
 - [GitHub pull request mode](#github-pull-request-mode)
 - [Watching a run](#watching-a-run)
-- [Automation (opt-in)](#automation-opt-in)
+- [Automation](#automation)
 - [CLI](#cli)
 - [Boards and lanes](#boards-and-lanes)
 - [Server, data, and restarts](#server-data-and-restarts)
@@ -247,9 +247,9 @@ A card that has run more than once shows an amber attempt count, in every lane i
 
 Provider errors show only their HTTP status. Pi's stderr goes to the server console, not the board, because it can contain request details.
 
-## Automation (opt-in)
+## Automation
 
-Both features are off by default and set per repository in **Settings**. Both can start paid Pi runs, and both need the server to keep running.
+Both features are set per repository. Automatic pickup is opt-in and off by default. Unattended review is on for boards added after it became the default, and off on older boards unless you turned it on; adding a board never changes an existing board's setting. Both can start paid Pi runs, and both need the server to keep running.
 
 The board header shows **Last 24 hours**: the cost of attempts and agent reviews that are running or finished in the last 24 hours.
 
@@ -279,8 +279,8 @@ flowchart LR
   C -. needs a person or unclear verdict .-> H
 ```
 
-- It's set per repository. Open the repository's edit (pencil) dialog and enable it.
-- Alice only considers runs that reach Review after you enable it.
+- It's set per repository and is on for a board you add, with `alice board-add` or in the UI. To turn it off, open the repository's edit (pencil) dialog and click **Turn off unattended review**; the same button turns it back on. Re-adding an archived board keeps the setting it had.
+- Alice only considers runs that reach Review after review was turned on: for a new board, after you added it.
 - Failed reviews aren't retried.
 - The reviewer reads the repository's `AGENTS.md`, `CLAUDE.md` and review instructions and runs the checks they ask for itself, instead of sending the card back for missing proof. Checks only a person can do, such as device runs, screenshots or staging access, leave the card for you.
 - Turning the setting off stops a review in progress from opening a PR.

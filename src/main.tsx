@@ -737,14 +737,6 @@ export function App() {
       ? saved
       : "today";
   });
-  const [reposCollapsed, setReposCollapsed] = useState(
-    () => localStorage.getItem("alice-repos-collapsed") === "true",
-  );
-  const toggleRepos = () => {
-    const next = !reposCollapsed;
-    setReposCollapsed(next);
-    localStorage.setItem("alice-repos-collapsed", String(next));
-  };
   // Repos start collapsed except the open one; the user's toggles persist. Opening one closes the rest.
   const [repoOpen, setRepoOpen] = useState<Record<string, boolean>>(() => {
     try {
@@ -1973,20 +1965,7 @@ export function App() {
               </span>
             )}
           </button>
-          <button
-            onClick={toggleRepos}
-            aria-expanded={!reposCollapsed}
-            aria-controls="sidebar-repositories"
-            className="mb-1 flex w-full items-center gap-1 rounded px-3 py-1 text-left text-[length:var(--text-sidebar)] text-muted-foreground/80 hover:text-foreground"
-          >
-            Repositories
-            {reposCollapsed ? (
-              <ChevronRight size={12} aria-hidden="true" className="ml-auto" />
-            ) : (
-              <ChevronDown size={12} aria-hidden="true" className="ml-auto" />
-            )}
-          </button>
-          <div id="sidebar-repositories" hidden={reposCollapsed}>
+          <div>
             {sortedBoards.map((item) => {
               const active = view === "board" && boardId === item.id;
               const pullsActive = view === "pulls" && boardId === item.id;

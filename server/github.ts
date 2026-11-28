@@ -186,16 +186,6 @@ const prCommentsQuery = `query($owner: String!, $name: String!, $number: Int!) {
 /** The reaction Alice leaves on a `/alice` comment it has read. GitHub's set has no pie; eyes says "seen". */
 export const acknowledgedReaction = "eyes";
 
-/** A `/alice` request found by scanning a repository's comments, before the PR it is on is looked up. */
-export type RepoComment = { id: string; at: string; author: string; association: string; body: string; prNumber: number; path?: string; line?: number | null };
-/** A PR as a request on it needs to see it: Alice can only push to a branch in the same repository. */
-export type RequestTarget = { number: number; title: string; url: string; state: PullRequest["state"]; headRefName: string; headRefOid: string; isCrossRepository: boolean };
-
-/** The `/alice` comments among `comments` from trusted authors, oldest first. */
-export function trustedAliceComments<T extends { association: string; body: string; at: string }>(comments: T[]): T[] {
-  return comments.filter(item => trustedAssociations.includes(item.association) && mentionsAlice(item.body)).sort((a, b) => a.at.localeCompare(b.at));
-}
-
 /** How gh reports a missing or rejected sign-in on any command. */
 const signedOut = /HTTP 401|Bad credentials|not logged in|gh auth login/i;
 /** How long a passing `check()` is reused. `gh auth status` calls GitHub's API, which costs most of a second. */
@@ -235,10 +225,6 @@ export class GitHub {
   /** The fields GitHub is slow to compute (seconds on a busy repo), fetched apart so they never hold up the list. */
   async listOpenPullRequestExtras(repo: string): Promise<(Pick<RepoPullRequest, "number" | "additions" | "deletions" | "reviewDecision"> & { mergeable?: string; statusCheckRollup?: Check[] })[]> {
     return JSON.parse(await this.gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json", "number,reviewDecision,additions,deletions,mergeable,statusCheckRollup"]));
-  }
-  /** Whether one PR conflicts with main and what its CI checks say. One cheap call, so callers fetch it only for the PRs they care about. */
-  async health(repo: string, number: number): Promise<{ mergeable?: string; statusCheckRollup?: Check[] }> {
-    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "mergeable,statusCheckRollup"]));
   }
   /** CI checks of one PR. */
   async checks(repo: string, number: number): Promise<PullRequest["statusCheckRollup"]> {
@@ -284,20 +270,6 @@ export class GitHub {
   async comment(repo: string, number: number, body: string): Promise<void> {
     await this.gh(["pr", "comment", String(number), "--repo", repo, "--body", body]);
   }
-  /**
-   * Every conversation comment and inline review comment in the repository updated since `since`, on issues and PRs
-   * alike (the caller looks up which are PRs). Two paginated calls however many PRs are open.
-   */
-  async repoComments(repo: string, since: string): Promise<RepoComment[]> {
-    const jq = ".[] | {id: (.id | tostring), at: .created_at, author: .user.login, association: .author_association, body: .body, number: ((.issue_url // .pull_request_url) | split(\"/\") | last | tonumber), path: .path, line: (.line // .original_line)} | tojson";
-    const read = async (endpoint: string) => (await this.gh(["api", "--paginate", `repos/${repo}/${endpoint}?since=${encodeURIComponent(since)}&per_page=100`, "--jq", jq])).split("\n").filter(Boolean)
-      .map(line => { const item = JSON.parse(line); return { id: `${endpoint}:${item.id}`, at: item.at, author: item.author ?? "ghost", association: item.association, body: item.body ?? "", prNumber: item.number, ...(item.path ? { path: item.path, line: item.line } : {}) } as RepoComment; });
-    return [...await read("issues/comments"), ...await read("pulls/comments")];
-  }
-  /** What a request needs to know about a PR; throws when the number is an issue, not a PR. */
-  async requestTarget(repo: string, number: number): Promise<RequestTarget> {
-    return JSON.parse(await this.gh(["pr", "view", String(number), "--repo", repo, "--json", "number,title,url,state,headRefName,headRefOid,isCrossRepository"])) as RequestTarget;
-  }
   /** A PR's recent comments, reviews and inline review comments, in one GraphQL call. */
   async prComments(repo: string, number: number): Promise<PrComment[]> {
     const [owner, name] = repo.split("/");
@@ -313,28 +285,9 @@ export class GitHub {
       ]),
     ];
   }
-  /** Reacts to a comment found by `repoComments` (its id is `issues/comments:N` or `pulls/comments:N`). GitHub ignores a repeat. */
-  async reactToRepoComment(repo: string, id: string): Promise<void> {
-    const [endpoint, number] = id.split(":");
-    await this.gh(["api", "-X", "POST", `repos/${repo}/${endpoint}/${number}/reactions`, "-f", `content=${acknowledgedReaction}`]);
-  }
   /** Reacts to a comment or review found by `prComments`, by its GraphQL node id. */
   async reactToNode(nodeId: string): Promise<void> {
     await this.gh(["api", "graphql", "-f", "query=mutation($id: ID!, $content: ReactionContent!) { addReaction(input: {subjectId: $id, content: $content}) { reaction { content } } }", "-f", `id=${nodeId}`, "-f", `content=${acknowledgedReaction.toUpperCase()}`]);
-  }
-  /** The signed-in GitHub user. */
-  async viewer(): Promise<string> { return (await this.gh(["api", "user", "--jq", ".login"])).trim(); }
-  /** Every comment on a PR, oldest first. */
-  async listComments(repo: string, number: number): Promise<{ id: string; body: string; author: string }[]> {
-    const out = await this.gh(["api", "--paginate", `repos/${repo}/issues/${number}/comments`, "--jq", ".[] | {id: (.id | tostring), body: .body, author: .user.login} | tojson"]);
-    return out.split("\n").filter(Boolean).map(line => JSON.parse(line) as { id: string; body: string; author: string });
-  }
-  /** Posts a comment and returns its id. */
-  async createComment(repo: string, number: number, body: string): Promise<string> {
-    return (await this.gh(["api", "-X", "POST", `repos/${repo}/issues/${number}/comments`, "-f", `body=${body}`, "--jq", ".id"])).trim();
-  }
-  async editComment(repo: string, commentId: string, body: string): Promise<void> {
-    await this.gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`]);
   }
   /** Opens a PR (a draft one when asked) and returns its URL. `gh` errors (title rules, permissions) are thrown verbatim. */
   async create(repo: string, branch: string, title: string, body: string, draft = false): Promise<string> {

@@ -71,8 +71,6 @@ async function fixture(boards: object[] = [board]) {
       data = { ...cards[0], dependsOn: [other], blocked: true };
     }
     else if (/^\/api\/boards\/board-one\/cards\/card-one\/dependencies\/[\w-]+$/.test(path) && req.method === "DELETE") data = { ...cards[0], dependsOn: [], blocked: false };
-    else if (path === `/api/boards/${board.id}/sentinels`) data = [{ sentinel: { id: "sen-one", kind: "pr-health", enabled: true, intervalMs: 300000, nextRunAt: "2026-01-01T00:05:00Z" }, runs: [{ status: "succeeded", startedAt: "2026-01-01T00:00:00Z" }], jobs: [] }];
-    else if (path === "/api/sentinels/sen-one" && req.method === "PATCH") data = { id: "sen-one", kind: "pr-health", enabled: (input as { enabled: boolean }).enabled, nextRunAt: "2026-01-01T00:05:00Z" };
     else if (path === `/api/boards/${board.id}/conflicts`) data = [{ cardId: "card-one", details: "merge conflict" }];
     else if (path === `/api/boards/${board.id}/settings` && req.method === "PATCH") data = { ...board, ...(input as object) };
     else if (path === `/api/boards/${board.id}/auto-pickup/reset-limit` && req.method === "POST") data = { ...board, autoPickupStarts: 0, autoPickupNextAt: null };
@@ -93,15 +91,6 @@ async function fixture(boards: object[] = [board]) {
   const run = (...args: string[]) => runIn(undefined, ...args);
   return { requests, run, runIn, runAt, port, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
-
-test("lists sentinels and pauses and resumes one", async () => {
-  const f = await fixture();
-  try {
-    assert.match((await f.run("sentinels")).stdout, /sen-one\tpr-health\tenabled\tevery:300s.*succeeded/);
-    assert.match((await f.run("sentinel-pause", "sen-one")).stdout, /paused/);
-    assert.match((await f.run("sentinel-resume", "sen-one")).stdout, /enabled/);
-  } finally { await f.close(); }
-});
 
 test("ALICE_URL without a scheme falls back to HTTP when HTTPS does not answer", async () => {
   const f = await fixture();
@@ -569,7 +558,7 @@ test("doctor ends with INFO rows for the CLI's ALICE_* variables and the server'
     env: { ALICE_URL: "mochi", ALICE_DISCORD_WEBHOOK_URL: "https://discord.example/hook/secret", PATH: "/usr/bin" },
     origin: new URL("http://mochi:4317"), local: false,
     fetchBoards: async () => [],
-    fetchStatus: async () => ({ version: "1.2.3", hostname: "mochi", activeRuns: 2, draining: true, features: { sentinels: false, pullRequests: true } }),
+    fetchStatus: async () => ({ version: "1.2.3", hostname: "mochi", activeRuns: 2, draining: true }),
     fetchSettings: async () => ({ agentModels: { work: { model: "claude", thinking: "high" }, review: { model: "", thinking: "" } }, telemetryAvailable: true, telemetryEnabled: false, discordWebhookUrl: "https://discord.example/hook/secret" }),
     cliPath: "/opt/alice/scripts/alice.mjs",
   });
@@ -580,7 +569,6 @@ test("doctor ends with INFO rows for the CLI's ALICE_* variables and the server'
     "INFO\tenv ALICE_DISCORD_WEBHOOK_URL\tset (hidden)",
     "INFO\tenv ALICE_URL\tmochi",
     "INFO\tserver host\tmochi",
-    "INFO\tserver features\tsentinels off, pullRequests on",
     "INFO\tserver runs\t2 active, draining for an update",
     "INFO\tserver models\twork claude (high), review default",
     "INFO\tserver telemetry\toff",

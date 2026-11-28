@@ -120,12 +120,11 @@ function envInfo(env) {
   return names.map(name => ({ status: "info", name: `env ${name}`, detail: SECRET.test(name) ? "set (hidden)" : env[name] }));
 }
 
-/** What the server reports about itself: host, build features, run state and the settings that change runs. */
+/** What the server reports about itself: host, run state and the settings that change runs. */
 function serverInfo(status, settings) {
   const rows = [];
   if (status) {
     if (status.hostname) rows.push({ name: "server host", detail: status.hostname });
-    if (status.features) rows.push({ name: "server features", detail: Object.entries(status.features).map(([name, on]) => `${name} ${on ? "on" : "off"}`).join(", ") });
     rows.push({ name: "server runs", detail: `${status.activeRuns ?? 0} active${status.draining ? ", draining for an update" : ""}` });
   }
   if (settings) {

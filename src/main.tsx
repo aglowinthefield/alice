@@ -2181,14 +2181,21 @@ export function App() {
                 }),
               );
             }}
-            onCapture={(board, title) =>
-              action(() =>
-                api(`/boards/${board.id}/cards`, {
+            onCapture={async (board, title, triage) => {
+              let created = null as Card | null;
+              const ok = await action(async () => {
+                created = await api<Card>(`/boards/${board.id}/cards`, {
                   method: "POST",
-                  body: JSON.stringify({ title, body: "", origin: "ui" }),
-                }),
-              )
-            }
+                  body: JSON.stringify({
+                    title,
+                    body: "",
+                    origin: "ui",
+                    triage,
+                  }),
+                });
+              });
+              return ok ? created : null;
+            }}
           />
         </main>
       )}
@@ -4236,23 +4243,37 @@ export function App() {
           <CardForm
             key={editing?.id ?? "new"}
             initial={editing ?? undefined}
-            onSubmit={({ files, ...value }) =>
+            autoPickup={!!currentBoard?.autoPickupEnabled}
+            onSubmit={({ files, triage, ...value }) =>
               action(async () => {
                 const owner = editing
                   ? boards.find((item) => item.repo === editing.repo)?.id
                   : boardId;
+                // The card exists first; its files stream up one by one after. Until they are all up it waits in
+                // Triage, so auto pickup cannot start it without them.
+                const holdForFiles = !triage && files.length > 0;
                 const saved = await api<Card>(
                   `/boards/${owner}/cards${editing ? `/${editing.id}` : ""}`,
                   {
                     method: editing ? "PATCH" : "POST",
                     body: JSON.stringify(
-                      editing ? value : { ...value, origin: "ui" },
+                      editing
+                        ? value
+                        : {
+                            ...value,
+                            origin: "ui",
+                            triage: triage || holdForFiles,
+                          },
                     ),
                   },
                 );
-                // The card exists first; its files stream up one by one after.
                 for (const file of files)
                   await uploadAttachment(owner!, saved.id, file);
+                if (holdForFiles)
+                  await api(`/boards/${owner}/cards/${saved.id}/status`, {
+                    method: "POST",
+                    body: JSON.stringify({ status: "ready" }),
+                  });
                 setCreating(false);
                 setEditing(null);
                 setSelected(saved.id);
@@ -4608,23 +4629,38 @@ function CardForm({
   onSubmit,
   busy,
   initial,
+  autoPickup,
 }: {
   onSubmit: (value: {
     title: string;
     body: string;
     priority: Priority;
     files: File[];
-  }) => void;
+    /** Start the new card in Triage instead of Ready. */
+    triage: boolean;
+  }) => Promise<unknown>;
   busy: boolean;
   initial?: Card;
+  autoPickup: boolean;
 }) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
   const [priority, setPriority] = useState<Priority>(initial?.priority ?? 0);
   const [files, setFiles] = useState<File[]>([]);
+  const [triage, setTriage] = useState(false);
+  // Cmd/Ctrl+Enter submits even while the button is disabled, so a ref refuses a second submit until the first settles:
+  // a duplicate create is a duplicate card, and with pickup on a duplicate paid run.
+  const pending = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
   function submit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ title, body, priority, files });
+    if (pending.current) return;
+    pending.current = true;
+    setSubmitting(true);
+    void onSubmit({ title, body, priority, files, triage }).finally(() => {
+      pending.current = false;
+      setSubmitting(false);
+    });
   }
   const input =
     "w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary";
@@ -4707,13 +4743,28 @@ function CardForm({
           </div>
         </div>
       )}
-      <p className="text-xs leading-5 text-muted-foreground">
-        This card uses the selected repository. New cards start in Triage. Move
-        one to Ready before starting a run. Creating or moving a card does not
-        start an agent.
-      </p>
+      {!initial && (
+        <>
+          <label className="flex items-center gap-2 text-xs font-medium">
+            <input
+              type="checkbox"
+              className="accent-primary"
+              checked={triage}
+              onChange={(e) => setTriage(e.target.checked)}
+            />
+            Start in Triage
+          </label>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {triage
+              ? "The card waits in Triage until you move it to Ready."
+              : autoPickup
+                ? "The card starts in Ready, and auto pickup may start a run on it soon."
+                : "The card starts in Ready. Creating a card does not start an agent."}
+          </p>
+        </>
+      )}
       <div className="flex justify-end">
-        <Button disabled={busy} type="submit">
+        <Button disabled={busy || submitting} type="submit">
           {initial ? "Save changes" : "Create card"} <Plus size={15} />
         </Button>
       </div>

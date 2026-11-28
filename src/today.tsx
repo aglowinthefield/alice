@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { CalendarClock, Check, RotateCcw, X, Eye } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { date } from "./api.js";
@@ -51,7 +51,12 @@ type Props = {
   /** Starts a run that first brings the card's work up to date with main. */
   onRunAgain: (card: Card) => void;
   onClose: (card: Card) => void;
-  onCapture: (board: Board, title: string) => Promise<boolean>;
+  /** Captured cards start in Ready unless `triage` holds them for review. Resolves to the new card, or null on failure. */
+  onCapture: (
+    board: Board,
+    title: string,
+    triage: boolean,
+  ) => Promise<Card | null>;
 };
 
 export function Today({
@@ -298,20 +303,36 @@ function Capture({
   const [boardId, setBoardId] = useState(
     () => localStorage.getItem(captureKey) ?? "",
   );
+  const [triage, setTriage] = useState(false);
   const [added, setAdded] = useState("");
+  // A second Enter before the first reply would create a second card, and with pickup on a second paid run. The ref
+  // blocks it at once; the state disables Add.
+  const pending = useRef(false);
+  const [adding, setAdding] = useState(false);
   const board =
     boards.find((item) => item.id === boardId) ?? boards[0] ?? undefined;
   if (!board) return null;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!title.trim()) return;
-    if (!(await onCapture(board, title.trim()))) return;
+    if (!title.trim() || pending.current) return;
+    pending.current = true;
+    setAdding(true);
+    const card = await onCapture(board, title.trim(), triage).finally(() => {
+      pending.current = false;
+      setAdding(false);
+    });
+    if (!card) return;
     setTitle("");
-    setAdded(`Added to ${repoName(board.repo)} Triage`);
+    setTriage(false);
+    // The server decides the lane, so the confirmation names the one it reported.
+    setAdded(
+      `Added to ${repoName(board.repo)} ${card.status === "triage" ? "Triage" : "Ready"}`,
+    );
   };
   return (
     <form onSubmit={submit} className="mt-8">
-      <div className="flex gap-2">
+      {/* The title keeps at least 16rem; on a narrow screen the other controls wrap below it instead of squeezing it. */}
+      <div className="flex flex-wrap items-center gap-2">
         <input
           aria-label="Capture a card"
           placeholder="What needs doing?"
@@ -320,7 +341,7 @@ function Capture({
             setTitle(event.target.value);
             setAdded("");
           }}
-          className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="h-9 min-w-0 flex-[1_1_16rem] rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
         <select
           aria-label="Repository"
@@ -329,7 +350,7 @@ function Capture({
             setBoardId(event.target.value);
             localStorage.setItem(captureKey, event.target.value);
           }}
-          className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+          className="h-9 max-w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm text-foreground"
         >
           {boards.map((item) => (
             <option key={item.id} value={item.id}>
@@ -337,7 +358,19 @@ function Capture({
             </option>
           ))}
         </select>
-        <Button type="submit" disabled={!title.trim()}>
+        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            className="accent-primary"
+            checked={triage}
+            onChange={(event) => {
+              setTriage(event.target.checked);
+              setAdded("");
+            }}
+          />
+          Triage
+        </label>
+        <Button type="submit" disabled={!title.trim() || adding}>
           Add
         </Button>
       </div>

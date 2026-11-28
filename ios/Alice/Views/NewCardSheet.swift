@@ -9,6 +9,7 @@ struct NewCardSheet: View {
     @State private var text = ""
     @State private var priority = 0
     @State private var saving = false
+    @State private var triage = false
 
     var body: some View {
         NavigationStack {
@@ -20,6 +21,11 @@ struct NewCardSheet: View {
                     }
                     Stepper(value: $priority, in: -100...100, step: 10) {
                         HStack { Text("Priority").font(.ui(14)); Text("\(priority)").font(.mono(14)).foregroundStyle(T.priority(priority)) }
+                    }
+                    if editing == nil {
+                        Toggle("Start in Triage", isOn: $triage).font(.ui(14))
+                        Text(triage ? "The card waits in Triage until you move it to Ready." : "The card starts in Ready. With auto pickup on, a run may start on it soon.")
+                            .font(.ui(13)).foregroundStyle(T.mutedFg)
                     }
                 }
                 .padding(16)
@@ -48,13 +54,13 @@ struct NewCardSheet: View {
     }
 
     private func save() async {
-        guard let api = store.api, let boardId = board?.id ?? store.boards.first?.id else { return }
+        guard !saving, let api = store.api, let boardId = board?.id ?? store.boards.first?.id else { return }
         saving = true
-        struct Create: Encodable { let title: String; let body: String; let priority: Int; let origin = "ui" }
+        struct Create: Encodable { let title: String; let body: String; let priority: Int; let triage: Bool; let origin = "ui" }
         struct Edit: Encodable { let title: String; let body: String; let priority: Int }
         let ok = await store.act {
             if let c = editing { let _: Card = try await api.patch("/boards/\(boardId)/cards/\(c.id)", Edit(title: title, body: text, priority: priority)) }
-            else { let _: Card = try await api.post("/boards/\(boardId)/cards", Create(title: title, body: text, priority: priority)) }
+            else { let _: Card = try await api.post("/boards/\(boardId)/cards", Create(title: title, body: text, priority: priority, triage: triage)) }
         }
         saving = false
         if ok { dismiss() }

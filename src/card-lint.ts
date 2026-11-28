@@ -313,7 +313,7 @@ export function estimateWidth(card: { title: string; body: string }): Width {
 
 /**
  * The card rewritten to ask for a plan instead of code, keeping its words as the brief. A run on it ends with the
- * alice-plan block Alice turns into Triage cards, the same flow as any card that asks for a breakdown.
+ * alice-plan block Alice turns into cards, the same flow as any card that asks for a breakdown.
  */
 export function planningCard(card: { title: string; body: string }): {
   title: string;

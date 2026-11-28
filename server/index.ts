@@ -693,7 +693,8 @@ const server = createServer(async (req, res) => {
           // A repeated key returns the board's existing card unchanged, whatever its status.
           const existing = key === null ? undefined : board.getCardByIdempotencyKey(repoBoard.repo, key);
           if (existing) { send(res, 200, existing); return; }
-          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api", source })); return;
+          if (input.triage !== undefined && typeof input.triage !== "boolean") throw new Error("triage must be true or false");
+          send(res, 201, board.createCard({ ...card, repo: repoBoard.repo, idempotencyKey: key, dependsOn: dependencyIds(input.dependsOn), origin: input.origin === "ui" ? "ui" : "api", source, triage: input.triage })); return;
         }
       } else {
         const item = board.getCard(id);

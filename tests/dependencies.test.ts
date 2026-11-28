@@ -55,6 +55,34 @@ test("auto-pickup skips a blocked card without spending a slot, and picks it up 
   } finally { await item.close(); }
 });
 
+test("plan tasks start in Ready, run in dependency order, and auto pickup keeps to its concurrency limit", async () => {
+  const item = fixture();
+  try {
+    const planning = item.card("Plan it");
+    const run = item.board.claim(planning.id);
+    const plan = [{ id: "a", title: "First", body: "Do a" }, { id: "b", title: "Second", body: "Do b", dependsOn: ["a"] }, { id: "c", title: "Third", body: "Do c" }];
+    item.board.recordReport(run.id, `Plan\n\n\`\`\`alice-plan\n${JSON.stringify(plan)}\n\`\`\``);
+    item.board.finish(run.id, "review");
+    const made = item.board.createPlanCards(planning.id).createdCardIds!.map(id => item.board.getCard(id)!);
+    const [first, second, third] = ["First", "Second", "Third"].map(title => made.find(card => card.title === title)!);
+    assert.deepEqual([first, second, third].map(card => card.status), ["ready", "ready", "ready"]);
+    item.board.setAutoPickup(item.repoBoard.id, true, 1, 10);
+    const running = () => item.board.listCards(item.repo).filter(card => card.status === "running").map(card => card.title);
+    item.pickup.tick();
+    item.pickup.tick();
+    assert.deepEqual(running(), ["First"], "one slot, so one run; the blocked task takes none");
+    item.release();
+    await waitFor(() => item.board.getCard(first.id)?.status === "review");
+    item.pickup.tick();
+    assert.deepEqual(running(), ["Third"], "Second still waits until First is Done");
+    await waitFor(() => item.board.getCard(third.id)?.status === "review");
+    item.board.closeReview(first.id);
+    item.pickup.tick();
+    assert.deepEqual(running(), ["Second"]);
+    await waitFor(() => item.board.getCard(second.id)?.status === "review");
+  } finally { await item.close(); }
+});
+
 test("manual start of a blocked card is refused naming the unfinished cards; archived parents count as finished", async () => {
   const item = fixture();
   try {

@@ -21,7 +21,7 @@ function options(argv) {
   const values = new Set(["board", "title", "body", "key", "priority", "source", "concurrency", "limit", "budget", "integration", "host", "reason", "note"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch" || arg === "--print") result[arg.slice(2)] = true;
+    if (arg === "--json" || arg === "--yes" || arg === "--all" || arg === "--watch" || arg === "--print" || arg === "--triage") result[arg.slice(2)] = true;
     else if (arg === "--help" || arg === "-h") result.help = true;
     else if (arg === "--version" || arg === "-v") result.version = true;
     else if (arg.startsWith("--") && lists.has(arg.slice(2))) {
@@ -213,7 +213,7 @@ async function main() {
   if (command === "board" || command === "board-add" || command === "open" ? false : command === "pr" ? !args.length : command === "pickup" ? args.length > 1 || (args.length === 1 && !["on", "off", "reset"].includes(args[0])) : command === "limits" ? args.length > 1 || (args.length === 1 && !["on", "off"].includes(args[0])) : command === "agents" ? args.length > 1 || (args.length === 1 && !/^(auto|\d{1,2})$/.test(args[0])) : variadic.includes(command) ? !args.length && command !== "add" : args.length !== expected[command]) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "add" && opts.title !== undefined) throw new Error("add takes its title as words, not --title");
   if (!["create", "edit", "add"].includes(command) && (opts.title !== undefined || opts.body !== undefined)) throw new Error("--title and --body are only valid with create, add or edit");
-  if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined || opts.source !== undefined)) throw new Error("--key, --priority and --source are only valid with create or add");
+  if (command !== "create" && command !== "add" && (opts.key !== undefined || opts.priority !== undefined || opts.source !== undefined || opts.triage)) throw new Error("--key, --priority, --source and --triage are only valid with create or add");
   if (opts.priority !== undefined && priorityValue(opts.priority) === null) throw new Error("Priority must be a whole number from -100 to 100, or low, normal, high, or urgent");
   if (command !== "close" && (opts.reason !== undefined || opts.note !== undefined)) throw new Error("--reason and --note are only valid with close");
   if (opts.note !== undefined && opts.reason === undefined) throw new Error("--note needs --reason; use --reason other for free text");
@@ -330,6 +330,7 @@ async function main() {
     if (opts.priority !== undefined) input.priority = Object.hasOwn(priorities, opts.priority) ? opts.priority : Number(opts.priority);
     if (opts.key !== undefined) input.idempotencyKey = opts.key;
     if (opts.after.length) input.dependsOn = opts.after;
+    if (opts.triage) input.triage = true;
     const card = await request(origin, `${path}/cards`, "POST", input);
     print(card, opts.json, [`${card.id}\t${card.status}\tpriority:${priorityName(card.priority)}\t${card.title}${card.dependsOn?.length ? `\tafter:${card.dependsOn.join(",")}` : ""}`]);
   } else if (command === "depend" || command === "undepend") {

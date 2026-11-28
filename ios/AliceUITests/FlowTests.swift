@@ -19,7 +19,7 @@ final class FlowTests: XCTestCase {
         app = XCUIApplication()
         let board = Self.setting("BOARD") ?? ""
         let url = Self.setting("URL") ?? "http://mochi:4317"
-        app.launchArguments = ["-serverURL", url, "-startRoute", "board:\(board)"]
+        app.launchArguments = ["-serverURL", url, "-startRoute", name.contains("Capture") ? "today" : "board:\(board)"]
         if name.contains("Review"), let card = Self.setting("CARD"), !card.isEmpty { app.launchArguments += ["-startCard", card] }
         app.launch()
     }
@@ -47,14 +47,88 @@ final class FlowTests: XCTestCase {
         tile.tap()
 
         XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
-        let ready = app.buttons["Move to Ready"]
-        XCTAssertTrue(ready.waitForExistence(timeout: 5))
+        // A card you create starts in Ready.
+        let triage = app.buttons["Move to Triage"]
+        XCTAssertTrue(triage.waitForExistence(timeout: 5))
         shot("3-card-detail")
-        ready.tap()
-        XCTAssertTrue(app.staticTexts["Ready"].waitForExistence(timeout: 10), "status becomes Ready")
-        shot("4-card-ready")
-        app.buttons["Move to Triage"].tap()
-        XCTAssertTrue(app.staticTexts["Triage"].waitForExistence(timeout: 10))
+        triage.tap()
+        XCTAssertTrue(app.staticTexts["Triage"].waitForExistence(timeout: 10), "status becomes Triage")
+        shot("4-card-triage")
+        app.buttons["Move to Ready"].tap()
+        XCTAssertTrue(app.staticTexts["Ready"].waitForExistence(timeout: 10))
+    }
+
+    func testCreateCardInTriage() {
+        let title = "UI test triage card \(Int(Date().timeIntervalSince1970) % 100000)"
+        let new = app.buttons["New card"]
+        XCTAssertTrue(new.waitForExistence(timeout: 15))
+        new.tap()
+        let titleField = app.textFields["What needs doing?"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText(title)
+        let triage = app.switches["Start in Triage"]
+        XCTAssertTrue(triage.waitForExistence(timeout: 5))
+        triage.switches.firstMatch.tap()
+        XCTAssertEqual(triage.value as? String, "1", "Start in Triage is on")
+        shot("triage-new-card-sheet")
+        app.buttons["Create"].tap()
+
+        let tile = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+        XCTAssertTrue(tile.waitForExistence(timeout: 10), "created card appears on the board")
+        tile.tap()
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
+        // A Triage card offers Move to Ready; a Ready one would offer Move to Triage.
+        XCTAssertTrue(app.buttons["Move to Ready"].waitForExistence(timeout: 5), "the card starts in Triage")
+        XCTAssertFalse(app.buttons["Move to Triage"].exists)
+        shot("triage-card-detail")
+    }
+
+    /// Server JSON at `/api\(path)`, read straight from the server under test.
+    func serverJSON(_ path: String) async throws -> Any {
+        let base = Self.setting("URL") ?? "http://mochi:4317"
+        let (data, _) = try await URLSession.shared.data(from: XCTUnwrap(URL(string: "\(base)/api\(path)")))
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
+    /// Captures on the ALICE_BOARD board from Today and checks with the server that it landed there in Triage.
+    @MainActor func testCaptureInTriage() async throws {
+        let boardId = try XCTUnwrap(Self.setting("BOARD").flatMap { $0.isEmpty ? nil : $0 }, "set ALICE_BOARD to a scratch board")
+        let boardList = try await serverJSON("/boards")
+        let boards = try XCTUnwrap(boardList as? [[String: Any]])
+        let repo = try XCTUnwrap(boards.first { $0["id"] as? String == boardId }?["repo"] as? String, "ALICE_BOARD is on the server")
+        let name = URL(fileURLWithPath: repo).lastPathComponent
+        XCTAssertEqual(boards.filter { URL(fileURLWithPath: $0["repo"] as? String ?? "").lastPathComponent == name }.count, 1, "the capture menu picks boards by name, so it must be unique")
+
+        let menu = app.buttons["capture-board"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 15))
+        if !menu.label.contains(name) {
+            menu.tap()
+            let item = app.buttons[name].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5), "\(name) is in the capture menu")
+            item.tap()
+        }
+        let chosen = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", name), object: menu)
+        XCTAssertEqual(XCTWaiter.wait(for: [chosen], timeout: 5), .completed, "capture targets \(name)")
+
+        let title = "UI test capture \(Int(Date().timeIntervalSince1970) % 100000)"
+        let field = app.textFields["What needs doing?"]
+        field.tap()
+        field.typeText(title)
+        let triage = app.descendants(matching: .any)["capture-triage"].firstMatch
+        XCTAssertTrue(triage.waitForExistence(timeout: 5))
+        triage.tap()
+        let on = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == 'On'"), object: triage)
+        XCTAssertEqual(XCTWaiter.wait(for: [on], timeout: 5), .completed, "Triage is on")
+        shot("capture-triage")
+        app.buttons["Add"].tap()
+        // The toast names the lane the server put the card in.
+        let toast = app.staticTexts.containing(NSPredicate(format: "label == %@", "Added to \(name) Triage")).firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 10), "the card was added to Triage")
+        shot("capture-triage-added")
+        let cardList = try await serverJSON("/boards/\(boardId)/cards")
+        let cards = try XCTUnwrap(cardList as? [[String: Any]])
+        XCTAssertEqual(cards.first { $0["title"] as? String == title }?["status"] as? String, "triage", "the card is in Triage on ALICE_BOARD")
     }
 
     func testChatTab() {

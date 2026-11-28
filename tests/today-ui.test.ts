@@ -27,19 +27,24 @@ const card = (id: string, repo: string, status: string, updatedAt: string, extra
 
 // Cards may carry more fields than `card` sets, such as reviewSince or reviewWait.
 type TestCard = ReturnType<typeof card> & Record<string, unknown>;
-async function open(options: { cards: TestCard[]; settings?: Record<string, unknown> }) {
-  const page = await browser.newPage();
+/** `holdCreate` keeps every card-create request unanswered until it resolves. */
+async function open(options: { cards: TestCard[]; settings?: Record<string, unknown>; holdCreate?: Promise<void>; boards?: typeof boards; viewport?: { width: number; height: number } }) {
+  const page = await browser.newPage(options.viewport ? { viewport: options.viewport } : {});
   const requests: { method: string; path: string; input: unknown }[] = [];
-  const state = { cards: options.cards };
+  // `createdStatus` overrides the lane a create answers with; otherwise it follows the server: Ready unless `triage`.
+  const state: { cards: TestCard[]; createdStatus?: string } = { cards: options.cards };
   await page.addInitScript(visit => { if (!sessionStorage.getItem("seeded")) { localStorage.setItem("alice-last-visit", visit); sessionStorage.setItem("seeded", "1"); } }, lastVisit);
   await page.route("**/api/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     requests.push({ method: request.method(), path, input: request.postDataJSON() });
-    if (path === "/api/boards") return route.fulfill({ json: boards });
+    if (path === "/api/boards") return route.fulfill({ json: options.boards ?? boards });
     if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", ...options.settings } });
     if (path === "/api/cards") return route.fulfill({ json: state.cards });
-    if (/^\/api\/boards\/board-[ab]\/cards$/.test(path) && request.method() === "POST")
-      return route.fulfill({ status: 201, json: { ...card("new", "/code/beta", "triage", "2026-03-02T00:00:00.000Z"), ...request.postDataJSON() } });
+    if (/^\/api\/boards\/board-[ab]\/cards$/.test(path) && request.method() === "POST") {
+      await options.holdCreate;
+      const input = request.postDataJSON() as { title: string; triage?: boolean };
+      return route.fulfill({ status: 201, json: { ...card("new", "/code/beta", state.createdStatus ?? (input.triage ? "triage" : "ready"), "2026-03-02T00:00:00.000Z"), title: input.title } });
+    }
     if (/^\/api\/boards\/board-[ab]\/cards$/.test(path)) return route.fulfill({ json: state.cards.filter(item => path.includes("board-a") === (item.repo === "/code/alpha")) });
     if (path.endsWith("/approval")) return route.fulfill({ json: { pending: false } });
     if (path.endsWith("/review")) return route.fulfill({ json: { cardId: "x", fingerprint: "f".repeat(64), files: [] } });
@@ -81,20 +86,66 @@ test("Today opens first and gathers what needs you across every repository", asy
   } finally { await page.close(); }
 });
 
-test("quick capture adds a Triage card to the chosen repository and remembers it", async () => {
-  const { page, requests } = await open({ cards: [] });
+test("quick capture adds a Ready card to the chosen repository, or a Triage card when ticked, and remembers the repository", async () => {
+  const { page, requests, state } = await open({ cards: [] });
   try {
     await page.getByText("All caught up").waitFor();
     await page.getByRole("combobox", { name: "Repository" }).selectOption({ label: "beta" });
     const input = page.getByRole("textbox", { name: "Capture a card" });
     await input.fill("Water the plants");
     await input.press("Enter");
-    await page.getByText("Added to beta Triage").waitFor();
+    await page.getByText("Added to beta Ready").waitFor();
     assert.equal(await input.inputValue(), "");
-    assert.deepEqual(requests.filter(item => item.method === "POST").map(item => [item.path, item.input]),
-      [["/api/boards/board-b/cards", { title: "Water the plants", body: "", origin: "ui" }]]);
+    const triage = page.getByRole("checkbox", { name: "Triage" });
+    await triage.check();
+    await input.fill("Maybe repot the fern");
+    await input.press("Enter");
+    await page.getByText("Added to beta Triage").waitFor();
+    assert.equal(await triage.isChecked(), false, "the next capture goes to Ready again");
+    // The confirmation names the lane the server answered with, not the checkbox.
+    state.createdStatus = "triage";
+    await input.fill("Server decides");
+    await input.press("Enter");
+    await page.getByText("Added to beta Triage").waitFor();
+    assert.deepEqual(requests.filter(item => item.method === "POST").map(item => [item.path, item.input]), [
+      ["/api/boards/board-b/cards", { title: "Water the plants", body: "", origin: "ui", triage: false }],
+      ["/api/boards/board-b/cards", { title: "Maybe repot the fern", body: "", origin: "ui", triage: true }],
+      ["/api/boards/board-b/cards", { title: "Server decides", body: "", origin: "ui", triage: false }],
+    ]);
     await page.reload();
     assert.equal(await page.getByRole("combobox", { name: "Repository" }).inputValue(), "board-b");
+  } finally { await page.close(); }
+});
+
+test("quick capture wraps on a narrow screen instead of squeezing the title or clipping Add", async () => {
+  const { page } = await open({ cards: [], viewport: { width: 390, height: 800 }, boards: [{ ...boards[0], repo: "/code/unconscious-development" }, boards[1]] });
+  try {
+    await page.getByText("All caught up").waitFor();
+    const field = (await page.getByRole("textbox", { name: "Capture a card" }).boundingBox())!;
+    const add = (await page.getByRole("button", { name: "Add", exact: true }).boundingBox())!;
+    const select = (await page.getByRole("combobox", { name: "Repository" }).boundingBox())!;
+    assert.ok(field.width >= 250, `the title field is ${field.width}px wide`);
+    assert.ok(add.x >= 0 && add.x + add.width <= 390, `Add spans ${add.x}–${add.x + add.width}px of a 390px screen`);
+    assert.ok(select.x + select.width <= 390, "the repository picker fits");
+  } finally { await page.close(); }
+});
+
+test("quick capture creates one card however often it is submitted while the first create is pending", async () => {
+  let release!: () => void;
+  const { page, requests } = await open({ cards: [], holdCreate: new Promise<void>(resolve => { release = resolve; }) });
+  const posts = () => Promise.resolve(requests.filter(item => item.method === "POST").length);
+  try {
+    await page.getByText("All caught up").waitFor();
+    const input = page.getByRole("textbox", { name: "Capture a card" });
+    await input.fill("Only once");
+    // Two submits in one task land before React re-renders, so only the guard can stop the second.
+    await input.evaluate(element => { const form = element.closest("form")!; form.requestSubmit(); form.requestSubmit(); });
+    await eventually(posts, 1);
+    assert.equal(await page.getByRole("button", { name: "Add", exact: true }).isDisabled(), true, "Add is disabled while the create is pending");
+    await input.press("Enter");
+    release();
+    await page.getByText(/Added to \w+ Ready/).waitFor();
+    assert.equal(await posts(), 1);
   } finally { await page.close(); }
 });
 

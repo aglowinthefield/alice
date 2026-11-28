@@ -62,6 +62,13 @@ export type CiFeedbackSource = "ci" | "push" | "commit" | "conflict" | "comment"
 /** Sources only Alice itself sets; API callers may not claim them. */
 const serverOnlySources = new Set(["manual", "plan", "sentinel", "pr-comment"]);
 /** A source from an API caller: a lower-case name of up to 40 letters, digits, dots, dashes or underscores. */
+/**
+ * Sources whose cards start in Triage: a follow-up is an agent's suggestion nobody has decided on, `api` is a caller that
+ * did not say who it is, and PR comments and sentinels came from outside. Cards from the board (`ui`), the CLI, an
+ * accepted plan or a named agent such as Hermes were already decided, so they start in Ready; auto pickup's limits still
+ * decide when they run.
+ */
+const undecidedSources = new Set(["api", "follow-up", "pr-comment", "sentinel"]);
 export function parseCardSource(value: unknown): CardSource | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || !/^[a-z0-9][a-z0-9._-]{0,39}$/.test(value)) throw new Error("Source must be a lower-case name of up to 40 letters, digits, dots, dashes or underscores, such as hermes");
@@ -1254,33 +1261,33 @@ export class Board {
   /** `dependsOn` lists cards on the same board that must be Done before this one starts. */
   createCard(input: { title: string; body: string; repo: string; idempotencyKey?: string | null; priority?: CardPriority; dependsOn?: string[]; origin?: CardOrigin;
     /** Defaults to what the key's prefix implies (see `sourceFromKey`), then `ui` or `api` by origin. */ source?: CardSource;
-    /** Makes the card Ready in the same transaction, with this reason in its history. */ ready?: string;
+    /** Starts the card in Triage whatever its source, for a card its author is unsure of. */ triage?: boolean;
     /** Runs inside the same transaction, after the card exists. If it throws, no card is made. */ inTransaction?: (card: Card) => void }): Card {
     const key = input.idempotencyKey ?? null;
     if (key !== null && (!key.trim() || key.length > 200)) throw new Error("Idempotency key must be 1 to 200 characters");
     const existing = key === null ? undefined : this.getCardByIdempotencyKey(input.repo, key);
     if (existing) return existing;
-    const id = randomUUID(), time = now();
+    const id = randomUUID(), time = now(), source = input.source ?? sourceFromKey(key) ?? (input.origin === "ui" ? "ui" : "api");
+    const ready = !input.triage && !undecidedSources.has(source);
     this.addRepo(input.repo);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen) VALUES (?, ?, ?, ?, 'triage', ?, ?, ?, ?, ?, ?)")
-        .run(id, input.title, input.body, input.repo, input.source ?? sourceFromKey(key) ?? (input.origin === "ui" ? "ui" : "api"), key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1);
+      this.db.prepare("INSERT INTO cards(id, title, body, repo, status, source, idempotencyKey, createdAt, updatedAt, priority, unseen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, input.title, input.body, input.repo, ready ? "ready" : "triage", source, key, time, time, parsePriority(input.priority ?? 0), input.origin === "ui" ? 0 : 1);
       for (const parent of new Set(input.dependsOn ?? [])) {
         this.checkDependency(this.getCard(id)!, parent);
         this.db.prepare("INSERT INTO card_dependencies(cardId, dependsOn) VALUES (?, ?)").run(id, parent);
       }
-      if (input.ready !== undefined) {
-        this.db.prepare("UPDATE cards SET status='ready', updatedAt=? WHERE id=?").run(now(), id);
-        this.explain(id, input.ready);
-      }
+      // Created in its lane, so there is no status change to record; a note says why it skipped Triage.
+      if (ready) this.noteCard(id, `Created in Ready: cards from ${source} skip Triage`);
       input.inTransaction?.(this.getCard(id)!);
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     return this.getCard(id)!;
   }
   /**
-   * Creates Triage cards from the plan in the card's latest run report and records their ids on the card.
+   * Creates Ready cards from the plan in the card's latest run report and records their ids on the card. Each waits on
+   * the subtasks it names, so pickup takes them in dependency order.
    * Each subtask has a stable idempotency key, so a retry after a partial failure reuses the cards already made.
    * A card whose plan was used once refuses a second set.
    */

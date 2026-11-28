@@ -44,7 +44,7 @@ async function fixture(boards: object[] = [board]) {
       data = ids.map(id => ({ ...cards.find(item => item.id === id), status: archive ? "archived" : "done" }));
     }
     else if (path === `/api/boards/${board.id}/cards/purge-attachments` && req.method === "POST") data = (input as { cardIds: string[] }).cardIds.map(cardId => ({ cardId, files: 2, bytes: 10 }));
-    else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: "triage" };
+    else if (path === `/api/boards/${board.id}/cards` && req.method === "POST") data = { id: "new-card", ...(input as object), status: (input as { triage?: boolean }).triage ? "triage" : "ready" };
     else if (/^\/api\/boards\/board-one\/cards\/card-(one|flagged)\/status$/.test(path) && req.method === "POST") data = { id: path.split("/")[5], status: (input as { status: string }).status };
     else if (path === `/api/boards/${board.id}/cards/card-one/close` && req.method === "POST") data = { ...cards[0], status: "done" };
     // card-one stands in for an older server without the check, which answers 404.
@@ -143,12 +143,15 @@ test("card creation and status changes go through the API; Ready needs consent w
     assert.match((await f.run("cards", "--priority", "high")).stderr, /only valid with create/);
     const keyed = await f.run("create", "--title", "Scripted", "--key", "nightly-1");
     assert.equal(keyed.code, 0, keyed.stderr);
-    assert.equal(keyed.stdout, "new-card\ttriage\tpriority:normal\tScripted\n");
+    assert.equal(keyed.stdout, "new-card\tready\tpriority:normal\tScripted\n");
     assert.match((await f.run("cards", "--key", "nightly-1")).stderr, /only valid with create/);
     assert.match((await f.run("create", "--title", "Long", "--key", "k".repeat(201))).stderr, /1 to 200/);
     assert.equal((await f.run("create", "--title", "From Hermes", "--source", "hermes")).code, 0);
+    const unsure = await f.run("create", "--title", "Unsure", "--triage");
+    assert.equal(unsure.stdout, "new-card\ttriage\tpriority:normal\tUnsure\n");
     assert.match((await f.run("cards", "--source", "hermes")).stderr, /only valid with create or add/);
-    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely", source: "cli" }, { status: "triage" }, { title: "Hotfix", body: "", source: "cli", priority: "urgent" }, { title: "Scripted", body: "", source: "cli", idempotencyKey: "nightly-1" }, { title: "From Hermes", body: "", source: "hermes" }]);
+    assert.match((await f.run("cards", "--triage")).stderr, /only valid with create or add/);
+    assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => r.input), [{ status: "ready" }, { title: "New task", body: "Do it safely", source: "cli" }, { status: "triage" }, { title: "Hotfix", body: "", source: "cli", priority: "urgent" }, { title: "Scripted", body: "", source: "cli", idempotencyKey: "nightly-1" }, { title: "From Hermes", body: "", source: "hermes" }, { title: "Unsure", body: "", source: "cli", triage: true }]);
   } finally { await f.close(); }
 });
 
@@ -191,7 +194,7 @@ test("ready lists a Triage card's flags and moves it only with --yes", async () 
   } finally { await f.close(); }
 });
 
-test("add captures a Triage card on the board for the current directory", async () => {
+test("add captures a card on the board for the current directory", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "alice-add-")));
   const alpha = join(root, "alpha"), beta = join(root, "beta"), elsewhere = join(root, "elsewhere");
   for (const dir of [join(alpha, "src"), beta, elsewhere]) mkdirSync(dir, { recursive: true });
@@ -199,18 +202,19 @@ test("add captures a Triage card on the board for the current directory", async 
   try {
     const added = await f.runIn(join(alpha, "src"), "add", "Fix", "the flaky test", "--priority", "high");
     assert.equal(added.code, 0, added.stderr);
-    assert.equal(added.stdout, "new-card\ttriage\tpriority:high\tFix the flaky test\n");
+    assert.equal(added.stdout, "new-card\tready\tpriority:high\tFix the flaky test\n");
     await f.runIn(beta, "add", "Beta idea");
     const ambiguous = await f.runIn(elsewhere, "add", "Lost idea");
     assert.notEqual(ambiguous.code, 0);
     assert.match(ambiguous.stderr, /More than one board/);
     assert.match((await f.runIn(alpha, "add")).stderr, /add requires a title/);
-    const chosen = await f.runIn(elsewhere, "add", "Chosen", "--board", alpha);
+    const chosen = await f.runIn(elsewhere, "add", "Chosen", "--board", alpha, "--triage");
     assert.equal(chosen.code, 0, chosen.stderr);
+    assert.equal(chosen.stdout, "new-card\ttriage\tpriority:normal\tChosen\n");
     assert.deepEqual(f.requests.filter(r => r.method === "POST").map(r => [r.path, r.input]), [
       ["/api/boards/board-one/cards", { title: "Fix the flaky test", body: "", source: "cli", priority: "high" }],
       ["/api/boards/board-two/cards", { title: "Beta idea", body: "", source: "cli" }],
-      ["/api/boards/board-one/cards", { title: "Chosen", body: "", source: "cli" }],
+      ["/api/boards/board-one/cards", { title: "Chosen", body: "", source: "cli", triage: true }],
     ]);
   } finally { await f.close(); rmSync(root, { recursive: true, force: true }); }
 });

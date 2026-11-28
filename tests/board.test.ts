@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, reportFromOutput } from "../server/board.js";
+import { cardHistory } from "../server/card-history.js";
 import { emptyAgentModels, validateAgentModels } from "../shared/agent-models.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -603,6 +604,40 @@ test("a card whose latest report ends with a alice-plan block is plan-only", () 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("new cards start in Ready unless they are follow-ups or ask for Triage", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-lane-"));
+  try {
+    const board = new Board(join(dir, "board.sqlite"));
+    const cases: [Partial<Parameters<Board["createCard"]>[0]>, string, string][] = [
+      [{ origin: "ui" }, "ui", "ready"],
+      [{}, "api", "triage"],
+      [{ source: "cli" }, "cli", "ready"],
+      [{ source: "hermes" }, "hermes", "ready"],
+      [{ idempotencyKey: "hermes:42" }, "hermes", "ready"],
+      [{ source: "follow-up" }, "follow-up", "triage"],
+      [{ idempotencyKey: "follow-up:run-1:0" }, "follow-up", "triage"],
+      [{ origin: "ui", triage: true }, "ui", "triage"],
+      [{ source: "cli", triage: true }, "cli", "triage"],
+      [{ source: "hermes", triage: true }, "hermes", "triage"],
+    ];
+    for (const [input, source, status] of cases) {
+      const card = board.createCard({ title: "T", body: "", repo: dir, ...input });
+      assert.deepEqual([card.source, card.status], [source, status], JSON.stringify(input));
+    }
+    // A card created in Ready never moved there: its history has a note and no status change. A real move still records one.
+    const events = (id: string) => board.listCardEvents(id).map(event => `${event.fromStatus}>${event.toStatus}: ${event.reason}`);
+    const ready = board.createCard({ title: "From Hermes", body: "", repo: dir, source: "hermes" });
+    assert.deepEqual(events(ready.id), ["null>null: Created in Ready: cards from hermes skip Triage"]);
+    const moved = board.createCard({ title: "Unsure", body: "", repo: dir, triage: true });
+    assert.deepEqual(events(moved.id), []);
+    board.setStatus(moved.id, "ready");
+    assert.deepEqual(events(moved.id), ["triage>ready: Moved to Ready"]);
+    assert.deepEqual(cardHistory(board.getCard(ready.id)!, board.listCardEvents(ready.id), [], []).map(entry => [entry.from, entry.to, entry.text]),
+      [[null, null, "Card created"], [null, null, "Created in Ready: cards from hermes skip Triage"]]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("creating cards from a plan records their ids and refuses a second set", () => {
   const dir = mkdtempSync(join(tmpdir(), "alice-plan-"));
   try {
@@ -620,7 +655,9 @@ test("creating cards from a plan records their ids and refuses a second set", ()
     const [first, second] = done.createdCardIds!.map(id => board.getCard(id)!);
     assert.equal(first.title, "First");
     assert.deepEqual([first.source, second.source], ["plan", "plan"]);
+    assert.deepEqual([first.status, second.status], ["ready", "ready"], "accepting the plan decided its tasks");
     assert.deepEqual(second.dependsOn, [first.id]);
+    assert.equal(second.blocked, true, "the second task waits on the first");
     assert.throws(() => board.createPlanCards(card.id), /already created/);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }

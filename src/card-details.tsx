@@ -1833,7 +1833,7 @@ function RunReport({
   addedFollowUps: number[];
   /** A card made from this card's plan already exists; a plan is turned into cards once per card. */
   planCreated: boolean;
-  /** Creates one Triage card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
+  /** Creates one Ready card per subtask, dependencies wired, in order; resolves false when any failed (a retry skips cards already made). */
   onCreatePlan: () => Promise<boolean>;
   /** Creates a Triage card for follow-up `index`; resolves false when it could not. */
   onAddFollowUp: (
@@ -1953,7 +1953,7 @@ function RunReport({
               >
                 {planMade || planCreated
                   ? "Cards already created from this card"
-                  : `Create ${plan.subtasks.length} Triage cards`}
+                  : `Create ${plan.subtasks.length} Ready cards`}
               </Button>
               {planFailed && (
                 <p className="mt-2 text-xs text-destructive">

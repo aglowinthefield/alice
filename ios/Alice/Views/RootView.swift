@@ -41,7 +41,7 @@ struct RootView: View {
         }
         .screenBackground()
         .overlay(alignment: .bottom) {
-            if let message = store.toast { Toast(message: message).transition(.move(edge: .bottom).combined(with: .opacity)) }
+            if let message = store.toast { Toast(message: message, failed: store.toastFailed).transition(.move(edge: .bottom).combined(with: .opacity)) }
         }
         .animation(.easeOut(duration: 0.2), value: store.toast)
     }

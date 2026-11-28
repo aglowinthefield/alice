@@ -87,8 +87,8 @@ npm run dev
 Open http://127.0.0.1:5173, then:
 
 1. **Add a repository** by entering its Git root (an absolute or `~/` path). It needs at least one commit.
-2. **Create a card.** New cards start in **Triage**.
-3. **Move it to Ready and start it.** Starting a run uses paid model tokens.
+2. **Create a card.** New cards start in **Ready**; tick **Start in Triage** to hold one you're unsure of.
+3. **Start it.** Starting a run uses paid model tokens. With auto pickup on, Alice starts Ready cards itself within the board's limits.
 4. **Review.** When Pi finishes, read the diff, then **Approve and merge into local main** (or **Approve and open PR** on a GitHub pull request board), or **Request changes**.
 
 Uncommitted files in your checkout don't appear in card worktrees.

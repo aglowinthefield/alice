@@ -5,23 +5,24 @@ import { banner, c, columns, pad, pretty, wrap } from "./cli-style.mjs";
 const BOARD = ["--board ID|PATH", "the board (default: the one whose repository holds the current directory, or the only one)"];
 const JSON_OUT = ["--json", "print the full API data"];
 const SOURCE = ["--source NAME", "where the card came from (default: cli); agents give their name"];
+const TRIAGE = ["--triage", "start in Triage instead of Ready, for a card you are unsure of"];
 const PRIORITY = ["--priority P", "-100 to 100, or low, normal, high or urgent (default: normal)"];
 
 export const GROUPS = ["Cards", "Runs", "Tidy up", "Boards", "Setup"];
 
 export const COMMANDS = [
   {
-    name: "add", group: "Cards", args: "TITLE...", summary: "quick capture: a new Triage card",
-    full: "TITLE... [--body BODY] [--priority P] [--source NAME] [--board ID|PATH] [--json]",
-    details: "The words after add become the title.",
-    options: [["--body BODY", "the description"], PRIORITY, SOURCE, BOARD, JSON_OUT],
+    name: "add", group: "Cards", args: "TITLE...", summary: "quick capture: a new Ready card",
+    full: "TITLE... [--body BODY] [--priority P] [--source NAME] [--triage] [--board ID|PATH] [--json]",
+    details: "The words after add become the title. The card starts in Ready, so auto pickup may start it; --triage holds it in Triage.",
+    options: [["--body BODY", "the description"], PRIORITY, SOURCE, TRIAGE, BOARD, JSON_OUT],
     examples: [["alice add Fix the flaky login test", ""], ["alice add Ship it --priority urgent", ""]],
   },
   {
     name: "create", group: "Cards", args: "--title TITLE", summary: "a new card, with a key or dependencies",
-    full: "--title TITLE [--body BODY] [--key KEY] [--priority P] [--source NAME] [--after CARD_ID]... [--board ID|PATH] [--json]",
-    details: "--key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status, it is printed instead of creating another.\n--after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.\n--source NAME records where the card came from, shown on its Details tab; it defaults to cli. Agents name themselves, for example --source hermes.",
-    options: [["--title TITLE", "the title"], ["--body BODY", "the description"], ["--key KEY", "create once per board; later calls print the same card"], PRIORITY, SOURCE, ["--after CARD_ID", "wait for that card first (repeatable)"], BOARD, JSON_OUT],
+    full: "--title TITLE [--body BODY] [--key KEY] [--priority P] [--source NAME] [--triage] [--after CARD_ID]... [--board ID|PATH] [--json]",
+    details: "The card starts in Ready, so auto pickup may start it once the cards it waits on are Done; --triage holds it in Triage.\n--key KEY (up to 200 characters) is idempotent per board: if a card with that key exists, in any status, it is printed instead of creating another.\n--after CARD_ID (repeatable) makes the new card wait until each named card is Done or archived.\n--source NAME records where the card came from, shown on its Details tab; it defaults to cli. Agents name themselves, for example --source hermes.",
+    options: [["--title TITLE", "the title"], ["--body BODY", "the description"], ["--key KEY", "create once per board; later calls print the same card"], PRIORITY, SOURCE, TRIAGE, ["--after CARD_ID", "wait for that card first (repeatable)"], BOARD, JSON_OUT],
     examples: [["alice create --title 'Add the API' --key gh-42/t1", ""], ["alice create --title 'Use the API' --after CARD_ID", "start only after CARD_ID is done"]],
   },
   {

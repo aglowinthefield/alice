@@ -214,7 +214,8 @@ test("unread replies show per chat and as board totals, and looking at a chat cl
     assert.equal(await row.locator("[data-chat-unread]").count(), 0, "an open repository shows the total on its Chat entry only");
     await row.click();
     await row.locator("[data-chat-unread='1']").waitFor();
-    assert.equal(await sidebarChat.count(), 0, "a collapsed repository hides its Chat entry and shows the total on its row");
+    // The entry slides shut before it hides.
+    await sidebarChat.waitFor({ state: "hidden" });
   } finally {
     await browser.close();
     await server.close();

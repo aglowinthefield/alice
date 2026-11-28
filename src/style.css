@@ -442,3 +442,12 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
 @keyframes chat-entry-in { from { opacity: 0; } }
 .chat-entry { animation: chat-entry-in 200ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .chat-entry { animation: none; } }
+
+/* Sidebar: a repo's pages hang off a rail under its name. The list slides open and shut, and the accent marker
+   (SubnavMarker in src/main.tsx) slides to the current page. Closed, it is hidden, so its links leave the tab order. */
+.repo-subnav { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 120ms ease-out, visibility 0s 180ms; }
+.repo-subnav[data-open="true"] { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
+.repo-subnav > div { position: relative; min-height: 0; overflow: hidden; }
+.repo-subnav > div::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 1px; background: var(--border); }
+.repo-subnav-marker { position: absolute; top: 0; left: -0.5px; width: 2px; border-radius: 1px; background: var(--primary); transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), height 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .repo-subnav, .repo-subnav-marker { transition: none; } }

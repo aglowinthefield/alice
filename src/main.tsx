@@ -1,7 +1,14 @@
 import { BrandIcon } from "./brand-icon";
 import { WindowControls } from "./window-controls";
 import { sharedCaches } from "../shared/shared-caches.js";
-import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   Archive,
   CircleCheck,
@@ -354,6 +361,26 @@ function ChatUnreadBadge({
   );
 }
 
+/** A repo's page link in the sidebar. The current page gets the rail's marker instead of a highlight. */
+const subnavItem = (current: boolean) =>
+  `mt-0.5 flex w-full items-center gap-2.5 rounded-md py-1.5 pl-3.5 pr-3 text-left text-[length:var(--text-sidebar)] ${current ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`;
+/** The accent mark on a repo's rail. After each render it moves to the link marked as the current page, so a page change slides it. */
+function SubnavMarker() {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const marker = ref.current,
+      rail = marker?.parentElement;
+    if (!marker || !rail) return;
+    const current = rail.querySelector<HTMLElement>('[aria-current="page"]');
+    marker.style.opacity = current ? "1" : "0";
+    if (!current) return;
+    const top =
+      current.getBoundingClientRect().top - rail.getBoundingClientRect().top;
+    marker.style.transform = `translateY(${top + 4}px)`;
+    marker.style.height = `${current.offsetHeight - 8}px`;
+  });
+  return <span ref={ref} aria-hidden="true" className="repo-subnav-marker" />;
+}
 /** Pull request screens and links need a GitHub remote for `gh`. */
 const supportsPullRequests = (board: { remoteUrl?: string }) =>
   hasGithubRemote(board);
@@ -2042,52 +2069,51 @@ export function App() {
                       })}
                     </ul>
                   </div>
-                  {open && (
-                    <button
-                      onClick={() => openBoard(item.id)}
-                      aria-current={active ? "page" : undefined}
-                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${active ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <Kanban size={13} aria-hidden="true" /> Kanban
-                      {!!item.newCards && (
-                        <NewCardsBadge count={item.newCards} />
+                  <div className="repo-subnav ml-4" data-open={open}>
+                    <div>
+                      <SubnavMarker />
+                      <button
+                        onClick={() => openBoard(item.id)}
+                        aria-current={active ? "page" : undefined}
+                        className={subnavItem(active)}
+                      >
+                        <Kanban size={13} aria-hidden="true" /> Kanban
+                        {!!item.newCards && (
+                          <NewCardsBadge count={item.newCards} />
+                        )}
+                      </button>
+                      {supportsPullRequests(item) && (
+                        <button
+                          onClick={() => openPulls(item.id)}
+                          aria-current={pullsActive ? "page" : undefined}
+                          className={subnavItem(pullsActive)}
+                        >
+                          <GitPullRequest size={13} aria-hidden="true" /> Pull
+                          requests
+                        </button>
                       )}
-                    </button>
-                  )}
-                  {open && supportsPullRequests(item) && (
-                    <button
-                      onClick={() => openPulls(item.id)}
-                      aria-current={pullsActive ? "page" : undefined}
-                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${pullsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <GitPullRequest size={13} aria-hidden="true" /> Pull
-                      requests
-                    </button>
-                  )}
-                  {open && (
-                    <button
-                      onClick={() => openVisualizer(item.id)}
-                      aria-current={visualizerActive ? "page" : undefined}
-                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${visualizerActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <Workflow size={13} aria-hidden="true" /> Visualizer
-                    </button>
-                  )}
-                  {open && (
-                    <button
-                      onClick={() => openChat(item.id)}
-                      aria-current={chatActive ? "page" : undefined}
-                      className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${chatActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <MessageSquare size={13} aria-hidden="true" /> Chat
-                      {!!item.chatUnread && (
-                        <ChatUnreadBadge
-                          count={item.chatUnread}
-                          className="ml-auto"
-                        />
-                      )}
-                    </button>
-                  )}
+                      <button
+                        onClick={() => openVisualizer(item.id)}
+                        aria-current={visualizerActive ? "page" : undefined}
+                        className={subnavItem(visualizerActive)}
+                      >
+                        <Workflow size={13} aria-hidden="true" /> Visualizer
+                      </button>
+                      <button
+                        onClick={() => openChat(item.id)}
+                        aria-current={chatActive ? "page" : undefined}
+                        className={subnavItem(chatActive)}
+                      >
+                        <MessageSquare size={13} aria-hidden="true" /> Chat
+                        {!!item.chatUnread && (
+                          <ChatUnreadBadge
+                            count={item.chatUnread}
+                            className="ml-auto"
+                          />
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               );
             })}

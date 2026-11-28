@@ -701,9 +701,9 @@ export class GitHubSync {
    * the branch is force-deleted, which is safe only because GitHub confirmed the PR merged. A dirty worktree is kept.
    */
   private async removeWorktree(repo: string, card: Card): Promise<void> {
-    const branch = cardBranch(repo, card.id), worktree = join(this.dataDir, "worktrees", card.id);
+    const branch = await cardBranch(repo, card.id), worktree = join(this.dataDir, "worktrees", card.id);
     try {
-      if (this.wtBin && worktrunkVersion(this.wtBin)) await run(this.wtBin, ["-C", repo, "remove", branch, "--yes", "--foreground", "--force-delete"], repo, 120_000);
+      if (this.wtBin && await hasWorktrunk(this.wtBin)) await run(this.wtBin, ["-C", repo, "remove", branch, "--yes", "--foreground", "--force-delete"], repo, 120_000);
       else {
         if (existsSync(worktree)) await git(repo, "worktree", "remove", worktree);
         await git(repo, "branch", "-D", branch);
@@ -714,3 +714,11 @@ export class GitHubSync {
   }
 }
 
+/** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name. */
+export function hasWorktrunk(wtBin: string): Promise<boolean> {
+  // Asked once per binary per process: the answer does not change while Alice runs, and callers should not each spawn `wt`.
+  let answer = worktrunkProbes.get(wtBin);
+  if (!answer) worktrunkProbes.set(wtBin, answer = worktrunkVersion(wtBin).then(Boolean));
+  return answer;
+}
+const worktrunkProbes = new Map<string, Promise<boolean>>();

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, type Card } from "../server/board.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
+import { fakeGit, waitFor, withPath } from "./fake-git.js";
 
 function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
@@ -28,23 +29,23 @@ function fixture(title = "Review work") {
   board.finish(run.id, "review");
   const integration = new Integration(board, data);
   return { dir, repo, data, board, card: board.getCard(card.id)!, worktree, integration,
-    approve: (reviewedCard: Card) => integration.approve(reviewedCard, integration.review(reviewedCard).fingerprint),
+    approve: async (reviewedCard: Card) => integration.approve(reviewedCard, (await integration.review(reviewedCard)).fingerprint),
     close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test("the fingerprint check matches the full review and changes when the worktree does", () => {
+test("the fingerprint check matches the full review and changes when the worktree does", async () => {
   const item = fixture();
   try {
-    const first = item.integration.review(item.card).fingerprint;
-    assert.equal(item.integration.reviewFingerprint(item.card), first);
+    const first = (await item.integration.review(item.card)).fingerprint;
+    assert.equal(await item.integration.reviewFingerprint(item.card), first);
     writeFileSync(join(item.worktree, "README.md"), "edited after review\n");
-    const second = item.integration.reviewFingerprint(item.card);
+    const second = await item.integration.reviewFingerprint(item.card);
     assert.notEqual(second, first);
-    assert.equal(item.integration.review(item.card).fingerprint, second);
+    assert.equal((await item.integration.review(item.card)).fingerprint, second);
   } finally { item.close(); }
 });
 
-test("approval commits reviewed work, reconciles with newer main, and only then marks Done", () => {
+test("approval commits reviewed work, reconciles with newer main, and only then marks Done", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
@@ -54,7 +55,7 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
     const mainBefore = git(item.repo, "rev-parse", "HEAD");
     assert.throws(() => item.board.setStatus(item.card.id, "done"), /without approval/);
-    const done = item.approve(item.card);
+    const done = await item.approve(item.card);
     assert.equal(done.status, "done");
     assert.equal(item.board.wasIntegrated(item.card.id), true);
     assert.notEqual(git(item.repo, "rev-parse", "HEAD"), mainBefore);
@@ -70,15 +71,15 @@ test("approval commits reviewed work, reconciles with newer main, and only then 
   } finally { item.close(); }
 });
 
-test("a reviewed run that changed no files closes on Accept findings without touching Git", () => {
+test("a reviewed run that changed no files closes on Accept findings without touching Git", async () => {
   const item = fixture("Research");
   try {
     const mainBefore = git(item.repo, "rev-parse", "main"), branchBefore = git(item.worktree, "rev-parse", "HEAD");
-    const review = item.integration.review(item.card);
+    const review = await item.integration.review(item.card);
     assert.deepEqual(review.files, []);
-    assert.throws(() => item.approve(item.card), /no unmerged commits/);
-    assert.throws(() => item.integration.acceptFindings(item.card, "0".repeat(64)), /changed since review/);
-    const done = item.integration.acceptFindings(item.card, review.fingerprint);
+    await assert.rejects(async () => item.approve(item.card), /no unmerged commits/);
+    await assert.rejects(async () => item.integration.acceptFindings(item.card, "0".repeat(64)), /changed since review/);
+    const done = await item.integration.acceptFindings(item.card, review.fingerprint);
     assert.equal(done.status, "done");
     assert.equal(item.board.wasIntegrated(item.card.id), false);
     assert.equal(git(item.repo, "rev-parse", "main"), mainBefore);
@@ -88,22 +89,22 @@ test("a reviewed run that changed no files closes on Accept findings without tou
   } finally { item.close(); }
 });
 
-test("Accept findings refuses a run that changed files", () => {
+test("Accept findings refuses a run that changed files", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "changed\n");
-    const review = item.integration.review(item.card);
-    assert.throws(() => item.integration.acceptFindings(item.card, review.fingerprint), /changed files/);
+    const review = await item.integration.review(item.card);
+    await assert.rejects(async () => item.integration.acceptFindings(item.card, review.fingerprint), /changed files/);
     assert.equal(item.board.getCard(item.card.id)!.status, "review");
   } finally { item.close(); }
 });
 
-test("merge commit subject truncates long titles and keeps shell text literal", () => {
+test("merge commit subject truncates long titles and keeps shell text literal", async () => {
   const title = "Fix `rm -rf $HOME` && \"quotes\"; $(whoami)\n" + "x".repeat(100);
   const item = fixture(title);
   try {
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
     const subject = git(item.repo, "log", "-1", "--format=%s");
     assert.equal([...subject].length, 72);
     assert.ok(subject.startsWith("Merge card: Fix `rm -rf $HOME` && \"quotes\"; $(whoami) xxx"));
@@ -111,21 +112,21 @@ test("merge commit subject truncates long titles and keeps shell text literal", 
   } finally { item.close(); }
 });
 
-test("draft feedback blocks integration before any commit", () => {
+test("draft feedback blocks integration before any commit", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed\n");
     const run = item.board.listRuns(item.card.id)[0];
-    const draft = item.board.addReviewComment(item.card.id, run.id, item.integration.review(item.card).fingerprint, "README.md", 3, "add", "reviewed", "Clarify this");
+    const draft = item.board.addReviewComment(item.card.id, run.id, (await item.integration.review(item.card)).fingerprint, "README.md", 3, "add", "reviewed", "Clarify this");
     const before = git(item.worktree, "rev-parse", "HEAD");
-    assert.throws(() => item.approve(item.card), /Submit or remove draft review comments/);
+    await assert.rejects(async () => item.approve(item.card), /Submit or remove draft review comments/);
     assert.equal(git(item.worktree, "rev-parse", "HEAD"), before);
     item.board.deleteReviewComment(item.card.id, draft.id);
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
   } finally { item.close(); }
 });
 
-test("a conflict preserves the reviewed branch and keeps the card in Review", () => {
+test("a conflict preserves the reviewed branch and keeps the card in Review", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
@@ -133,7 +134,7 @@ test("a conflict preserves the reviewed branch and keeps the card in Review", ()
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
     const mainBefore = git(item.repo, "rev-parse", "HEAD");
-    assert.throws(() => item.approve(item.card), error => {
+    await assert.rejects(async () => item.approve(item.card), error => {
       assert.ok(error instanceof IntegrationConflictError);
       assert.deepEqual(error.files, ["README.md"]);
       assert.equal(error.cardId, item.card.id);
@@ -150,14 +151,14 @@ test("a conflict preserves the reviewed branch and keeps the card in Review", ()
     assert.deepEqual(reopened.listMergeFailures(item.repo).map(failure => failure.files), [["README.md"]]);
     assert.deepEqual(reopened.listMergeFailures(item.worktree), []);
     reopened.close();
-    assert.throws(() => item.approve(item.card), IntegrationConflictError);
+    await assert.rejects(async () => item.approve(item.card), IntegrationConflictError);
     item.board.clearMergeFailure(item.card.id);
     assert.deepEqual(item.board.listMergeFailures(item.repo), []);
     assert.equal(git(item.repo, "status", "--porcelain"), "");
   } finally { item.close(); }
 });
 
-test("reviewed conflict resolution on the card branch can be approved without changing main first", () => {
+test("reviewed conflict resolution on the card branch can be approved without changing main first", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
@@ -165,13 +166,13 @@ test("reviewed conflict resolution on the card branch can be approved without ch
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "main change");
     const main = git(item.repo, "rev-parse", "main");
-    assert.throws(() => item.approve(item.card), IntegrationConflictError);
+    await assert.rejects(async () => item.approve(item.card), IntegrationConflictError);
     assert.throws(() => git(item.worktree, "merge", "main"));
     writeFileSync(join(item.worktree, "README.md"), "main change\ncard change\n");
     git(item.worktree, "add", "README.md");
     git(item.worktree, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "resolve conflict on card branch");
     assert.equal(git(item.repo, "rev-parse", "main"), main);
-    assert.equal(item.approve(item.board.getCard(item.card.id)!).status, "done");
+    assert.equal((await item.approve(item.board.getCard(item.card.id)!)).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "main change\ncard change\n");
   } finally { item.close(); }
 });
@@ -191,7 +192,7 @@ test("failed repair keeps merge diagnostics until a reviewed attempt completes",
   } finally { item.close(); }
 });
 
-test("ignored files in main cannot be overwritten by an approved card", () => {
+test("ignored files in main cannot be overwritten by an approved card", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "local.txt"), "reviewed file\n");
@@ -200,13 +201,13 @@ test("ignored files in main cannot be overwritten by an approved card", () => {
     git(item.repo, "add", ".gitignore");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "ignore local file");
     writeFileSync(join(item.repo, "local.txt"), "important ignored data\n");
-    assert.throws(() => item.approve(item.card), /merge failed/);
+    await assert.rejects(async () => item.approve(item.card), /merge failed/);
     assert.equal(readFileSync(join(item.repo, "local.txt"), "utf8"), "important ignored data\n");
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
   } finally { item.close(); }
 });
 
-test("approval resumes after main moved but before the Done status was saved", () => {
+test("approval resumes after main moved but before the Done status was saved", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed\n");
@@ -219,12 +220,12 @@ test("approval resumes after main moved but before the Done status was saved", (
     const preparedHead = git(item.repo, "rev-parse", "HEAD");
     item.board.recordPreparedMerge(item.card.id, run.id, candidate, preparedHead);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
-    assert.equal(item.approve(item.board.getCard(item.card.id)!).status, "done");
+    assert.equal((await item.approve(item.board.getCard(item.card.id)!)).status, "done");
     assert.equal(git(item.repo, "rev-parse", "HEAD"), preparedHead);
   } finally { item.close(); }
 });
 
-test("a changed main tip cannot silently complete an interrupted approval", () => {
+test("a changed main tip cannot silently complete an interrupted approval", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed\n");
@@ -237,12 +238,12 @@ test("a changed main tip cannot silently complete an interrupted approval", () =
     writeFileSync(join(item.repo, "README.md"), "original\n");
     git(item.repo, "add", "README.md");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "revert work");
-    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /Main changed after Alice merged/);
+    await assert.rejects(async () => item.approve(item.board.getCard(item.card.id)!), /Main changed after Alice merged/);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
   } finally { item.close(); }
 });
 
-test("outside merges do not count as Alice's prepared integration", () => {
+test("outside merges do not count as Alice's prepared integration", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed\n");
@@ -252,13 +253,13 @@ test("outside merges do not count as Alice's prepared integration", () => {
     const run = item.board.listRuns(item.card.id)[0];
     item.board.recordApproval(item.card.id, run.id, candidate);
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "-s", "ours", "--no-ff", "--no-edit", candidate);
-    assert.throws(() => item.approve(item.board.getCard(item.card.id)!), /merged outside Alice/);
+    await assert.rejects(async () => item.approve(item.board.getCard(item.card.id)!), /merged outside Alice/);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n");
   } finally { item.close(); }
 });
 
-test("withdrawal unlocks revision but cannot hide an integration already on main", () => {
+test("withdrawal unlocks revision but cannot hide an integration already on main", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed\n");
@@ -267,18 +268,18 @@ test("withdrawal unlocks revision but cannot hide an integration already on main
     const candidate = git(item.worktree, "rev-parse", "HEAD"), run = item.board.listRuns(item.card.id)[0];
     item.board.recordApproval(item.card.id, run.id, candidate);
     assert.throws(() => item.board.claim(item.card.id), /Approval is in progress/);
-    item.integration.withdraw(item.card);
+    await item.integration.withdraw(item.card);
     assert.equal(item.board.getApproval(item.card.id), undefined);
     assert.equal(git(item.worktree, "rev-parse", "HEAD"), candidate);
     item.board.recordApproval(item.card.id, run.id, candidate);
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "merge", "--no-ff", "--no-edit", candidate);
     item.board.recordPreparedMerge(item.card.id, run.id, candidate, git(item.repo, "rev-parse", "HEAD"));
-    assert.throws(() => item.integration.withdraw(item.card), /reached main/);
+    await assert.rejects(async () => item.integration.withdraw(item.card), /reached main/);
     assert.equal(item.board.getApproval(item.card.id)?.candidate, candidate);
   } finally { item.close(); }
 });
 
-test("unrelated dirty files on main survive approval", () => {
+test("unrelated dirty files on main survive approval", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.repo, "notes.txt"), "baseline\n");
@@ -287,7 +288,7 @@ test("unrelated dirty files on main survive approval", () => {
     writeFileSync(join(item.repo, "notes.txt"), "local edit\n");
     writeFileSync(join(item.repo, "scratch.txt"), "untracked local edit\n");
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "card change\n");
     assert.equal(readFileSync(join(item.repo, "notes.txt"), "utf8"), "local edit\n");
     assert.equal(readFileSync(join(item.repo, "scratch.txt"), "utf8"), "untracked local edit\n");
@@ -295,13 +296,13 @@ test("unrelated dirty files on main survive approval", () => {
   } finally { item.close(); }
 });
 
-test("overlapping dirty files on main block approval without losing local edits", () => {
+test("overlapping dirty files on main block approval without losing local edits", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
     writeFileSync(join(item.repo, "README.md"), "uncommitted main change\n");
     const mainBefore = git(item.repo, "rev-parse", "HEAD");
-    assert.throws(() => item.approve(item.card), /Uncommitted changes on main would be overwritten: README\.md\./);
+    await assert.rejects(async () => item.approve(item.card), /Uncommitted changes on main would be overwritten: README\.md\./);
     assert.equal(git(item.repo, "rev-parse", "HEAD"), mainBefore);
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "uncommitted main change\n");
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
@@ -309,12 +310,12 @@ test("overlapping dirty files on main block approval without losing local edits"
     assert.equal(item.board.getApproval(item.card.id), undefined);
     assert.match(git(item.worktree, "status", "--porcelain"), /README\.md/);
     writeFileSync(join(item.repo, "README.md"), "original\n");
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "card change\n");
   } finally { item.close(); }
 });
 
-test("a legacy Done card with a reviewed run returns to Review for approval", () => {
+test("a legacy Done card with a reviewed run returns to Review for approval", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
@@ -322,79 +323,79 @@ test("a legacy Done card with a reviewed run returns to Review for approval", ()
     const db = new DatabaseSync(join(item.dir, "board.sqlite"));
     db.prepare("UPDATE cards SET status='done' WHERE id=?").run(item.card.id); db.close();
     assert.equal(item.board.setStatus(item.card.id, "ready").status, "review");
-    assert.equal(item.approve(item.board.getCard(item.card.id)!).status, "done");
+    assert.equal((await item.approve(item.board.getCard(item.card.id)!)).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "card change\n");
     assert.ok(existsSync(item.worktree));
   } finally { item.close(); }
 });
 
-test("review patches include untracked files and approval rejects changes after inspection", () => {
+test("review patches include untracked files and approval rejects changes after inspection", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed change\n");
     writeFileSync(join(item.worktree, "new.txt"), "untracked\n");
     const head = git(item.worktree, "rev-parse", "HEAD");
-    const review = item.integration.review(item.card);
+    const review = await item.integration.review(item.card);
     assert.deepEqual(review.files.map(file => file.path), ["README.md", "new.txt"]);
     assert.match(review.files[0].patch, /\+reviewed change/);
     assert.match(review.files[1].patch, /\+untracked/);
     assert.equal(git(item.worktree, "status", "--porcelain").includes("?? new.txt"), true);
     writeFileSync(join(item.worktree, "new.txt"), "changed after review\n");
-    assert.throws(() => item.integration.approve(item.card, review.fingerprint), /changed since review/);
+    await assert.rejects(async () => item.integration.approve(item.card, review.fingerprint), /changed since review/);
     assert.equal(git(item.worktree, "rev-parse", "HEAD"), head);
     assert.equal(item.board.getApproval(item.card.id), undefined);
-    const fresh = item.integration.review(item.card);
+    const fresh = await item.integration.review(item.card);
     assert.notEqual(fresh.fingerprint, review.fingerprint);
-    assert.equal(item.integration.approve(item.card, fresh.fingerprint).status, "done");
+    assert.equal((await item.integration.approve(item.card, fresh.fingerprint)).status, "done");
     assert.equal(readFileSync(join(item.repo, "new.txt"), "utf8"), "changed after review\n");
   } finally { item.close(); }
 });
 
-test("a pre-commit hook cannot merge content absent from the reviewed diff", () => {
+test("a pre-commit hook cannot merge content absent from the reviewed diff", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed change\n");
     const hook = join(item.repo, ".git", "hooks", "pre-commit");
     writeFileSync(hook, "#!/bin/sh\nprintf 'hook changed this\\n' > README.md\ngit add README.md\n");
     chmodSync(hook, 0o755);
-    const reviewed = item.integration.review(item.card);
+    const reviewed = await item.integration.review(item.card);
     assert.match(reviewed.files[0].patch, /reviewed change/);
-    assert.throws(() => item.integration.approve(item.card, reviewed.fingerprint), /changed since review/);
+    await assert.rejects(async () => item.integration.approve(item.card, reviewed.fingerprint), /changed since review/);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
     assert.equal(item.board.getApproval(item.card.id), undefined);
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "original\n");
-    assert.equal(item.integration.approve(item.card, item.integration.review(item.card).fingerprint).status, "done");
+    assert.equal((await item.integration.approve(item.card, (await item.integration.review(item.card)).fingerprint)).status, "done");
     assert.equal(readFileSync(join(item.repo, "README.md"), "utf8"), "hook changed this\n");
   } finally { item.close(); }
 });
 
-test("main advancing during card commit requires review against its new tip", () => {
+test("main advancing during card commit requires review against its new tip", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "reviewed change\n");
     const hook = join(item.repo, ".git", "hooks", "pre-commit");
     writeFileSync(hook, `#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR\ngit -C '${item.repo}' -c core.hooksPath=/dev/null -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm 'other change'\n`);
     chmodSync(hook, 0o755);
-    const reviewed = item.integration.review(item.card), mainBefore = git(item.repo, "rev-parse", "main");
-    assert.throws(() => item.integration.approve(item.card, reviewed.fingerprint), /changed since review/);
+    const reviewed = await item.integration.review(item.card), mainBefore = git(item.repo, "rev-parse", "main");
+    await assert.rejects(async () => item.integration.approve(item.card, reviewed.fingerprint), /changed since review/);
     assert.notEqual(git(item.repo, "rev-parse", "main"), mainBefore);
     assert.equal(item.board.getCard(item.card.id)?.status, "review");
-    assert.equal(item.integration.approve(item.card, item.integration.review(item.card).fingerprint).status, "done");
+    assert.equal((await item.integration.approve(item.card, (await item.integration.review(item.card)).fingerprint)).status, "done");
   } finally { item.close(); }
 });
 
-test("moving main after review requires a fresh diff before approval", () => {
+test("moving main after review requires a fresh diff before approval", async () => {
   const item = fixture();
   try {
     writeFileSync(join(item.worktree, "README.md"), "card change\n");
-    const review = item.integration.review(item.card);
+    const review = await item.integration.review(item.card);
     writeFileSync(join(item.repo, "other.txt"), "other change\n");
     git(item.repo, "add", "other.txt");
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "other work");
-    assert.throws(() => item.integration.approve(item.card, review.fingerprint), /changed since review/);
-    const current = item.integration.review(item.card);
+    await assert.rejects(async () => item.integration.approve(item.card, review.fingerprint), /changed since review/);
+    const current = await item.integration.review(item.card);
     assert.deepEqual(current.files.map(file => file.path), ["README.md"]);
-    assert.equal(item.integration.approve(item.card, current.fingerprint).status, "done");
+    assert.equal((await item.integration.approve(item.card, current.fingerprint)).status, "done");
   } finally { item.close(); }
 });
 
@@ -413,58 +414,58 @@ function withOrigin(item: ReturnType<typeof fixture>) {
   return { remote, pushUpstream: (file: string) => { commit(other, file); git(other, "push", "-q", "origin", "main"); }, commitLocal: (file: string) => commit(item.repo, file) };
 }
 
-test("approval is blocked when local main is behind origin/main", () => {
+test("approval is blocked when local main is behind origin/main", async () => {
   const item = fixture();
   try {
     const origin = withOrigin(item);
     origin.pushUpstream("upstream.txt");
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
     const main = git(item.repo, "rev-parse", "main");
-    assert.throws(() => item.approve(item.card), /Fast-forwarded main over 1 commit from origin\/main\. Refresh the diff and approve again/);
+    await assert.rejects(async () => item.approve(item.card), /Fast-forwarded main over 1 commit from origin\/main\. Refresh the diff and approve again/);
     assert.equal(git(item.repo, "rev-parse", "main"), git(item.repo, "rev-parse", "origin/main"));
     assert.notEqual(git(item.repo, "rev-parse", "main"), main);
     assert.equal(item.board.getCard(item.card.id)!.status, "review");
     assert.equal(item.board.getApproval(item.card.id), undefined);
     assert.equal(git(item.worktree, "rev-list", "--count", "main..HEAD"), "0", "nothing was committed on the card branch");
     // The refreshed review approves.
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
   } finally { item.close(); }
 });
 
-test("approval proceeds when local main is ahead of origin/main", () => {
+test("approval proceeds when local main is ahead of origin/main", async () => {
   const item = fixture();
   try {
     withOrigin(item).commitLocal("local.txt");
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
     assert.deepEqual(item.integration.warnings, []);
   } finally { item.close(); }
 });
 
-test("approval is blocked when main is behind and has uncommitted tracked changes", () => {
+test("approval is blocked when main is behind and has uncommitted tracked changes", async () => {
   const item = fixture();
   try {
     withOrigin(item).pushUpstream("upstream.txt");
     writeFileSync(join(item.repo, "README.md"), "local edit\n");
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
-    assert.throws(() => item.approve(item.card), /Local main is 1 commit behind origin\/main\. Update main first/);
+    await assert.rejects(async () => item.approve(item.card), /Local main is 1 commit behind origin\/main\. Update main first/);
   } finally { item.close(); }
 });
 
-test("a diverged local main is rebased onto origin/main, keeping the local commit", () => {
+test("a diverged local main is rebased onto origin/main, keeping the local commit", async () => {
   const item = fixture();
   try {
     const origin = withOrigin(item);
     origin.pushUpstream("upstream.txt");
     origin.commitLocal("local.txt");
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
-    assert.throws(() => item.approve(item.card), /Rebased 1 local commit on main onto origin\/main\. Refresh the diff and approve again/);
+    await assert.rejects(async () => item.approve(item.card), /Rebased 1 local commit on main onto origin\/main\. Refresh the diff and approve again/);
     assert.equal(git(item.repo, "rev-list", "--left-right", "--count", "main...origin/main"), "1\t0");
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
   } finally { item.close(); }
 });
 
-test("approval is blocked when local main has diverged from origin/main and the rebase conflicts", () => {
+test("approval is blocked when local main has diverged from origin/main and the rebase conflicts", async () => {
   const item = fixture();
   try {
     const origin = withOrigin(item);
@@ -474,27 +475,27 @@ test("approval is blocked when local main has diverged from origin/main and the 
     git(item.repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "same");
     const local = git(item.repo, "rev-parse", "main");
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
-    assert.throws(() => item.approve(item.card), /Local main has diverged from origin\/main \(1 local, 1 commit behind\)/);
+    await assert.rejects(async () => item.approve(item.card), /Local main has diverged from origin\/main \(1 local, 1 commit behind\)/);
     assert.equal(git(item.repo, "rev-parse", "main"), local, "the aborted rebase left main as it was");
     assert.equal(git(item.repo, "status", "--porcelain"), "");
     assert.equal(item.board.getCard(item.card.id)!.status, "review");
   } finally { item.close(); }
 });
 
-test("a failed fetch of origin warns and approval proceeds", () => {
+test("a failed fetch of origin warns and approval proceeds", async () => {
   const item = fixture();
   try {
     const origin = withOrigin(item);
     git(item.repo, "remote", "set-url", "origin", join(item.dir, "missing.git"));
     rmSync(origin.remote, { recursive: true, force: true });
     writeFileSync(join(item.worktree, "README.md"), "original\nreviewed\n");
-    assert.equal(item.approve(item.card).status, "done");
+    assert.equal((await item.approve(item.card)).status, "done");
     assert.equal(item.integration.warnings.length, 1);
     assert.match(item.integration.warnings[0], /^git fetch origin failed/);
   } finally { item.close(); }
 });
 
-test("with pushMainAfterMerge on, approval pushes main to origin; a failing push leaves the card Done and says why", () => {
+test("with pushMainAfterMerge on, approval pushes main to origin; a failing push leaves the card Done and says why", async () => {
   for (const reachable of [true, false]) {
     const item = fixture();
     try {
@@ -503,7 +504,7 @@ test("with pushMainAfterMerge on, approval pushes main to origin; a failing push
       git(item.repo, "remote", "add", "origin", reachable ? origin : join(item.dir, "missing.git"));
       item.board.setPushMainAfterMerge(item.board.boardForRepo(item.repo)!.id, true);
       writeFileSync(join(item.worktree, "new.txt"), "work\n");
-      const done = item.approve(item.card);
+      const done = await item.approve(item.card);
       assert.equal(done.status, "done");
       const note = item.board.listCardEvents(item.card.id).at(-1)!.reason;
       if (reachable) {
@@ -514,14 +515,61 @@ test("with pushMainAfterMerge on, approval pushes main to origin; a failing push
   }
 });
 
-test("main is not pushed unless the board opts in", () => {
+test("main is not pushed unless the board opts in", async () => {
   const item = fixture();
   try {
     const origin = join(item.dir, "origin.git");
     execFileSync("git", ["init", "-q", "--bare", origin]);
     git(item.repo, "remote", "add", "origin", origin);
     writeFileSync(join(item.worktree, "new.txt"), "work\n");
-    item.approve(item.card);
+    await item.approve(item.card);
     assert.throws(() => git(origin, "rev-parse", "main"));
   } finally { item.close(); }
+});
+
+test("while Approve waits on Git, a draft comment, a change request, a new attempt, Close or a status move is refused, and none lands on the merged card", { timeout: 60_000, skip: process.platform === "win32" && "the fake git is a shell script" }, async () => {
+  const item = fixture();
+  // Hold Approve's `git add -A` in the card worktree (its real index; snapshots use their own index file).
+  const fake = fakeGit(item.dir, [{ name: "add", match: `${item.worktree} add -A`, withoutIndexFile: true }]);
+  try {
+    writeFileSync(join(item.worktree, "feature.txt"), "reviewed work\n");
+    const { fingerprint, runId } = await item.integration.review(item.card);
+    const approving = withPath(fake.bin, () => item.integration.approve(item.card, fingerprint));
+    await waitFor(() => fake.waiting("add"), "Approve to reach git add");
+    assert.throws(() => item.board.addReviewComment(item.card.id, runId, fingerprint, "", 0, "context", "", "Added while approving"), /being approved/);
+    assert.throws(() => item.board.requestChanges(item.card.id, runId, fingerprint), /being approved/);
+    assert.throws(() => item.board.claim(item.card.id), /being approved/);
+    assert.throws(() => item.board.closeReview(item.card.id), /being approved/, "Close without merging waits for the approval");
+    assert.throws(() => item.board.setStatus(item.card.id, "ready"), /being approved/);
+    // A second Approve queues behind the first for this repository, then finds the card already merged.
+    const again = item.integration.approve(item.card, fingerprint);
+    fake.release("add");
+    assert.equal((await approving).status, "done");
+    await assert.rejects(again, /Only a reviewed run/);
+    assert.deepEqual(item.board.listReviewComments(item.card.id), []);
+    // Released once approval ends: the board's own rules apply again.
+    assert.throws(() => item.board.addReviewComment(item.card.id, runId, fingerprint, "", 0, "context", "", "Late"), /latest unapproved review/);
+  } finally { fake.releaseAll(); item.close(); }
+});
+
+test("a review read across a new attempt is discarded, and its file count is not written to either run", { skip: process.platform === "win32" && "the fake git is a shell script" }, async () => {
+  const item = fixture();
+  // Hold the snapshot's `git add -A` into its temporary index, the step that reads the worktree's files.
+  const fake = fakeGit(item.dir, [{ name: "snapshot", match: `${item.worktree} add -A`, withIndexFile: true }]);
+  try {
+    writeFileSync(join(item.worktree, "reviewed.txt"), "the reviewed run's work\n");
+    const reviewed = item.board.listRuns(item.card.id)[0];
+    await withPath(fake.bin, async () => {
+      const reading = item.integration.review(item.card), counting = item.integration.recordChangedFiles(item.card);
+      await waitFor(() => fake.count("snapshot") === 2, "both reads to reach git add");
+      // A new attempt starts in the same worktree and changes it while the reads wait.
+      const next = item.board.claim(item.card.id);
+      writeFileSync(join(item.worktree, "next.txt"), "the new attempt's work\n");
+      fake.release("snapshot");
+      await assert.rejects(reading, /newer attempt started/);
+      await counting;
+      assert.equal(item.board.getRun(reviewed.id)?.changedFiles, null, "no count on the old run");
+      assert.equal(item.board.getRun(next.id)?.changedFiles, null, "nor on the new one");
+    });
+  } finally { fake.releaseAll(); item.close(); }
 });

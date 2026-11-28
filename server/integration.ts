@@ -1,48 +1,32 @@
-import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { Board, type Card } from "./board.js";
+import { Board, type Card, type Run } from "./board.js";
 import { boardGithubRepo, commentOnPullRequest, fetchOrigin, type GitHub, postPullRequestComment } from "./github.js";
 import { cardTitle, pullRequestBody, readPullRequestRules } from "./pr-draft.js";
 import { semanticTitleProblem } from "../src/pr-title.js";
 import { githubMarkdown } from "./github-markdown.js";
 import { githubRepo } from "./github-url.js";
 import { commitIdentityArgs } from "./git-identity.js";
+import { isAncestor, run, Serial, Shared, type CommandError } from "./git-async.js";
 import { cardBranch, cardBranches } from "./legacy-names.js";
 import { behindOriginMessage, compareWithOriginMain, fetchOriginBestEffort, hasOrigin, syncMainWithOrigin } from "./origin.js";
 
-function gitCommand(repo: string, args: string[], index?: string, raw = false, maxBuffer = 8 * 1024 * 1024): string {
+/** Git without blocking the event loop. `index` sets GIT_INDEX_FILE; `raw` keeps stdout untrimmed. */
+async function gitCommand(repo: string, args: string[], index?: string, raw = false, maxBuffer = 8 * 1024 * 1024): Promise<string> {
   try {
-    const output = execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: index ? { ...process.env, GIT_INDEX_FILE: index } : process.env, maxBuffer });
-    return raw ? output : output.trim();
+    const { stdout } = await run("git", ["-C", repo, ...args], { env: index ? { ...process.env, GIT_INDEX_FILE: index } : process.env, maxBuffer });
+    return raw ? stdout : stdout.trim();
   } catch (error) {
-    const result = error as { stderr?: Buffer; stdout?: Buffer };
-    const detail = (result.stderr?.toString() || result.stdout?.toString() || "Git command failed").trim();
+    const result = error as CommandError;
+    const detail = (result.stderr || result.stdout || "Git command failed").trim();
     const operation = args[0] === "-c" ? args.find(arg => arg === "merge" || arg === "commit") ?? "git" : args[0];
-    throw new Error(`${operation} failed: ${detail.slice(0, 4000)}`);
+    throw Object.assign(new Error(`${operation} failed: ${detail.slice(0, 4000)}`), { status: result.status });
   }
 }
-function git(repo: string, ...args: string[]): string { return gitCommand(repo, args); }
-/**
- * `gitCommand` without blocking the event loop, for work that runs on a timer. Under load one git call can take
- * seconds, and a synchronous one stalls every request the server is handling meanwhile.
- */
-function gitCommandAsync(repo: string, args: string[], raw = false, index?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, env: index ? { ...process.env, GIT_INDEX_FILE: index } : process.env }, (error, stdout, stderr) => {
-      if (!error) return resolve(raw ? stdout : stdout.trim());
-      const detail = (stderr || stdout || "Git command failed").trim();
-      reject(Object.assign(new Error(`${args[0]} failed: ${detail.slice(0, 4000)}`), { status: typeof error.code === "number" ? error.code : undefined }));
-    });
-  });
-}
-const readGit = (repo: string, ...args: string[]) => gitCommandAsync(repo, args);
-async function isAncestorAsync(repo: string, ancestor: string, descendant: string): Promise<boolean> {
-  try { await readGit(repo, "merge-base", "--is-ancestor", ancestor, descendant); return true; }
-  catch (error) { if ((error as { status?: number }).status === 1) return false; throw error; }
-}
+function git(repo: string, ...args: string[]): Promise<string> { return gitCommand(repo, args); }
 /**
  * A three-way merge done on objects only (`git merge-tree`), so nothing in any worktree or ref changes. Returns the
  * merged tree, or the paths that conflict. `sides` are the two commits or trees to merge, optionally preceded by
@@ -66,7 +50,7 @@ function mergeTreeAsync(repo: string, sides: string[]): Promise<{ tree: string; 
  * `read-tree -u` would overwrite those without asking.
  */
 async function ignoredCollisions(worktree: string, from: string, to: string): Promise<string[]> {
-  const added = (await gitCommandAsync(worktree, ["diff", "--no-renames", "--name-only", "-z", "--diff-filter=A", from, to], true)).split("\0").filter(Boolean);
+  const added = (await gitCommand(worktree, ["diff", "--no-renames", "--name-only", "-z", "--diff-filter=A", from, to], undefined, true)).split("\0").filter(Boolean);
   const kind = (path: string) => { try { return lstatSync(join(worktree, path)).isDirectory() ? "dir" : "file"; } catch { return ""; } };
   return added.filter(path => {
     const parts = path.split("/");
@@ -100,9 +84,9 @@ export class IntegrationConflictError extends Error {
     super("Changes conflict with current main");
   }
 }
-function clean(repo: string) { return git(repo, "status", "--porcelain") === ""; }
-function hasCommit(repo: string, rev: string) {
-  try { execFileSync("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { stdio: "ignore" }); return true; }
+async function clean(repo: string) { return await git(repo, "status", "--porcelain") === ""; }
+async function hasCommit(repo: string, rev: string) {
+  try { await git(repo, "rev-parse", "--verify", "--quiet", `${rev}^{commit}`); return true; }
   catch { return false; }
 }
 /** A Done card Alice merged into local main, offered as "Publish as PR". `blocker` says why it cannot be published. */
@@ -110,22 +94,13 @@ export type LocalMerge = { card: Card; candidate: string; commits: number; block
 /** Local main has commits origin/main lacks. `resettable` means they are only published card merges. */
 export type MainRecovery = { tip: string; originMain: string; recoveryBranch: string; localCommits: number; resettable: boolean; reason: string };
 /** Why a locally merged card's candidate cannot become a PR as it is, or "". */
-function publishBlocker(repo: string, card: Card, candidate: string): string {
-  if (card.prOverrideUrl) return `Linked to ${card.prOverrideUrl}; Alice only pushes ${cardBranch(repo, card.id)}`;
-  if (!hasCommit(repo, candidate)) return `The approved commit ${candidate.slice(0, 12)} is no longer in the repository`;
+async function publishBlocker(repo: string, card: Card, candidate: string): Promise<string> {
+  if (card.prOverrideUrl) return `Linked to ${card.prOverrideUrl}; Alice only pushes ${await cardBranch(repo, card.id)}`;
+  if (!await hasCommit(repo, candidate)) return `The approved commit ${candidate.slice(0, 12)} is no longer in the repository`;
   // The candidate was built on local main. Other local merges under it would ride along in this PR.
-  const merges = git(repo, "rev-list", "--merges", `refs/remotes/origin/main..${candidate}`).split("\n").filter(Boolean);
-  if (merges.length) return `${cardBranch(repo, card.id)} includes ${merges.length} merge commit${merges.length === 1 ? "" : "s"} from local main that origin/main lacks (${git(repo, "log", "-1", "--format=%s", merges[0])}), which would land in this pull request. Rebase the card branch onto origin/main yourself, then publish`;
+  const merges = (await git(repo, "rev-list", "--merges", `refs/remotes/origin/main..${candidate}`)).split("\n").filter(Boolean);
+  if (merges.length) return `${await cardBranch(repo, card.id)} includes ${merges.length} merge commit${merges.length === 1 ? "" : "s"} from local main that origin/main lacks (${await git(repo, "log", "-1", "--format=%s", merges[0])}), which would land in this pull request. Rebase the card branch onto origin/main yourself, then publish`;
   return "";
-}
-function isAncestor(repo: string, ancestor: string, descendant: string) {
-  try {
-    execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant], { stdio: "ignore" });
-    return true;
-  } catch (error) {
-    if ((error as { status?: number }).status === 1) return false;
-    throw error;
-  }
 }
 
 /**
@@ -134,26 +109,26 @@ function isAncestor(repo: string, ancestor: string, descendant: string) {
  * request, for example merging main into it, and Alice has nothing new). When both sides hold commits the other
  * lacks, throws instead of letting Git reject the push, naming what origin has so nobody's work is overwritten.
  */
-function remoteBranchState(repo: string, branch: string, candidate: string, resolve: string | null): "push" | "on-origin" | "diverged" {
+async function remoteBranchState(repo: string, branch: string, candidate: string, resolve: string | null): Promise<"push" | "on-origin" | "diverged"> {
   const remote = `refs/remotes/origin/${branch}`;
-  if (!hasCommit(repo, remote) || isAncestor(repo, remote, candidate)) return "push";
-  if (isAncestor(repo, candidate, remote)) return "on-origin";
+  if (!await hasCommit(repo, remote) || await isAncestor(repo, remote, candidate)) return "push";
+  if (await isAncestor(repo, candidate, remote)) return "on-origin";
   if (resolve === null) return "diverged";
-  const theirs = Number(git(repo, "rev-list", "--count", `${candidate}..${remote}`));
-  const ours = Number(git(repo, "rev-list", "--count", `${remote}..${candidate}`));
-  const latest = git(repo, "log", "-1", "--format=%h %s (%an)", remote);
+  const theirs = Number(await git(repo, "rev-list", "--count", `${candidate}..${remote}`));
+  const ours = Number(await git(repo, "rev-list", "--count", `${remote}..${candidate}`));
+  const latest = await git(repo, "log", "-1", "--format=%h %s (%an)", remote);
   throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks (latest: ${latest}), and the card has ${ours} that origin lacks. Someone pushed to the pull request; Alice will not overwrite it. ${resolve}`);
 }
 
 /** Why the card worktree cannot take an automatic merge of `origin/<branch>`, or "" when it is safe to try. */
-function mergeBlocker(worktree: string, branch: string): string {
-  const gitPath = (name: string) => resolve(worktree, git(worktree, "rev-parse", "--git-path", name));
+async function mergeBlocker(worktree: string, branch: string): Promise<string> {
+  const gitPath = async (name: string) => resolve(worktree, await git(worktree, "rev-parse", "--git-path", name));
   for (const [name, what] of [["MERGE_HEAD", "a merge"], ["rebase-merge", "a rebase"], ["rebase-apply", "a rebase"], ["CHERRY_PICK_HEAD", "a cherry-pick"], ["REVERT_HEAD", "a revert"]] as const)
-    if (existsSync(gitPath(name))) return `the card worktree is in the middle of ${what}`;
+    if (existsSync(await gitPath(name))) return `the card worktree is in the middle of ${what}`;
   let head = "";
-  try { head = git(worktree, "symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Detached HEAD. */ }
+  try { head = await git(worktree, "symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Detached HEAD. */ }
   if (head !== branch) return `the card worktree is ${head ? `on branch ${head}` : "in detached HEAD"}, not ${branch}`;
-  if (!clean(worktree)) return "the card worktree has uncommitted changes";
+  if (!await clean(worktree)) return "the card worktree has uncommitted changes";
   return "";
 }
 
@@ -163,21 +138,21 @@ function mergeBlocker(worktree: string, branch: string): string {
  * and an unsafe worktree is left alone. Either throws with what to do. The merged tree was never reviewed, so the
  * caller stops after this: approval, verification and review run again on the result.
  */
-function mergeRemoteBranch(worktree: string, branch: string, scratch = false): { merged: number; head: string } {
+async function mergeRemoteBranch(worktree: string, branch: string, scratch = false): Promise<{ merged: number; head: string }> {
   const remote = `refs/remotes/origin/${branch}`;
-  const theirs = Number(git(worktree, "rev-list", "--count", `HEAD..${remote}`)), ours = Number(git(worktree, "rev-list", "--count", `${remote}..HEAD`));
-  const blocker = scratch ? "" : mergeBlocker(worktree, branch);
+  const theirs = Number(await git(worktree, "rev-list", "--count", `HEAD..${remote}`)), ours = Number(await git(worktree, "rev-list", "--count", `${remote}..HEAD`));
+  const blocker = scratch ? "" : await mergeBlocker(worktree, branch);
   if (blocker) throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks, but Alice could not merge them: ${blocker}. Nothing was changed or pushed. Fix that in ${worktree}, then approve again`);
   try {
-    git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
+    await git(worktree, ...await commitIdentityArgs(worktree), "merge", "--no-edit", "--no-ff", "-m", `Merge origin/${branch} into ${branch}`, remote);
   } catch (error) {
     let files = "";
-    try { files = git(worktree, "diff", "--name-only", "--diff-filter=U").split("\n").filter(Boolean).join(", "); } catch { /* Not mid-merge. */ }
-    try { git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
+    try { files = (await git(worktree, "diff", "--name-only", "--diff-filter=U")).split("\n").filter(Boolean).join(", "); } catch { /* Not mid-merge. */ }
+    try { await git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
     const detail = error instanceof Error ? error.message.slice(0, 500) : String(error);
     throw new Error(`${branch} on origin has ${theirs} commit${theirs === 1 ? "" : "s"} this card lacks, and the card has ${ours} that origin lacks. Merging them ${files ? `conflicts in ${files}` : `failed (${detail})`}. Alice aborted the merge and changed nothing; nothing was pushed. ${scratch ? `Reconcile origin/${branch} with the approved commit yourself, then publish again` : `Merge origin/${branch} into ${worktree} yourself and resolve the conflict, then approve again`}`);
   }
-  return { merged: theirs, head: git(worktree, "rev-parse", "HEAD") };
+  return { merged: theirs, head: await git(worktree, "rev-parse", "HEAD") };
 }
 
 // The title is user text. It reaches Git only as an argv entry, never through a shell.
@@ -289,12 +264,18 @@ export function pushBranch(cwd: string, refspec: string, onLine: (line: string, 
 
 export class Integration {
   private reconciliationErrors = new Set<string>();
+  private snapshots = new Shared();
+  /** Operations that change a repository (merging into main, resetting it) run one at a time per repository. */
+  private writes = new Serial();
   private progress = new Map<string, PushProgress>();
   /** Non-blocking problems seen while approving, such as an offline fetch. Kept for inspection; also logged. */
   readonly warnings: string[] = [];
   /** Called with "merge" or "pr" when Alice merges a card into local main or opens or updates its pull request. Used for usage telemetry. */
   onDelivered: (kind: "merge" | "pr") => void = () => {};
   constructor(private board: Board, readonly dataDir: string, private fetchTimeoutMs = 30_000) {}
+
+  /** Resolves once approvals, accepts, withdrawals and resets already queued have finished, for shutdown. */
+  idle(): Promise<void> { return this.writes.idle(); }
 
   /** The current or last push of `cardId` to GitHub, or null when Alice has not pushed it since starting. */
   pushProgress(cardId: string): PushProgress | null { return this.progress.get(cardId) ?? null; }
@@ -329,82 +310,83 @@ export class Integration {
     if (!existsSync(worktree) || realpathSync.native(worktree) !== realpathSync.native(run.worktree)) throw new Error("Card worktree is missing or has moved");
     return { repo, worktree, run };
   }
-  private location(card: Card, allowFailed = false) {
-    const found = this.reviewedRun(card, allowFailed), { repo, worktree } = found;
-    const problem = worktreeProblem({
-      repoTop: git(repo, ...worktreeArgs.top), worktreeTop: git(worktree, ...worktreeArgs.top),
-      repoCommon: git(repo, ...worktreeArgs.common), worktreeCommon: git(worktree, ...worktreeArgs.common),
-      branch: git(worktree, ...worktreeArgs.branch), unmerged: git(worktree, ...worktreeArgs.unmerged),
-    }, repo, worktree, card.id);
-    if (problem) throw new Error(problem);
-    return found;
-  }
-  /** `location` without blocking the event loop. */
-  private async locationAsync(card: Card, allowFailed = false) {
+  /** The card's reviewed run and worktree, after confirming in Git that the worktree is the card's, on its branch, with no conflicts. */
+  private async location(card: Card, allowFailed = false) {
     const found = this.reviewedRun(card, allowFailed), { repo, worktree } = found;
     const [repoTop, worktreeTop, repoCommon, worktreeCommon, branch, unmerged] = await Promise.all([
-      readGit(repo, ...worktreeArgs.top), readGit(worktree, ...worktreeArgs.top), readGit(repo, ...worktreeArgs.common),
-      readGit(worktree, ...worktreeArgs.common), readGit(worktree, ...worktreeArgs.branch), readGit(worktree, ...worktreeArgs.unmerged)]);
+      git(repo, ...worktreeArgs.top), git(worktree, ...worktreeArgs.top), git(repo, ...worktreeArgs.common),
+      git(worktree, ...worktreeArgs.common), git(worktree, ...worktreeArgs.branch), git(worktree, ...worktreeArgs.unmerged)]);
     const problem = worktreeProblem({ repoTop, worktreeTop, repoCommon, worktreeCommon, branch, unmerged }, repo, worktree, card.id);
     if (problem) throw new Error(problem);
     return found;
   }
 
-
-  private snapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
-    const { repo, worktree, run } = this.location(card);
+  /**
+   * The reviewed run's diff. Git runs for a while, and a new attempt can start in the same worktree meanwhile; its
+   * files would then come back under the old run's id. A snapshot whose run is no longer the latest reviewed one is
+   * discarded instead.
+   */
+  private async snapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
+    const result = await this.readSnapshot(card, includeFiles, summary);
+    const latest = this.board.listRuns(card.id)[0];
+    if (latest?.id !== result.runId || latest.status !== "review") throw new Error("A newer attempt started while Alice read this review; refresh it");
+    return result;
+  }
+  private async readSnapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
+    const { repo, worktree, run } = await this.location(card);
     // The fingerprint keys on the merge base, not the branch tip: committing the reviewed work (as opening a PR
     // does) moves HEAD without changing the tree, and must not mark the loaded diff stale.
-    const main = git(repo, "rev-parse", "main"), branch = git(worktree, "rev-parse", "HEAD");
-    const base = git(worktree, "merge-base", main, branch);
+    const [main, branch] = await Promise.all([git(repo, "rev-parse", "main"), git(worktree, "rev-parse", "HEAD")]);
+    const base = await git(worktree, "merge-base", main, branch);
     const temp = mkdtempSync(join(tmpdir(), "alice-review-"));
     try {
       const index = join(temp, "index");
       // Seed from the worktree's own index: its stat cache lets `add -A` rehash only changed files.
       // A fresh read-tree makes git rehash the whole tree (about 0.5s on a 3 GB worktree).
       try {
-        const source = resolve(worktree, git(worktree, "rev-parse", "--git-path", "index"));
+        const source = resolve(worktree, await git(worktree, "rev-parse", "--git-path", "index"));
         copyFileSync(source, index);
         // Git decides whether an entry is "racily clean" by comparing file times with the index file's own
         // time, so the copy must keep the original's, or a same-second edit could be missed.
         const { atime, mtime } = statSync(source);
         utimesSync(index, atime, mtime);
       }
-      catch { gitCommand(worktree, ["read-tree", "HEAD"], index); }
-      gitCommand(worktree, ["add", "-A"], index);
-      const tree = gitCommand(worktree, ["write-tree"], index);
+      catch { await gitCommand(worktree, ["read-tree", "HEAD"], index); }
+      await gitCommand(worktree, ["add", "-A"], index);
+      const tree = await gitCommand(worktree, ["write-tree"], index);
       const fingerprint = createHash("sha256").update(JSON.stringify({ run: run.id, main, base, tree })).digest("hex");
       const work = `${run.id}:${tree}`;
-      if (!includeFiles && !summary) return { fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths: [] as string[], patchChars: null as number | null, unsupported: false };
-      const paths = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
+      if (!includeFiles && !summary) return { runId: run.id, fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths: [] as string[], patchChars: null as number | null, unsupported: false };
+      const paths = (await gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", base, tree], undefined, true)).split("\0").filter(Boolean);
       if (summary) {
         let patchChars: number | null = null;
         // A diff too big for the buffer counts as infinitely large, so a board's size limit still catches it.
         if (summary.measureChars && paths.length) {
-          try { patchChars = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree], undefined, true, 512 * 1024 * 1024).length; }
+          try { patchChars = (await gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree], undefined, true, 512 * 1024 * 1024)).length; }
           catch { patchChars = Number.POSITIVE_INFINITY; }
         }
         // Binary files, symlinks and submodules need a person; modes and numstat show them without reading patches.
-        const raw = paths.length ? gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--raw", "--numstat", "--no-color", base, tree], undefined, true, 64 * 1024 * 1024) : "";
+        const raw = paths.length ? await gitCommand(worktree, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--raw", "--numstat", "--no-color", base, tree], undefined, true, 64 * 1024 * 1024) : "";
         const unsupported = /^:(120000|160000) |^:\d+ (120000|160000) |^-\t-\t/m.test(raw);
-        return { fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths, patchChars, unsupported };
+        return { runId: run.id, fingerprint, work, tree, main, files: [] as ReviewDiff["files"], paths, patchChars, unsupported };
       }
       if (paths.length > 200) throw new Error("Review has more than 200 changed files; inspect the worktree outside Alice");
       // One diff for every file, split at each header, instead of one git process per file. Git lists files
       // and emits patches in the same path order; if the counts ever disagree, fall back to per-file diffs.
       const diffArgs = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", base, tree];
-      const patches = gitCommand(worktree, diffArgs, undefined, true).split(/^(?=diff --git )/m).filter(Boolean);
-      const files = paths.map((path, i) => ({ path, patch: patches.length === paths.length ? patches[i].trim() : gitCommand(worktree, [...diffArgs, "--", path]) }));
+      const patches = (await gitCommand(worktree, diffArgs, undefined, true)).split(/^(?=diff --git )/m).filter(Boolean);
+      const files: ReviewDiff["files"] = [];
+      for (const [i, path] of paths.entries()) files.push({ path, patch: patches.length === paths.length ? patches[i].trim() : await gitCommand(worktree, [...diffArgs, "--", path]) });
       if (files.reduce((size, file) => size + file.patch.length, 0) > 2_000_000) throw new Error("Review diff exceeds 2 MB; inspect the worktree outside Alice");
-      return { fingerprint, work, tree, main, files, paths, patchChars: null as number | null, unsupported: false };
+      return { runId: run.id, fingerprint, work, tree, main, files, paths, patchChars: null as number | null, unsupported: false };
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }
 
   // Git refuses a fast-forward that would overwrite uncommitted edits at the repository root. Name the overlap
   // before approval starts so it fails early and clearly instead of as a raw "merge failed" after verification.
-  localConflicts(card: Card): string[] {
-    const { repo, worktree } = this.location(card);
-    const fields = gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true).split("\0");
+  async localConflicts(card: Card): Promise<string[]> {
+    const { repo, worktree } = await this.location(card);
+    const fields = (await gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true)).split("\0");
     const dirty: string[] = [];
     for (let i = 0; i < fields.length; i++) {
       const entry = fields[i];
@@ -413,46 +395,59 @@ export class Integration {
       if (entry[0] === "R" || entry[0] === "C") dirty.push(fields[++i]); // Renames and copies carry their source path next.
     }
     if (!dirty.length) return [];
-    const { tree } = this.snapshot(card, false);
-    const base = git(worktree, "merge-base", git(repo, "rev-parse", "main"), git(worktree, "rev-parse", "HEAD"));
-    const changed = gitCommand(worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, tree], undefined, true).split("\0").filter(Boolean);
+    const { tree } = await this.snapshot(card, false);
+    const base = await git(worktree, "merge-base", await git(repo, "rev-parse", "main"), await git(worktree, "rev-parse", "HEAD"));
+    const changed = (await gitCommand(worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, tree], undefined, true)).split("\0").filter(Boolean);
     const overlaps = (a: string, b: string) => a === b || a.startsWith(b.endsWith("/") ? b : b + "/") || b.startsWith(a.endsWith("/") ? a : a + "/");
     return [...new Set(dirty.filter(path => changed.some(file => overlaps(path, file))))];
   }
 
-  // Cheap staleness check: the fingerprint alone, without building any patches.
-  reviewFingerprint(card: Card): string { return this.snapshot(card, false).fingerprint; }
+  /**
+   * A snapshot for the read-only entry points below. The board, the diff viewer, auto-review and auto-pull-request all
+   * ask for the same card's fingerprint at once; overlapping asks share one set of Git calls.
+   */
+  private sharedSnapshot(card: Card, includeFiles: boolean, summary?: { measureChars: boolean }) {
+    // Keyed by the run under review, so a request after a new attempt never joins a read of the old one.
+    const key = `${card.id}\0${this.board.listRuns(card.id)[0]?.id ?? ""}\0${card.status}\0${includeFiles}\0${summary ? summary.measureChars : "-"}`;
+    return this.snapshots.run(key, () => this.snapshot(card, includeFiles, summary));
+  }
 
-  /** The fingerprint and the work it covers (run and tree), from one snapshot. */
-  reviewState(card: Card): { fingerprint: string; work: string } {
-    const { fingerprint, work } = this.snapshot(card, false);
-    return { fingerprint, work };
+  // Cheap staleness check: the fingerprint alone, without building any patches.
+  async reviewFingerprint(card: Card): Promise<string> { return (await this.sharedSnapshot(card, false)).fingerprint; }
+
+  /** The fingerprint, the work it covers (run and tree) and the run it belongs to, from one snapshot. */
+  async reviewState(card: Card): Promise<{ fingerprint: string; work: string; runId: string }> {
+    const { fingerprint, work, runId } = await this.sharedSnapshot(card, false);
+    return { fingerprint, work, runId };
   }
 
   /** The paths that differ between two `work` values, to say what changed. Empty when the run changed or Git cannot tell. */
-  workChanges(card: Card, before: string, after: string): string[] {
+  async workChanges(card: Card, before: string, after: string): Promise<string[]> {
     const [run, from] = before.split(":"), [nextRun, to] = after.split(":");
     if (run !== nextRun || !from || !to) return [];
-    try { return gitCommand(this.location(card).worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", from, to], undefined, true).split("\0").filter(Boolean); }
+    try { return (await gitCommand((await this.location(card)).worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", from, to], undefined, true)).split("\0").filter(Boolean); }
     catch { return []; }
   }
 
   /** Changed paths, and the patch size when `measureChars`, without the diff viewer's 200-file and 2 MB caps. */
-  reviewSummary(card: Card, measureChars: boolean): ReviewSummary {
-    const { fingerprint, work, paths, patchChars, unsupported } = this.snapshot(card, false, { measureChars });
+  async reviewSummary(card: Card, measureChars: boolean): Promise<ReviewSummary> {
+    const { fingerprint, work, paths, patchChars, unsupported } = await this.sharedSnapshot(card, false, { measureChars });
     return { fingerprint, work, paths, patchChars, unsupported };
   }
 
-  /** Notes how many files the card's reviewed run changes, so Review tiles can say Approve or Accept findings. Best effort. */
-  recordChangedFiles(card: Card): void {
+  /** Notes how many files the card's reviewed run changes, so Review tiles can say Approve or Accept findings. Best effort; never rejects. */
+  async recordChangedFiles(card: Card): Promise<void> {
     const run = this.board.listRuns(card.id)[0];
     if (card.status !== "review" || run?.status !== "review") return;
-    try { this.board.recordChangedFiles(run.id, this.reviewSummary(card, false).paths.length); } catch { /* The tile just stays unlabeled. */ }
+    // Counted on the run the snapshot read, which a new attempt started meanwhile does not change.
+    try { const summary = await this.sharedSnapshot(card, false, { measureChars: false }); this.board.recordChangedFiles(summary.runId, summary.paths.length); }
+    catch { /* The tile just stays unlabeled. */ }
   }
 
-  review(card: Card): ReviewDiff {
-    const { fingerprint, files } = this.snapshot(card, true);
-    return { fingerprint, files };
+  /** The diff under review, and `runId`, the run it was read from. */
+  async review(card: Card): Promise<ReviewDiff & { runId: string }> {
+    const { fingerprint, files, runId } = await this.sharedSnapshot(card, true);
+    return { fingerprint, files, runId };
   }
 
   // A merge parent proves the branch was deliberately integrated. An old, unchanged
@@ -470,18 +465,18 @@ export class Integration {
   private async reconcile(): Promise<void> {
     for (const { card } of this.board.listExternalMergeCandidates()) {
       try {
-        const { repo, worktree, run } = await this.locationAsync(card, true);
-        const status = () => gitCommandAsync(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], true);
-        if (await status() || await readGit(worktree, "ls-files", "-u")) continue;
-        const candidate = await readGit(worktree, "rev-parse", "HEAD");
-        if (!await isAncestorAsync(repo, candidate, "main")) continue;
-        const main = await readGit(repo, "rev-parse", "main");
-        const merges = (await readGit(repo, "rev-list", "--first-parent", "--parents", "--merges", `${candidate}..${main}`)).split("\n").filter(Boolean).map(line => line.split(" "));
+        const { repo, worktree, run } = await this.location(card, true);
+        const status = () => gitCommand(worktree, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true);
+        if (await status() || await git(worktree, "ls-files", "-u")) continue;
+        const candidate = await git(worktree, "rev-parse", "HEAD");
+        if (!await isAncestor(repo, candidate, "main")) continue;
+        const main = await git(repo, "rev-parse", "main");
+        const merges = (await git(repo, "rev-list", "--first-parent", "--parents", "--merges", `${candidate}..${main}`)).split("\n").filter(Boolean).map(line => line.split(" "));
         let merged: string[] | undefined;
         for (const [merge, firstParent, ...others] of merges) {
-          if (others.includes(candidate) && await readGit(repo, "rev-parse", `${merge}^{tree}`) !== await readGit(repo, "rev-parse", `${firstParent}^{tree}`)) { merged = [merge, firstParent, ...others]; break; }
+          if (others.includes(candidate) && await git(repo, "rev-parse", `${merge}^{tree}`) !== await git(repo, "rev-parse", `${firstParent}^{tree}`)) { merged = [merge, firstParent, ...others]; break; }
         }
-        if (!merged || await readGit(repo, "rev-parse", "main") !== main || await readGit(worktree, "rev-parse", "HEAD") !== candidate || await status()) continue;
+        if (!merged || await git(repo, "rev-parse", "main") !== main || await git(worktree, "rev-parse", "HEAD") !== candidate || await status()) continue;
         // Git ran while the card could change; record only if it is still a candidate.
         if (!this.board.listExternalMergeCandidates().some(item => item.card.id === card.id)) continue;
         this.board.recordExternalIntegration(card.id, run.id, candidate, merged[0]);
@@ -574,35 +569,35 @@ export class Integration {
       return result("deferred", this.board.deferDependentUpdate(card.id, parent.id) ? `Not brought up to date with main ${after} yet: ${why}. Alice updates it once that finishes` : "");
     };
     if (busy()) return defer();
-    const { repo, worktree } = await this.locationAsync(card);
+    const { repo, worktree } = await this.location(card);
     for (const name of ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD"])
-      if (existsSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", name)))) return result("skipped", `Not brought up to date with main ${after}: the card worktree is in the middle of a Git operation (${name})`);
+      if (existsSync(resolve(worktree, await git(worktree, "rev-parse", "--git-path", name)))) return result("skipped", `Not brought up to date with main ${after}: the card worktree is in the middle of a Git operation (${name})`);
     const prMode = this.board.integrationFor(card.repo) === "github-pr";
     const mainName = prMode ? "origin/main" : "main";
-    const main = await readGit(repo, "rev-parse", "--verify", prMode ? "refs/remotes/origin/main" : "refs/heads/main");
-    const head = await readGit(worktree, "rev-parse", "HEAD");
-    if (await isAncestorAsync(worktree, main, head)) return result("current", "");
+    const main = await git(repo, "rev-parse", "--verify", prMode ? "refs/remotes/origin/main" : "refs/heads/main");
+    const head = await git(worktree, "rev-parse", "HEAD");
+    if (await isAncestor(worktree, main, head)) return result("current", "");
     const temp = mkdtempSync(join(tmpdir(), "alice-dependent-"));
     try {
       // The worktree as it stands, uncommitted and untracked files included, as a tree. See `snapshot`.
       const index = join(temp, "index");
-      try { copyFileSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", "index")), index); }
-      catch { await gitCommandAsync(worktree, ["read-tree", "HEAD"], false, index); }
-      await gitCommandAsync(worktree, ["add", "-A"], false, index);
-      const work = await gitCommandAsync(worktree, ["write-tree"], false, index);
+      try { copyFileSync(resolve(worktree, await git(worktree, "rev-parse", "--git-path", "index")), index); }
+      catch { await gitCommand(worktree, ["read-tree", "HEAD"], index); }
+      await gitCommand(worktree, ["add", "-A"], index);
+      const work = await gitCommand(worktree, ["write-tree"], index);
       // What is staged, from a copy of the real index so it is only read. Usually the same as HEAD.
       const stagedIndex = join(temp, "staged");
-      copyFileSync(resolve(worktree, await readGit(worktree, "rev-parse", "--git-path", "index")), stagedIndex);
-      const staged = await gitCommandAsync(worktree, ["write-tree"], false, stagedIndex);
-      const headTree = await readGit(worktree, "rev-parse", `${head}^{tree}`);
+      copyFileSync(resolve(worktree, await git(worktree, "rev-parse", "--git-path", "index")), stagedIndex);
+      const staged = await gitCommand(worktree, ["write-tree"], stagedIndex);
+      const headTree = await git(worktree, "rev-parse", `${head}^{tree}`);
       const conflict = (files: string[], what = "conflicts in") => {
         const details = `Bringing the card up to date with ${mainName} (${main.slice(0, 12)}) ${after} ${what} ${files.join(", ")}. Alice changed nothing in the card worktree.`;
         this.board.recordMergeFailure(card.id, files, details);
         return result("conflict", `${details} Choose Fix conflict with Pi, or resolve it yourself`);
       };
       // The branch's own commits with main: a fast-forward when it has none.
-      const ownCommits = !await isAncestorAsync(worktree, head, main);
-      const branch = ownCommits ? await mergeTreeAsync(worktree, [head, main]) : { tree: await readGit(worktree, "rev-parse", `${main}^{tree}`), conflicts: [] };
+      const ownCommits = !await isAncestor(worktree, head, main);
+      const branch = ownCommits ? await mergeTreeAsync(worktree, [head, main]) : { tree: await git(worktree, "rev-parse", `${main}^{tree}`), conflicts: [] };
       if (branch.conflicts.length) return conflict(branch.conflicts);
       const merged = await mergeTreeAsync(worktree, [`--merge-base=${head}`, branch.tree, work]);
       if (merged.conflicts.length) return conflict(merged.conflicts);
@@ -610,39 +605,47 @@ export class Integration {
       if (stagedMerge.conflicts.length) return conflict(stagedMerge.conflicts, "conflicts with changes staged in");
       const collisions = await ignoredCollisions(worktree, work, merged.tree);
       if (collisions.length) return conflict(collisions, "would overwrite local files Git ignores:");
-      // From here on nothing awaits, so no request can approve or start the card halfway through.
-      const current = this.board.getCard(card.id);
-      if (current?.status !== "review" || this.board.listRuns(card.id)[0]?.id !== run.id) return result("skipped", `Not brought up to date with main ${after}: the card changed while Alice was checking it`);
-      if (busy()) return defer();
-      const cardRef = cardBranch(repo, card.id), ref = `refs/heads/${cardRef}`;
-      const newHead = ownCommits
-        ? git(worktree, ...commitIdentityArgs(worktree), "commit-tree", branch.tree, "-p", head, "-p", main, "-m", `Merge ${mainName} into ${cardRef}`, "-m", `${parent.title} (${parent.id}) merged; Alice brought this card up to date.`)
-        : main;
-      git(worktree, "update-ref", "-m", `alice: update onto ${mainName} ${after}`, ref, newHead, head);
-      try { gitCommand(worktree, ["read-tree", "-m", "-u", work, merged.tree], index); }
-      catch (error) {
-        git(worktree, "update-ref", ref, head, newHead);
-        throw error;
-      }
-      // The branch moved under the real index. Point it at the new commit, so the card's work stays unstaged as before,
-      // or at the merged staged changes when some were staged. A refresh after `read-tree` only updates file stats.
-      if (staged === headTree) git(worktree, "reset", "-q");
-      else {
-        git(worktree, "read-tree", stagedMerge.tree);
-        try { git(worktree, "update-index", "-q", "--refresh"); } catch { /* Exit 1 only lists files that differ from the index. */ }
-      }
-      this.board.clearMergeFailure(card.id);
-      const requeued = this.board.requeueAutoReview(card.id, run.id);
-      return result("updated", `Brought up to date with ${mainName} (${main.slice(0, 12)}) ${after}${ownCommits ? ", with a merge commit on the card branch" : ""}.${requeued ? " Agent review runs again on the result." : " Refresh the diff to review it against the new main."}`);
+      // Git is asynchronous, so the writes below run in the repository's write queue (no approval, acceptance or reset
+      // of this repository interleaves) with the card held as for an approval (no new attempt or review action lands).
+      return await this.writes.run(repo, async () => {
+        const current = this.board.getCard(card.id);
+        if (current?.status !== "review" || this.board.listRuns(card.id)[0]?.id !== run.id) return result("skipped", `Not brought up to date with main ${after}: the card changed while Alice was checking it`);
+        if (busy()) return defer();
+        this.board.holdCard(card.id, run.id);
+        try {
+          const cardRef = await cardBranch(repo, card.id), ref = `refs/heads/${cardRef}`;
+          const newHead = ownCommits
+            ? await git(worktree, ...await commitIdentityArgs(worktree), "commit-tree", branch.tree, "-p", head, "-p", main, "-m", `Merge ${mainName} into ${cardRef}`, "-m", `${parent.title} (${parent.id}) merged; Alice brought this card up to date.`)
+            : main;
+          await git(worktree, "update-ref", "-m", `alice: update onto ${mainName} ${after}`, ref, newHead, head);
+          try { await gitCommand(worktree, ["read-tree", "-m", "-u", work, merged.tree], index); }
+          catch (error) {
+            await git(worktree, "update-ref", ref, head, newHead);
+            throw error;
+          }
+          // The branch moved under the real index. Point it at the new commit, so the card's work stays unstaged as before,
+          // or at the merged staged changes when some were staged. A refresh after `read-tree` only updates file stats.
+          if (staged === headTree) await git(worktree, "reset", "-q");
+          else {
+            await git(worktree, "read-tree", stagedMerge.tree);
+            try { await git(worktree, "update-index", "-q", "--refresh"); } catch { /* Exit 1 only lists files that differ from the index. */ }
+          }
+        } finally { this.board.releaseApproval(card.id); }
+        this.board.clearMergeFailure(card.id);
+        const requeued = this.board.requeueAutoReview(card.id, run.id);
+        return result("updated", `Brought up to date with ${mainName} (${main.slice(0, 12)}) ${after}${ownCommits ? ", with a merge commit on the card branch" : ""}.${requeued ? " Agent review runs again on the result." : " Refresh the diff to review it against the new main."}`);
+      });
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }
 
-  withdraw(card: Card): Card {
-    const approval = this.board.getApproval(card.id);
-    if (card.status !== "review" || !approval) throw new Error("No pending approval to withdraw");
-    if (approval.preparedHead && isAncestor(card.repo, approval.preparedHead, "main")) throw new Error("This approval reached main; inspect it before withdrawing");
-    this.board.cancelApproval(card.id, approval.runId, true);
-    return this.board.getCard(card.id)!;
+  withdraw(card: Card): Promise<Card> {
+    return this.writes.run(card.repo, async () => {
+      const approval = this.board.getApproval(card.id);
+      if (card.status !== "review" || !approval) throw new Error("No pending approval to withdraw");
+      if (approval.preparedHead && await isAncestor(card.repo, approval.preparedHead, "main")) throw new Error("This approval reached main; inspect it before withdrawing");
+      this.board.cancelApproval(card.id, approval.runId, true);
+      return this.board.getCard(card.id)!;
+    });
   }
 
   /**
@@ -662,7 +665,7 @@ export class Integration {
   async openPullRequest(card: Card, reviewedFingerprint: string, github: GitHub, draft?: { title: string; body: string }, pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request" = "operator", prechecked?: () => Promise<string | null>, handoff?: string): Promise<Card> {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integration !== "github-pr") throw new Error("This board merges locally; use Approve and merge into local main");
-    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Alice only pushes ${cardBranch(card.repo, card.id)}; update that pull request yourself, or clear the link`);
+    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Alice only pushes ${await cardBranch(card.repo, card.id)}; update that pull request yourself, or clear the link`);
     const slug = boardGithubRepo(repoBoard);
     return this.trackPush(card.id, async (step, push) => {
       step("Checking GitHub access");
@@ -672,63 +675,69 @@ export class Integration {
         step("Waiting for the hook check that started when the run reached Review");
         passed = await prechecked();
       }
-      const { repo, worktree, run } = this.location(card);
-      if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
-      if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
-      const inspected = this.snapshot(card, false);
-      if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
-      const branch = cardBranch(repo, card.id);
-      // An open PR keeps its title and body; only a new one must pass the repository's title check.
-      const existing = await github.findByBranch(slug, branch);
-      const hasOpenPr = existing?.state === "OPEN";
-      const title = draft ? draft.title.replace(/\s+/g, " ").trim().slice(0, 250) : cardTitle(card);
-      const semantic = readPullRequestRules(worktree).semantic;
-      const problem = !hasOpenPr && semantic ? semanticTitleProblem(title, semantic) : "";
-      if (problem) throw new Error(`Pull request title "${title}" would fail ${semantic!.source}: ${problem}. Edit the title in the Approve dialog`);
-      if (draft && !title) throw new Error("Pull request title is required");
-      step("Committing the reviewed work");
-      const candidate = this.commitReviewed(card, worktree, inspected.tree);
-      step("Fetching origin");
-      await fetchOrigin(repo);
-      if (!git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
-      const state = remoteBranchState(repo, branch, candidate, null);
-      if (state === "diverged") {
-        step(`Merging origin/${branch} into the card worktree`);
-        const { merged, head } = mergeRemoteBranch(worktree, branch);
-        throw new Error(`Merged ${merged} commit${merged === 1 ? "" : "s"} from origin/${branch} into the card worktree (now ${head.slice(0, 12)}), keeping the card's own commits. Nothing was pushed. The merged result is new work, so refresh the diff: verification and review run on it again before it is pushed`);
-      }
-      if (state === "on-origin") {
-        // Origin is ahead with nothing of ours missing: catch the worktree up so the next attempt builds on it.
-        step(`Fast-forwarding the card worktree to origin/${branch}`);
-        git(worktree, "merge", "--ff-only", "--quiet", `refs/remotes/origin/${branch}`);
-      } else {
-        const checked = passed === candidate;
-        step(checked ? `Pushing ${branch} (its pre-push hook already passed when the run reached Review)` : `Pushing ${branch} (the repository's pre-push hooks run first)`);
-        // A plain push: if the branch on GitHub moved after the fetch, Git still refuses instead of overwriting it.
-        try { await push(worktree, `${candidate}:refs/heads/${branch}`, checked ? ["--no-verify"] : []); }
-        catch (error) {
-          if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
-          // Origin's branch moved between the fetch and the push. Git refused rather than overwrite it; do not retry.
-          if (error instanceof PushError && /! \[(remote )?rejected\]|non-fast-forward|fetch first/.test(error.output))
-            throw new Error(`${branch} on origin changed while Alice was pushing, so Git refused the push and nothing was overwritten. Approve again to merge the new commits into the card worktree\n\n${error.message}`);
-          throw error;
-        }
-      }
-      step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
-      const why = { "operator": "changes the operator reviewed and approved in Alice", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Alice's agent reviewer approved, pushed automatically without human review", "auto-pull-request": "changes pushed automatically when the run reached Review, without human review" }[pushedBy];
-      const pushed = state === "push" ? { sha: candidate, why } : null;
-      const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body }, handoff);
-      // A failed findings comment is kept and retried by the GitHub sync rather than lost.
-      if (handoff && !pr.handoffPosted) this.board.setHandoffPending(run.id, true);
-      // Explicit approval is the person's decision on a handoff draft: it becomes ready for review.
-      if (pushedBy === "operator" && this.board.autoReviewHandoff(run.id) !== null) {
-        await github.ready(slug, pr.number);
-        this.board.resolveHandoff(run.id);
-      }
-      this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
-      this.board.recordPullRequestPush(card.id, run.id);
-      return this.board.getCard(card.id)!;
+      const { repo, worktree, run } = await this.location(card);
+      // As in `approve`: hold the card before Git commits its work, so no attempt or review write lands meanwhile.
+      this.board.reserveApproval(card.id, run.id);
+      try { return await this.pushReviewed(card, reviewedFingerprint, github, draft, pushedBy, step, push, passed, slug, repo, worktree, run, handoff); }
+      finally { this.board.releaseApproval(card.id); }
     });
+  }
+  private async pushReviewed(card: Card, reviewedFingerprint: string, github: GitHub, draft: { title: string; body: string } | undefined,
+    pushedBy: "operator" | "ci-fix" | "agent-review" | "auto-pull-request", step: (name: string) => void,
+    push: (cwd: string, refspec: string, flags?: string[]) => Promise<void>, passed: string | null, slug: string, repo: string, worktree: string, run: Run, handoff?: string): Promise<Card> {
+    const inspected = await this.snapshot(card, false);
+    if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
+    const branch = await cardBranch(repo, card.id);
+    // An open PR keeps its title and body; only a new one must pass the repository's title check.
+    const existing = await github.findByBranch(slug, branch);
+    const hasOpenPr = existing?.state === "OPEN";
+    const title = draft ? draft.title.replace(/\s+/g, " ").trim().slice(0, 250) : cardTitle(card);
+    const semantic = readPullRequestRules(worktree).semantic;
+    const problem = !hasOpenPr && semantic ? semanticTitleProblem(title, semantic) : "";
+    if (problem) throw new Error(`Pull request title "${title}" would fail ${semantic!.source}: ${problem}. Edit the title in the Approve dialog`);
+    if (draft && !title) throw new Error("Pull request title is required");
+    step("Committing the reviewed work");
+    const candidate = await this.commitReviewed(card, worktree, inspected.tree);
+    step("Fetching origin");
+    await fetchOrigin(repo);
+    if (!await git(repo, "rev-list", "refs/remotes/origin/main.." + candidate)) throw new Error("This card has no commits that are not already on origin/main");
+    const state = await remoteBranchState(repo, branch, candidate, null);
+    if (state === "diverged") {
+      step(`Merging origin/${branch} into the card worktree`);
+      const { merged, head } = await mergeRemoteBranch(worktree, branch);
+      throw new Error(`Merged ${merged} commit${merged === 1 ? "" : "s"} from origin/${branch} into the card worktree (now ${head.slice(0, 12)}), keeping the card's own commits. Nothing was pushed. The merged result is new work, so refresh the diff: verification and review run on it again before it is pushed`);
+    }
+    if (state === "on-origin") {
+      // Origin is ahead with nothing of ours missing: catch the worktree up so the next attempt builds on it.
+      step(`Fast-forwarding the card worktree to origin/${branch}`);
+      await git(worktree, "merge", "--ff-only", "--quiet", `refs/remotes/origin/${branch}`);
+    } else {
+      const checked = passed === candidate;
+      step(checked ? `Pushing ${branch} (its pre-push hook already passed when the run reached Review)` : `Pushing ${branch} (the repository's pre-push hooks run first)`);
+      // A plain push: if the branch on GitHub moved after the fetch, Git still refuses instead of overwriting it.
+      try { await push(worktree, `${candidate}:refs/heads/${branch}`, checked ? ["--no-verify"] : []); }
+      catch (error) {
+        if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
+        // Origin's branch moved between the fetch and the push. Git refused rather than overwrite it; do not retry.
+        if (error instanceof PushError && /! \[(remote )?rejected\]|non-fast-forward|fetch first/.test(error.output))
+          throw new Error(`${branch} on origin changed while Alice was pushing, so Git refused the push and nothing was overwritten. Approve again to merge the new commits into the card worktree\n\n${error.message}`);
+        throw error;
+      }
+    }
+    step(hasOpenPr ? "Updating the pull request" : "Opening the pull request");
+    const why = { "operator": "changes the operator reviewed and approved in Alice", "ci-fix": "a fix for the failing CI, pushed automatically without human review", "agent-review": "changes Alice's agent reviewer approved, pushed automatically without human review", "auto-pull-request": "changes pushed automatically when the run reached Review, without human review" }[pushedBy];
+    const pushed = state === "push" ? { sha: candidate, why } : null;
+    const pr = await this.ensurePullRequest(card, run.output, slug, github, pushed, { title, body: draft ? draft.body : card.body }, handoff);
+    // A failed findings comment is kept and retried by the GitHub sync rather than lost.
+    if (handoff && !pr.handoffPosted) this.board.setHandoffPending(run.id, true);
+    // Explicit approval is the person's decision on a handoff draft: it becomes ready for review.
+    if (pushedBy === "operator" && this.board.autoReviewHandoff(run.id) !== null) {
+      await github.ready(slug, pr.number);
+      this.board.resolveHandoff(run.id);
+    }
+    this.board.recordPullRequest(card.id, { number: pr.number, url: pr.url, state: "OPEN" });
+    this.board.recordPullRequestPush(card.id, run.id);
+    return this.board.getCard(card.id)!;
   }
 
   /**
@@ -740,12 +749,12 @@ export class Integration {
    * A hook that rewrites files (a formatter) changes the diff under review, which then shows its changes.
    */
   async checkHooks(card: Card, signal: AbortSignal, step: (text: string) => void): Promise<{ candidate: string; state: "passed" | "unchecked"; detail: string }> {
-    const { worktree } = this.location(card);
+    const { worktree } = await this.location(card);
     await gitAsync(worktree, ["add", "-A"], signal);
     if (await gitAsync(worktree, ["diff", "--cached", "--name-only"], signal)) {
       await gitAsync(worktree, ["diff", "--cached", "--check"], signal);
       step("Committing the card's work (the repository's pre-commit hooks run)");
-      try { await gitAsync(worktree, [...commitIdentityArgs(worktree), "commit", "-m", `Alice card: ${card.title.slice(0, 70)}`], signal); }
+      try { await gitAsync(worktree, [...await commitIdentityArgs(worktree), "commit", "-m", `Alice card: ${card.title.slice(0, 70)}`], signal); }
       catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         // Identity and message are always set, so a failed commit here is the repository's commit hooks refusing it.
@@ -753,10 +762,10 @@ export class Integration {
         throw new CommitHookError(message, message.slice("commit failed: ".length));
       }
     }
-    if (!clean(worktree)) throw new Error("The card worktree has uncommitted changes after Alice committed it; a hook may have changed files");
-    const candidate = git(worktree, "rev-parse", "HEAD");
+    if (!await clean(worktree)) throw new Error("The card worktree has uncommitted changes after Alice committed it; a hook may have changed files");
+    const candidate = await git(worktree, "rev-parse", "HEAD");
     step("Running the pre-push hook on that commit (git push --dry-run, nothing is pushed)");
-    try { await pushBranch(worktree, `${candidate}:refs/heads/${cardBranch(worktree, card.id)}`, () => {}, { flags: ["--dry-run"], signal }); }
+    try { await pushBranch(worktree, `${candidate}:refs/heads/${await cardBranch(worktree, card.id)}`, () => {}, { flags: ["--dry-run"], signal }); }
     catch (error) {
       if (error instanceof PushError && error.hookFailed) throw new PushHookError(error, candidate);
       if (error instanceof PushError) return { candidate, state: "unchecked", detail: error.message };
@@ -770,7 +779,7 @@ export class Integration {
    * run summary. `pushed` is what Alice just pushed, commented on an open PR; null when nothing was pushed.
    */
   private async ensurePullRequest(card: Card, output: string, slug: string, github: GitHub, pushed: { sha: string; why: string } | null, content?: { title: string; body: string }, handoff?: string): Promise<{ number: number; url: string; handoffPosted: boolean }> {
-    const branch = cardBranch(card.repo, card.id);
+    const branch = await cardBranch(card.repo, card.id);
     const existing = await github.findByBranch(slug, branch);
     let url = existing?.state === "OPEN" ? existing.url : "";
     const summary = (output || "").trim().slice(-3000);
@@ -798,10 +807,10 @@ export class Integration {
     await fetchOrigin(repo);
     const cards: LocalMerge[] = [];
     for (const { card, candidate } of this.board.listLocalMerges(repo)) {
-      if (hasCommit(repo, candidate) && isAncestor(repo, candidate, "refs/remotes/origin/main")) continue;
-      cards.push({ card, candidate, commits: hasCommit(repo, candidate) ? Number(git(repo, "rev-list", "--count", `refs/remotes/origin/main..${candidate}`)) : 0, blocker: publishBlocker(repo, card, candidate) });
+      if (await hasCommit(repo, candidate) && await isAncestor(repo, candidate, "refs/remotes/origin/main")) continue;
+      cards.push({ card, candidate, commits: await hasCommit(repo, candidate) ? Number(await git(repo, "rev-list", "--count", `refs/remotes/origin/main..${candidate}`)) : 0, blocker: await publishBlocker(repo, card, candidate) });
     }
-    return { cards, main: this.mainRecovery(repo) };
+    return { cards, main: await this.mainRecovery(repo) };
   }
 
   /**
@@ -814,7 +823,7 @@ export class Integration {
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.integration !== "github-pr") throw new Error("Switch this board to GitHub pull requests before publishing a card as a pull request");
     if (card.status !== "done") throw new Error("Only a Done card that was merged into local main can be published as a pull request");
-    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Alice only pushes ${cardBranch(card.repo, card.id)}; clear the link first`);
+    if (card.prOverrideUrl) throw new Error(`This card is linked to ${card.prOverrideUrl}. Alice only pushes ${await cardBranch(card.repo, card.id)}; clear the link first`);
     const slug = boardGithubRepo(repoBoard);
     return this.trackPush(card.id, async (step, push) => {
       step("Checking GitHub access");
@@ -825,11 +834,11 @@ export class Integration {
       const merge = this.board.listLocalMerges(repo).find(item => item.card.id === card.id);
       if (!merge) throw new Error("This card was not merged into local main by Alice; there is nothing to publish");
       const { candidate } = merge;
-      const blocker = publishBlocker(repo, card, candidate);
+      const blocker = await publishBlocker(repo, card, candidate);
       if (blocker) throw new Error(blocker);
-      if (isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
-      const branch = cardBranch(repo, card.id);
-      const state = remoteBranchState(repo, branch, candidate, null);
+      if (await isAncestor(repo, candidate, "refs/remotes/origin/main")) throw new Error("This card's approved work is already on origin/main; there is nothing to publish");
+      const branch = await cardBranch(repo, card.id);
+      const state = await remoteBranchState(repo, branch, candidate, null);
       let toPush = candidate;
       let merged = 0;
       if (state === "diverged") {
@@ -837,8 +846,8 @@ export class Integration {
         step(`Merging origin/${branch} into the approved commit`);
         const scratch = mkdtempSync(join(tmpdir(), "alice-publish-merge-"));
         try {
-          git(repo, "worktree", "add", "--detach", scratch, candidate);
-          ({ merged, head: toPush } = mergeRemoteBranch(scratch, branch, true));
+          await git(repo, "worktree", "add", "--detach", scratch, candidate);
+          ({ merged, head: toPush } = await mergeRemoteBranch(scratch, branch, true));
           step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
           try { await push(scratch, `${toPush}:refs/heads/${branch}`); }
           catch (error) {
@@ -847,7 +856,7 @@ export class Integration {
             throw error;
           }
         } finally {
-          try { git(repo, "worktree", "remove", "--force", scratch); } catch { rmSync(scratch, { recursive: true, force: true }); }
+          try { await git(repo, "worktree", "remove", "--force", scratch); } catch { rmSync(scratch, { recursive: true, force: true }); }
         }
       } else if (state === "push") {
         step(`Pushing ${branch} (the repository's pre-push hooks run first)`);
@@ -856,7 +865,7 @@ export class Integration {
       }
       step("Opening the pull request");
       const pr = await this.ensurePullRequest(card, this.board.listRuns(card.id)[0]?.output ?? "", slug, github, state === "on-origin" ? null : { sha: toPush, why: merged ? `work the operator approved in Alice and merged into local main earlier, merged with ${merged} commit${merged === 1 ? "" : "s"} already on the branch, now published as a pull request` : "work the operator approved in Alice and merged into local main earlier, now published as a pull request" });
-      return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: this.mainRecovery(repo) };
+      return { card: this.board.recordPublishedLocalMerge(card.id, candidate, pr), main: await this.mainRecovery(repo) };
     });
   }
 
@@ -865,27 +874,33 @@ export class Integration {
    * tracked changes, and every local commit on its first-parent line is an Alice card merge whose card branch is
    * on origin. Null when local main has no commits that origin/main lacks.
    */
-  mainRecovery(repo: string): MainRecovery | null {
+  async mainRecovery(repo: string): Promise<MainRecovery | null> {
     let head = "";
-    try { head = git(repo, "symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Detached HEAD. */ }
-    if (!hasCommit(repo, "refs/remotes/origin/main") || !hasCommit(repo, "refs/heads/main")) return null;
-    const tip = git(repo, "rev-parse", "refs/heads/main"), originMain = git(repo, "rev-parse", "refs/remotes/origin/main");
-    const local = git(repo, "rev-list", "--first-parent", `${originMain}..${tip}`).split("\n").filter(Boolean);
+    try { head = await git(repo, "symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Detached HEAD. */ }
+    if (!await hasCommit(repo, "refs/remotes/origin/main") || !await hasCommit(repo, "refs/heads/main")) return null;
+    const tip = await git(repo, "rev-parse", "refs/heads/main"), originMain = await git(repo, "rev-parse", "refs/remotes/origin/main");
+    const local = (await git(repo, "rev-list", "--first-parent", `${originMain}..${tip}`)).split("\n").filter(Boolean);
     if (!local.length) return null;
     const recovery = { tip, originMain, recoveryBranch: `alice-recovery/${tip.slice(0, 12)}`, localCommits: local.length };
     const refuse = (reason: string): MainRecovery => ({ ...recovery, resettable: false, reason });
     if (head !== "main") return refuse(`The repository root is ${head ? `on branch ${head}` : "in detached HEAD"}, not main`);
-    const dirty = git(repo, "status", "--porcelain", "--untracked-files=no");
+    const dirty = await git(repo, "status", "--porcelain", "--untracked-files=no");
     if (dirty) return refuse("Local main has uncommitted changes");
     for (const commit of local) {
-      const [, ...parents] = git(repo, "rev-list", "--parents", "-n", "1", commit).split(" ");
-      const id = git(repo, "log", "-1", "--format=%B", commit).match(/^Card: ([\w-]+)$/m)?.[1];
-      const subject = git(repo, "log", "-1", "--format=%s", commit);
+      const [, ...parents] = (await git(repo, "rev-list", "--parents", "-n", "1", commit)).split(" ");
+      const id = (await git(repo, "log", "-1", "--format=%B", commit)).match(/^Card: ([\w-]+)$/m)?.[1];
+      const subject = await git(repo, "log", "-1", "--format=%s", commit);
       if (parents.length < 2 || !id || !subject.startsWith("Merge card: ")) return refuse(`Local main has commit ${commit.slice(0, 12)} (${subject}) that is not an Alice card merge`);
       const card = this.board.getCard(id);
       if (card?.locallyMerged) return refuse(`${card.title} (${id}) is still merged only into local main; publish it as a pull request first`);
-      const onOrigin = (ref: string) => hasCommit(repo, ref) && parents.slice(1).every(parent => isAncestor(repo, parent, ref));
-      if (!cardBranches(id).some(branch => onOrigin(`refs/remotes/origin/${branch}`)) && !onOrigin("refs/remotes/origin/main")) return refuse(`Card ${id}'s merged work is not on origin yet; publish it as a pull request first`);
+      const onOrigin = async (ref: string) => {
+        if (!await hasCommit(repo, ref)) return false;
+        for (const parent of parents.slice(1)) if (!await isAncestor(repo, parent, ref)) return false;
+        return true;
+      };
+      let merged = await onOrigin("refs/remotes/origin/main");
+      for (const branch of cardBranches(id)) merged ||= await onOrigin(`refs/remotes/origin/${branch}`);
+      if (!merged) return refuse(`Card ${id}'s merged work is not on origin yet; publish it as a pull request first`);
     }
     return { ...recovery, resettable: true, reason: "" };
   }
@@ -897,29 +912,32 @@ export class Integration {
    */
   async resetLocalMain(repo: string, confirmedTip: string): Promise<MainRecovery | null> {
     await fetchOrigin(repo);
-    const recovery = this.mainRecovery(repo);
+    return this.writes.run(repo, () => this.resetLocalMainNow(repo, confirmedTip));
+  }
+  private async resetLocalMainNow(repo: string, confirmedTip: string): Promise<MainRecovery | null> {
+    const recovery = await this.mainRecovery(repo);
     if (!recovery) throw new Error("Local main has no commits that origin/main lacks; nothing to reset");
     if (recovery.tip !== confirmedTip) throw new Error("Local main moved since you confirmed; review it again before resetting");
     if (!recovery.resettable) throw new Error(recovery.reason);
     const branch = `refs/heads/${recovery.recoveryBranch}`;
-    if (hasCommit(repo, branch)) {
-      if (git(repo, "rev-parse", branch) !== recovery.tip) throw new Error(`${recovery.recoveryBranch} already exists at another commit`);
-    } else git(repo, "branch", recovery.recoveryBranch, recovery.tip);
-    git(repo, "reset", "--keep", recovery.originMain);
-    return this.mainRecovery(repo);
+    if (await hasCommit(repo, branch)) {
+      if (await git(repo, "rev-parse", branch) !== recovery.tip) throw new Error(`${recovery.recoveryBranch} already exists at another commit`);
+    } else await git(repo, "branch", recovery.recoveryBranch, recovery.tip);
+    await git(repo, "reset", "--keep", recovery.originMain);
+    return await this.mainRecovery(repo);
   }
 
   /** Commits the reviewed worktree on the card branch, if it has uncommitted changes, and returns the commit. */
-  private commitReviewed(card: Card, worktree: string, reviewedTree: string): string {
-    git(worktree, "add", "-A");
-    if (git(worktree, "write-tree") !== reviewedTree) throw new Error("Worktree changed since review; refresh the diff before approving");
-    if (git(worktree, "diff", "--cached", "--name-only")) {
-      git(worktree, "diff", "--cached", "--check");
-      git(worktree, ...commitIdentityArgs(worktree), "commit", "-m", `Alice card: ${card.title.slice(0, 70)}`);
+  private async commitReviewed(card: Card, worktree: string, reviewedTree: string): Promise<string> {
+    await git(worktree, "add", "-A");
+    if (await git(worktree, "write-tree") !== reviewedTree) throw new Error("Worktree changed since review; refresh the diff before approving");
+    if (await git(worktree, "diff", "--cached", "--name-only")) {
+      await git(worktree, "diff", "--cached", "--check");
+      await git(worktree, ...await commitIdentityArgs(worktree), "commit", "-m", `Alice card: ${card.title.slice(0, 70)}`);
     }
-    if (!clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
-    const candidate = git(worktree, "rev-parse", "HEAD");
-    if (git(worktree, "rev-parse", "HEAD^{tree}") !== reviewedTree) throw new Error("Committed work changed since review; refresh the diff before approving");
+    if (!await clean(worktree)) throw new Error("Card worktree changed while committing; inspect it and retry");
+    const candidate = await git(worktree, "rev-parse", "HEAD");
+    if (await git(worktree, "rev-parse", "HEAD^{tree}") !== reviewedTree) throw new Error("Committed work changed since review; refresh the diff before approving");
     return candidate;
   }
 
@@ -929,26 +947,29 @@ export class Integration {
    * Behind main is brought level when that is safe (clean checkout, no rebase conflict). The review diff and its
    * fingerprint were taken against the old main, so the operator still refreshes and approves again.
    */
-  private requireMainCurrent(repo: string) {
-    if (!hasOrigin(repo)) return;
-    const warning = fetchOriginBestEffort(repo, this.fetchTimeoutMs);
+  private async requireMainCurrent(repo: string) {
+    if (!await hasOrigin(repo)) return;
+    const warning = await fetchOriginBestEffort(repo, this.fetchTimeoutMs);
     if (warning) { this.warnings.push(warning); this.warnings.splice(0, this.warnings.length - 20); console.warn(`${repo}: ${warning}`); }
-    const state = compareWithOriginMain(repo);
+    const state = await compareWithOriginMain(repo);
     if (!state) return;
-    const synced = syncMainWithOrigin(repo, state);
+    const synced = await syncMainWithOrigin(repo, state);
     if (synced) throw new Error(`${synced}. Refresh the diff and approve again`);
     const blocked = behindOriginMessage(repo, state);
     if (blocked) throw new Error(blocked);
   }
 
   /** A research run answers in its final message and leaves no diff; accepting it closes the card without Git. */
-  acceptFindings(card: Card, reviewedFingerprint: string): Card {
-    const { run } = this.location(card);
-    if (this.board.getAutoReviewJob(run.id)?.state === "running") throw new Error("Agent review is in progress; wait for its result");
-    const inspected = this.snapshot(card, true);
-    if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before accepting");
-    if (inspected.files.length) throw new Error("This run changed files; approve or request changes instead");
-    return this.board.acceptFindings(card.id, run.id);
+  acceptFindings(card: Card, reviewedFingerprint: string): Promise<Card> {
+    return this.writes.run(card.repo, async () => {
+      card = this.board.getCard(card.id) ?? card;
+      const { run } = await this.location(card);
+      if (this.board.getAutoReviewJob(run.id)?.state === "running") throw new Error("Agent review is in progress; wait for its result");
+      const inspected = await this.snapshot(card, true);
+      if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before accepting");
+      if (inspected.files.length) throw new Error("This run changed files; approve or request changes instead");
+      return this.board.acceptFindings(card.id, run.id);
+    });
   }
 
   /** Marks the card Done, then pushes main when the board asks for it. A failed push never undoes the merge; it goes in the card's history. */
@@ -956,66 +977,78 @@ export class Integration {
     try { this.onDelivered(kind); } catch { /* telemetry never affects a merge */ }
     return value;
   }
-  private completeAndPush(card: Card, runId: string, candidate: string, repo: string): Card {
+  private async completeAndPush(card: Card, runId: string, candidate: string, repo: string): Promise<Card> {
     const done = this.board.completeApproval(card.id, runId, candidate);
     this.afterMerge(card.id);
     if (!this.board.boardForRepo(card.repo)?.pushMainAfterMerge) return done;
     try {
-      execFileSync("git", ["-C", repo, "push", "origin", "main"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
+      await run("git", ["-C", repo, "push", "origin", "main"], { timeout: 120_000 });
       this.board.noteCard(card.id, "Pushed main to origin after the merge");
     } catch (error) {
-      const detail = (error as { stderr?: string }).stderr?.trim() || (error instanceof Error ? error.message : String(error));
+      const detail = (error as CommandError).stderr?.trim() || (error instanceof Error ? error.message : String(error));
       this.board.noteCard(card.id, `Merged into local main, but pushing main to origin failed: ${detail.slice(0, 500)}. Push it yourself.`);
     }
     return done;
   }
-  approve(card: Card, reviewedFingerprint: string): Card {
+  /**
+   * Merges the reviewed card into local main. Approvals on one repository run one at a time, as they did when Git was
+   * synchronous: each checks main, merges in a scratch worktree and fast-forwards main, and two must not interleave.
+   */
+  approve(card: Card, reviewedFingerprint: string): Promise<Card> {
+    return this.writes.run(card.repo, () => this.approveNow(this.board.getCard(card.id) ?? card, reviewedFingerprint));
+  }
+  private async approveNow(card: Card, reviewedFingerprint: string): Promise<Card> {
     if (this.board.integrationFor(card.repo) === "github-pr") throw new Error("This board integrates through GitHub pull requests; Approve opens a pull request instead of merging locally");
     const repoBoard = this.board.boardForRepo(card.repo);
     if (repoBoard?.githubMainProtected && !repoBoard.integrationChosen)
       throw new Error(`main on ${githubRepo(repoBoard.remoteUrl) ?? repoBoard.remoteUrl} only accepts pull requests, so merging into local main would leave it ahead of GitHub. Switch Integration to GitHub pull requests in the board's settings, or choose Local merge there to merge locally anyway`);
-    const { repo, worktree, run } = this.location(card);
+    const { repo, worktree, run } = await this.location(card);
     const job = this.board.getAutoReviewJob(run.id);
     if (job?.state === "running") throw new Error("Agent review is in progress; wait for its result");
-    if (this.board.hasRequestedChanges(card.id, run.id)) throw new Error("Changes requested; review a new attempt before approving");
-    if (this.board.hasDraftReviewComments(card.id, run.id)) throw new Error("Submit or remove draft review comments before approving");
-    if (git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
+    // Reserve before the Git below changes the card's index. The reservation rechecks the run, requested changes and
+    // draft comments as they are now, and holds off new attempts and review writes until approval ends.
+    this.board.reserveApproval(card.id, run.id);
+    try { return await this.approveReserved(card, reviewedFingerprint, repo, worktree, run); }
+    finally { this.board.releaseApproval(card.id); }
+  }
+  private async approveReserved(card: Card, reviewedFingerprint: string, repo: string, worktree: string, run: Run): Promise<Card> {
+    if (await git(repo, "symbolic-ref", "--short", "HEAD") !== "main") throw new Error("Check out main at the repository root before approving");
     const pending = this.board.getApproval(card.id);
-    if (!(pending?.preparedHead && isAncestor(repo, pending.preparedHead, "main"))) this.requireMainCurrent(repo);
-    const localStatus = gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true);
-    const blocked = this.localConflicts(card);
+    if (!(pending?.preparedHead && await isAncestor(repo, pending.preparedHead, "main"))) await this.requireMainCurrent(repo);
+    const localStatus = await gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true);
+    const blocked = await this.localConflicts(card);
     if (blocked.length) throw new Error(`Uncommitted changes on main would be overwritten: ${blocked.slice(0, 10).join(", ")}${blocked.length > 10 ? ", …" : ""}. Commit or stash them at ${repo}, then approve again`);
-    const inspected = this.snapshot(card, false);
+    const inspected = await this.snapshot(card, false);
     if (!reviewedFingerprint || inspected.fingerprint !== reviewedFingerprint) throw new Error("Worktree or main changed since review; refresh the diff before approving");
 
     let approved = this.board.getApproval(card.id);
     if (approved) {
-      if (approved.runId !== run.id || git(worktree, "rev-parse", "HEAD") !== approved.candidate || !clean(worktree)) throw new Error("Card worktree changed after approval; inspect it before retrying");
+      if (approved.runId !== run.id || await git(worktree, "rev-parse", "HEAD") !== approved.candidate || !await clean(worktree)) throw new Error("Card worktree changed after approval; inspect it before retrying");
     } else {
-      const candidate = this.commitReviewed(card, worktree, inspected.tree);
+      const candidate = await this.commitReviewed(card, worktree, inspected.tree);
       // A card must contribute a commit, not merely close an unchanged run.
-      if (!git(repo, "rev-list", "main.." + candidate)) throw new Error("This card has no unmerged commits to approve");
+      if (!await git(repo, "rev-list", "main.." + candidate)) throw new Error("This card has no unmerged commits to approve");
       approved = this.board.recordApproval(card.id, run.id, candidate);
     }
 
-    if (approved.preparedHead && isAncestor(repo, approved.preparedHead, "main")) {
-      if (git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Alice merged this card; inspect the result before closing it");
-      return this.delivered("merge", this.completeAndPush(card, run.id, approved.candidate, repo));
+    if (approved.preparedHead && await isAncestor(repo, approved.preparedHead, "main")) {
+      if (await git(repo, "rev-parse", "main") !== approved.preparedHead) throw new Error("Main changed after Alice merged this card; inspect the result before closing it");
+      return this.delivered("merge", await this.completeAndPush(card, run.id, approved.candidate, repo));
     }
-    if (isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Alice; inspect main before closing this card");
-    const base = git(repo, "rev-parse", "main");
+    if (await isAncestor(repo, approved.candidate, "main")) throw new Error("Card branch was merged outside Alice; inspect main before closing this card");
+    const base = await git(repo, "rev-parse", "main");
     if (base !== inspected.main) throw new Error("Main changed since review; refresh the diff before approving");
     const directory = join(this.dataDir, "integrations");
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const scratch = mkdtempSync(join(directory, `${card.id}-`));
     try {
-      git(repo, "worktree", "add", "--detach", scratch, base);
+      await git(repo, "worktree", "add", "--detach", scratch, base);
       try {
-        git(scratch, ...commitIdentityArgs(scratch), "merge", "--no-ff", "--no-edit", ...mergeMessage(card, cardBranch(repo, card.id)), approved.candidate);
+        await git(scratch, ...await commitIdentityArgs(scratch), "merge", "--no-ff", "--no-edit", ...mergeMessage(card, await cardBranch(repo, card.id)), approved.candidate);
       } catch (error) {
         // No integration was published. Read the scratch index before removing it so the UI can name the conflicts.
         let files: string[] = [];
-        try { files = [...new Set(git(scratch, "ls-files", "-u", "-z").split("\0").filter(Boolean).map(entry => entry.slice(entry.indexOf("\t") + 1)))]; }
+        try { files = [...new Set((await git(scratch, "ls-files", "-u", "-z")).split("\0").filter(Boolean).map(entry => entry.slice(entry.indexOf("\t") + 1)))]; }
         catch { /* Keep the original Git failure if the scratch index cannot be read. */ }
         this.board.cancelApproval(card.id, run.id);
         if (files.length) {
@@ -1025,16 +1058,16 @@ export class Integration {
         }
         throw error;
       }
-      const merged = git(scratch, "rev-parse", "HEAD");
-      git(repo, "diff", "--check", base, merged);
-      if (git(repo, "rev-parse", "main") !== base || gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true) !== localStatus) throw new Error("Main or its local changes changed during approval; retry before merging");
+      const merged = await git(scratch, "rev-parse", "HEAD");
+      await git(repo, "diff", "--check", base, merged);
+      if (await git(repo, "rev-parse", "main") !== base || await gitCommand(repo, ["status", "--porcelain", "-z", "--untracked-files=all"], undefined, true) !== localStatus) throw new Error("Main or its local changes changed during approval; retry before merging");
       this.board.recordPreparedMerge(card.id, run.id, approved.candidate, merged);
-      git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
+      await git(repo, "merge", "--no-overwrite-ignore", "--ff-only", merged);
       // Git refuses to overwrite local changes; unrelated edits may remain after the fast-forward.
-      return this.delivered("merge", this.completeAndPush(card, run.id, approved.candidate, repo));
+      return this.delivered("merge", await this.completeAndPush(card, run.id, approved.candidate, repo));
     } finally {
       // Only remove Alice's temporary integration checkout. Keep the card worktree on every failure.
-      try { git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }
+      try { await git(repo, "worktree", "remove", "--force", scratch); } catch { /* Keep the original error; the scratch path is recoverable. */ }
     }
   }
 }

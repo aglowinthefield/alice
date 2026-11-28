@@ -29,27 +29,27 @@ function fixture() {
   return { repo, close: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("lists the fetched commits newest first as the changelog", () => {
+test("lists the fetched commits newest first as the changelog", async () => {
   const { repo, close } = fixture();
   try {
     const updates = new Updates(repo, async () => {}, () => {});
-    updates.refresh();
+    await updates.refresh();
     assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Fix typo", "Add pending updates notice"]);
     git(repo, "merge", "-q", "--ff-only", "origin/main");
-    updates.refresh();
+    await updates.refresh();
     assert.equal(updates.state.commits.length, 2, "still pending until the server restarts on them");
     const restarted = new Updates(repo, async () => {}, () => {});
-    restarted.refresh();
+    await restarted.refresh();
     assert.deepEqual(restarted.state.commits, []);
   } finally { close(); }
 });
 
-test("asking to install with nothing pending is refused", () => {
+test("asking to install with nothing pending is refused", async () => {
   const { repo, close } = fixture();
   try {
     git(repo, "merge", "-q", "--ff-only", "origin/main");
     const updates = new Updates(repo, async () => {}, () => {});
-    assert.throws(() => updates.apply(), /Already up to date/);
+    await assert.rejects(async () => updates.apply(), /Already up to date/);
   } finally { close(); }
 });
 
@@ -63,31 +63,31 @@ function mergeLocally(repo: string, subject: string) {
   git(repo, "branch", "-q", "-D", "card");
 }
 
-test("lists commits merged into main since startup, after any from origin/main", () => {
+test("lists commits merged into main since startup, after any from origin/main", async () => {
   const { repo, close } = fixture();
   try {
     git(repo, "merge", "-q", "--ff-only", "origin/main");
     const updates = new Updates(repo, async () => {}, () => {});
-    updates.refresh();
+    await updates.refresh();
     assert.equal(updates.state.commits.length, 0);
     mergeLocally(repo, "Approved card");
-    updates.refresh();
+    await updates.refresh();
     assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Alice card: Approved card"], "the card once, without its merge commit");
   } finally { close(); }
 });
 
-test("combines origin/main updates with local merges, newest first", () => {
+test("combines origin/main updates with local merges, newest first", async () => {
   const { repo, close } = fixture();
   try {
     const updates = new Updates(repo, async () => {}, () => {});
     mergeLocally(repo, "Approved card");
-    updates.refresh();
+    await updates.refresh();
     assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Fix typo", "Add pending updates notice", "Alice card: Approved card"]);
   } finally { close(); }
 });
 
 // A card that went through rework lands several commits under the same subject, one per attempt.
-test("lists a card's rework commits once, under the newest", () => {
+test("lists a card's rework commits once, under the newest", async () => {
   const { repo, close } = fixture();
   try {
     git(repo, "merge", "-q", "--ff-only", "origin/main");
@@ -97,7 +97,7 @@ test("lists a card's rework commits once, under the newest", () => {
     const newest = git(repo, "rev-parse", "--short", "HEAD");
     git(repo, "checkout", "-q", "main");
     git(repo, "merge", "-q", "--no-ff", "-m", "Merge card: Reworked card", "card");
-    updates.refresh();
+    await updates.refresh();
     assert.deepEqual(updates.state.commits, [{ sha: newest, subject: "Alice card: Reworked card" }]);
   } finally { close(); }
 });
@@ -142,7 +142,7 @@ function changeFixture(path: string) {
   git(other, "commit", "-qm", `Change ${path}`);
   git(other, "push", "-q", "origin", "main");
   git(repo, "fetch", "-q", "origin");
-  return { repo, close: () => rmSync(dir, { recursive: true, force: true }) };
+  return { repo, other, close: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const fastForward = (repo: string) => async () => { git(repo, "merge", "-q", "--ff-only", "origin/main"); };
@@ -152,7 +152,7 @@ test("an update that only touches the UI swaps it in without a restart", async (
   try {
     let restarted = 0, swapped = 0;
     const updates = new Updates(repo, fastForward(repo), () => restarted++, () => swapped++);
-    updates.refresh();
+    await updates.refresh();
     const before = updates.state.ui;
     assert.equal(updates.state.restart, false);
     await updates.apply();
@@ -169,7 +169,7 @@ for (const path of ["server/worker.ts", "src/shared.ts", "package.json", "script
     try {
       let restarted = 0, swapped = 0;
       const updates = new Updates(repo, fastForward(repo), () => restarted++, () => swapped++);
-      updates.refresh();
+      await updates.refresh();
       assert.equal(updates.state.restart, true);
       await updates.apply();
       assert.deepEqual([restarted, swapped], [1, 0]);
@@ -185,7 +185,7 @@ test("a server change after a UI-only install still restarts", async () => {
     await updates.apply();
     writeFileSync(join(repo, "server", "index.ts"), "export {};\n");
     git(repo, "commit", "-qam", "Alice card: server change");
-    updates.refresh();
+    await updates.refresh();
     assert.deepEqual(updates.state.commits.map(commit => commit.subject), ["Alice card: server change"]);
     assert.equal(updates.state.restart, true);
     await updates.apply();
@@ -243,5 +243,52 @@ test("a failed automatic UI install is not retried until something new lands", a
     git(repo, "commit", "-qam", "Alice card: another style tweak");
     await updates.poll();
     assert.equal(attempts, 2);
+  } finally { close(); }
+});
+
+test("a timer tick that a manual install overtakes does nothing instead of failing", async () => {
+  const { repo, close } = changeFixture("src/style.css");
+  try {
+    let swapped = 0;
+    const updates = new Updates(repo, fastForward(repo), () => {}, () => swapped++);
+    // The tick reads what is pending, then awaits Git for its target; a manual install lands in that wait.
+    const internals = updates as unknown as { target: () => Promise<string> };
+    const target = internals.target.bind(updates);
+    let manual: Promise<void> | undefined;
+    internals.target = async () => { manual ??= updates.apply(); await manual; return target(); };
+    await updates.poll();
+    assert.ok(manual, "the manual install ran inside the tick");
+    assert.equal(swapped, 1, "installed once, by the manual request");
+    assert.deepEqual(updates.state.commits, []);
+    assert.equal(updates.state.error, null);
+    await assert.rejects(updates.apply(), /Already up to date/, "POST /api/update still says so");
+  } finally { close(); }
+});
+
+test("a server change that lands while a timer tick reads its target waits for the button", async () => {
+  const { repo, other, close } = changeFixture("src/style.css");
+  try {
+    let restarted = 0, swapped = 0;
+    const updates = new Updates(repo, fastForward(repo), () => restarted++, () => swapped++);
+    // The tick has judged the update UI-only; while it awaits Git for its target, a server commit is fetched.
+    const internals = updates as unknown as { target: () => Promise<string> };
+    const target = internals.target.bind(updates);
+    let landed = false;
+    internals.target = async () => {
+      if (!landed) {
+        landed = true;
+        writeFileSync(join(other, "server", "index.ts"), 'import { shared } from "../src/shared.js";\nexport const changed = true;\n');
+        git(other, "commit", "-qam", "Change the server");
+        git(other, "push", "-q", "origin", "main");
+        git(repo, "fetch", "-q", "origin");
+      }
+      return target();
+    };
+    await updates.poll();
+    assert.deepEqual([restarted, swapped], [0, 0], "nothing installed on its own");
+    assert.equal(updates.state.restart, true);
+    assert.equal(updates.state.commits.length, 2, "both commits still pending");
+    await updates.apply();
+    assert.equal(restarted, 1, "the button still installs it, with a restart");
   } finally { close(); }
 });

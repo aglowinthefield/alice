@@ -47,6 +47,13 @@ Labels: `repo` is the board's repository path. `agent` is the run's models as Al
 | `alice_active_runs` | gauge | none | Agent runs going now |
 | `alice_active_agent_reviews` | gauge | none | Agent reviews going now |
 | `alice_active_pull_request_drafts` | gauge | none | Pull request drafts going now |
+| `alice_event_loop_delay_seconds` | gauge | `stat` | How late the server's event loop ran since the previous scrape, with `stat` one of `p50`, `p99` or `max`. See below |
+
+## Event-loop delay
+
+`alice_event_loop_delay_seconds` comes from Node's `perf_hooks.monitorEventLoopDelay`, sampled every 20 ms, with the 20 ms interval itself taken off so an idle server reads close to 0. Anything that holds the server's single thread (a synchronous Git call, a slow query) shows up as delay, and every request waits that long, `/api/status` included. Each scrape reads the delay since the previous scrape and starts a new window, so scrape from one Prometheus only: a second scraper splits the windows between them. Before the first scrape the window starts when the server does.
+
+A healthy server keeps `p99` in the low milliseconds. A `max` of seconds means something blocked the loop; the server log around that time usually names it.
 
 ## Example queries
 
@@ -59,4 +66,7 @@ sum by (agent) (increase(alice_runs_total{status="failed"}[7d])) / sum by (agent
 
 # p95 run time per repository
 histogram_quantile(0.95, sum by (repo, le) (rate(alice_run_duration_seconds_bucket[1d])))
+
+# Worst event-loop stall over the last hour
+max_over_time(alice_event_loop_delay_seconds{stat="max"}[1h])
 ```

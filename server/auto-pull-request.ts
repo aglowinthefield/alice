@@ -12,7 +12,7 @@ export class AutoPullRequest {
   private active = new Set<string>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private draining = false;
-  constructor(private board: Board, private fingerprint: (card: Card) => string, private draft: (card: Card, fingerprint: string) => Promise<PullRequestDraft>,
+  constructor(private board: Board, private fingerprint: (card: Card) => Promise<string>, private draft: (card: Card, fingerprint: string) => Promise<PullRequestDraft>,
     private push: (card: Card, fingerprint: string, draft: PullRequestDraft, handoff?: string) => Promise<Card>) {}
   start(): void {
     this.timer = setInterval(() => { void this.tick(); }, 5000);
@@ -32,7 +32,10 @@ export class AutoPullRequest {
     for (const { card, run } of this.board.listAutoPullRequestCandidates()) {
       if (this.active.has(card.id) || !this.board.claimAutoPullRequest(card.id, run.id)) continue;
       this.active.add(card.id);
-      started.push(this.process(card, run.id).finally(() => this.active.delete(card.id)));
+      // The opt-in this card was claimed under, read before anything awaits: turning automatic pull requests off and
+      // on again while the fingerprint's Git runs is a new opt-in, and this run predates it.
+      const optedInAt = this.board.boardForRepo(card.repo)?.autoPullRequestEnabledAt;
+      started.push(this.process(card, run.id, optedInAt).finally(() => this.active.delete(card.id)));
     }
     await Promise.all(started);
   }
@@ -47,9 +50,11 @@ export class AutoPullRequest {
     if (this.board.agentReviewPending(current, card.id, run)) throw new Error("The agent reviewer took over this run while the pull request was drafted");
     return fresh;
   }
-  private async process(card: Card, runId: string): Promise<void> {
+  private async process(card: Card, runId: string, optedInAt: string | null | undefined): Promise<void> {
     try {
-      const fingerprint = this.fingerprint(card), optedInAt = this.board.boardForRepo(card.repo)?.autoPullRequestEnabledAt;
+      const fingerprint = await this.fingerprint(card);
+      // Drafting runs an agent for minutes; check before spending it, and again before pushing.
+      this.refreshed(card, runId, optedInAt);
       const drafted = await this.draft(card, fingerprint);
       const fresh = this.refreshed(card, runId, optedInAt);
       // A run the agent reviewer handed to a person opens as a draft, with its findings on the pull request.

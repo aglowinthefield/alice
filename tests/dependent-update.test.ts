@@ -48,7 +48,7 @@ function fixture({ autoReview = false } = {}) {
   board.addDependency(child.card.id, parent.card.id);
   const integration = new Integration(board, data);
   return { dir, repo, board, integration, parent, child,
-    approve: (card: Card) => integration.approve(card, integration.review(card).fingerprint),
+    approve: async (card: Card) => integration.approve(card, (await integration.review(card)).fingerprint),
     note: (cardId: string) => board.listCardEvents(cardId).map(event => event.reason).filter(Boolean).at(-1) ?? "",
     close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
@@ -67,7 +67,7 @@ test("a Review card is brought up to date with main when the card it depends on 
     assert.equal(f.board.getCard(f.child.card.id)!.reviewWait, null);
     const childHead = git(f.child.worktree, "rev-parse", "HEAD");
 
-    assert.equal(f.approve(f.board.getCard(f.parent.card.id)!).status, "done");
+    assert.equal((await f.approve(f.board.getCard(f.parent.card.id)!)).status, "done");
     await f.integration.dependentUpdatesSettled();
 
     const main = git(f.repo, "rev-parse", "main");
@@ -82,11 +82,11 @@ test("a Review card is brought up to date with main when the card it depends on 
     assert.equal(child.reviewWait, "agent_review", "agent review is queued again on the updated work");
     assert.deepEqual(f.board.listMergeFailures(f.repo), []);
     assert.match(f.note(child.id), /Brought up to date with main \([0-9a-f]{12}\) after "Parent" merged\. Agent review runs again/);
-    assert.deepEqual(f.integration.review(child).files.map(file => file.path).sort(), ["child.txt", "notes.txt"], "the review diff shows only the child's own work");
+    assert.deepEqual((await f.integration.review(child)).files.map(file => file.path).sort(), ["child.txt", "notes.txt"], "the review diff shows only the child's own work");
 
     // The updated child still approves and lands on top of the parent.
     f.board.setAutoReview(f.board.boardForRepo(f.repo)!.id, false);
-    assert.equal(f.approve(f.board.getCard(child.id)!).status, "done");
+    assert.equal((await f.approve(f.board.getCard(child.id)!)).status, "done");
     await f.integration.dependentUpdatesSettled();
     assert.equal(readFileSync(join(f.repo, "notes.txt"), "utf8"), "notes\nfrom child\n");
     assert.equal(readFileSync(join(f.repo, "README.md"), "utf8"), "original\nfrom parent\n");
@@ -105,7 +105,7 @@ test("a dependent branch with commits of its own gets main merged in with a merg
     f.child.finish();
     const childHead = git(f.child.worktree, "rev-parse", "HEAD");
 
-    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.approve(f.board.getCard(f.parent.card.id)!);
     const [result] = await f.integration.updateDependents(f.parent.card.id);
     assert.equal(result.outcome, "current", "Approve already updated the child, so a second pass has nothing to do");
 
@@ -130,7 +130,7 @@ test("a dependent that would conflict with the new main shows the conflict and i
     f.board.finishAutoReview(f.child.run.id, "approved", "Looks right");
     const childHead = git(f.child.worktree, "rev-parse", "HEAD"), before = status(f.child.worktree);
 
-    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.approve(f.board.getCard(f.parent.card.id)!);
     await f.integration.dependentUpdatesSettled();
 
     assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), childHead, "the branch did not move");
@@ -158,7 +158,7 @@ test("an ignored local file that main starts tracking is reported as a conflict 
     f.child.finish();
     const childHead = git(f.child.worktree, "rev-parse", "HEAD"), before = status(f.child.worktree), index = git(f.child.worktree, "ls-files", "-s");
 
-    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.approve(f.board.getCard(f.parent.card.id)!);
     await f.integration.dependentUpdatesSettled();
 
     assert.equal(readFileSync(join(f.child.worktree, "secret.env"), "utf8"), "local secret\n");
@@ -182,7 +182,7 @@ test("staged changes stay staged apart from unstaged ones, even a staged file de
     writeFileSync(join(f.child.worktree, "child.txt"), "unstaged\n");
     f.child.finish();
 
-    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.approve(f.board.getCard(f.parent.card.id)!);
     await f.integration.dependentUpdatesSettled();
 
     assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), git(f.repo, "rev-parse", "main"));
@@ -200,7 +200,7 @@ test("a dependent with an approval in progress waits, and is updated once the ap
     writeFileSync(join(f.parent.worktree, "README.md"), "original\nfrom parent\n");
     f.parent.finish();
     f.child.finish();
-    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.approve(f.board.getCard(f.parent.card.id)!);
     await f.integration.dependentUpdatesSettled();
     const childHead = git(f.child.worktree, "rev-parse", "HEAD");
     // Main moves again, and a pending approval holds the child: Alice must not move its branch under it.
@@ -247,7 +247,7 @@ test("a parent that merges during the dependent's agent review updates it after 
     assert.equal(f.board.getAutoReviewJob(f.child.run.id)?.state, "running");
 
     const childHead = git(f.child.worktree, "rev-parse", "HEAD");
-    f.approve(f.board.getCard(f.parent.card.id)!);
+    await f.approve(f.board.getCard(f.parent.card.id)!);
     await f.integration.dependentUpdatesSettled();
     assert.equal(git(f.child.worktree, "rev-parse", "HEAD"), childHead, "the worktree under review is left alone");
     assert.match(f.note(f.child.card.id), /an agent review is in progress\. Alice updates it once that finishes/);

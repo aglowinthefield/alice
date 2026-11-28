@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
+import { execFile, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
@@ -74,15 +74,15 @@ export function worktrunkVersion(
   wtBin: string,
   platform: string = process.platform,
   env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  if (!wtBin) return undefined;
-  if (platform === "win32" && /^WindowsApps$/i.test(basename(dirname(findOnWindows(wtBin, env) ?? "")))) return undefined;
-  try {
-    const out = execFileSync(...command(wtBin, ["--version"], platform, env), { encoding: "utf8", env, stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }).trim();
-    return /^wt v\d/.test(out) ? out.split("\n")[0] : undefined;
-  } catch {
-    return undefined;
-  }
+): Promise<string | undefined> {
+  if (!wtBin) return Promise.resolve(undefined);
+  if (platform === "win32" && /^WindowsApps$/i.test(basename(dirname(findOnWindows(wtBin, env) ?? "")))) return Promise.resolve(undefined);
+  return new Promise(resolve => {
+    execFile(...command(wtBin, ["--version"], platform, env), { encoding: "utf8", env, timeout: 5000, windowsHide: true }, (error, stdout) => {
+      const out = error ? "" : stdout.trim();
+      resolve(/^wt v\d/.test(out) ? out.split("\n")[0] : undefined);
+    }).stdin?.end();
+  });
 }
 
 /**

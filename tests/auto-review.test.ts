@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
 import { AutoReview, promptDiff, reviewerPrompt, reviewerVerdict } from "../server/auto-review.js";
+import { fakeGit, waitFor as waitUntil, withPath } from "./fake-git.js";
 import { RunLimitError } from "../server/board.js";
 import { AutoPickup } from "../server/auto-pickup.js";
 import { Worker } from "../server/worker.js";
@@ -104,7 +105,7 @@ test("on a local board an agent approval is advice: the card waits in Review for
     assert.equal(item.board.listAutoReviewJobs(current.card.id).length, 1, "the same run is not reviewed twice");
     // Your Approve merges the agent-approved card.
     const integration = new Integration(item.board, item.data);
-    assert.equal(integration.approve(item.board.getCard(current.card.id)!, integration.review(item.board.getCard(current.card.id)!).fingerprint).status, "done");
+    assert.equal((await integration.approve(item.board.getCard(current.card.id)!, (await integration.review(item.board.getCard(current.card.id)!)).fingerprint)).status, "done");
     assert.match(readFileSync(join(item.repo, "README.md"), "utf8"), new RegExp(current.card.id));
   } finally { item.close(); }
 });
@@ -704,6 +705,35 @@ test("auto-review is not stopped by the diff viewer's 200-file cap, but still re
   } finally { item.close(); }
 });
 
+test("a shutdown that begins while a review prepares its Git launches no reviewer", { skip: process.platform === "win32" && "the fake git is a shell script" }, async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoReview(item.repoBoard.id, true);
+    const optedIn = item.board.getBoard(item.repoBoard.id)!.autoReviewEnabledAt ?? "";
+    // Only runs that reach Review after the opt-in are reviewed.
+    while (new Date().toISOString() <= optedIn) await new Promise(resolve => setImmediate(resolve));
+    const { card, run, worktree } = item.reviewedCard();
+    const ran = join(item.dir, "reviewer-ran");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\n: > '${ran}'\ncat <<'EVENTS'\n${settle('{"verdict":"approve","reason":"fine"}')}EVENTS\n`);
+    const fake = fakeGit(item.dir, [{ name: "base", match: `${worktree} merge-base main HEAD` }]);
+    try {
+      await withPath(fake.bin, async () => {
+        const ticking = item.auto.tick();
+        await waitUntil(() => fake.waiting("base"), "the review's merge-base to be held");
+        const stopping = item.auto.shutdown();
+        fake.release("base");
+        await ticking;
+        await stopping;
+      });
+    } finally { fake.releaseAll(); }
+    assert.equal(existsSync(ran), false, "no reviewer started after shutdown began");
+    const job = item.board.getAutoReviewJob(run.id)!;
+    assert.equal(job.state, "needs_human");
+    assert.match(job.details, /shut down during the agent review/);
+    assert.equal(item.board.getCard(card.id)!.status, "review");
+  } finally { item.close(); }
+});
+
 const requestChanges = '{"verdict":"request_changes","reason":"Missing test","changes":[{"path":"README.md","line":1,"comment":"Add a regression test"}]}';
 function pullRequestBoard(item: ReturnType<typeof fixture>) {
   item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/example/repo");
@@ -720,7 +750,7 @@ test("a reviewer's send-back at the run limit waits for a free slot instead of l
     const current = item.reviewedCard();
     let full = true;
     const started: string[] = [];
-    const auto = new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => {
+    const auto = new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), async () => {
       if (full) throw new RunLimitError("at its limit");
       started.push(current.card.id);
     });
@@ -729,10 +759,10 @@ test("a reviewer's send-back at the run limit waits for a free slot instead of l
     assert.equal(item.board.listAutoPullRequestCandidates().length, 0, "automatic pull requests do not take a queued rerun");
     assert.deepEqual(item.board.listSlotQueuedStarts().map(entry => entry.card.id), [current.card.id]);
     const worker = { start: () => { if (full) throw new RunLimitError("at its limit"); started.push(current.card.id); } } as unknown as Worker;
-    new AutoPickup(item.board, worker).tick();
+    await new AutoPickup(item.board, worker).tick();
     assert.deepEqual(started, [], "still full");
     full = false;
-    new AutoPickup(item.board, worker).tick();
+    await new AutoPickup(item.board, worker).tick();
     assert.deepEqual(started, [current.card.id]);
   } finally { item.close(); }
 });
@@ -766,7 +796,7 @@ test("a rerun that cannot start for another reason hands the findings to a perso
       if (where === "reviewer") await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), broken).tick();
       else {
         await new AutoReview(item.board, new Integration(item.board, item.data), join(item.dir, "fake-pi"), () => { throw new RunLimitError("full"); }).tick();
-        new AutoPickup(item.board, { start: broken } as unknown as Worker).tick();
+        await new AutoPickup(item.board, { start: broken } as unknown as Worker).tick();
       }
       assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [current.card.id], where);
       assert.match(item.board.autoReviewHandoff(current.run.id) ?? "", /Missing test[\s\S]*README\.md:1/, where);

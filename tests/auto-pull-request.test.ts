@@ -34,7 +34,7 @@ function fixture(mode: "github-pr" | "local" = "github-pr") {
     return board.getCard(card.id)!;
   }
   const draft = async () => ({ title: "t", body: "b" });
-  const auto = new AutoPullRequest(board, () => "f".repeat(64), draft, open);
+  const auto = new AutoPullRequest(board, async () => "f".repeat(64), draft, open);
   return { board, repoBoard, auto, draft, opened, reviewedCard, open, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 const later = () => new Promise(resolve => setTimeout(resolve, 5));
@@ -66,7 +66,7 @@ test("a failed automatic push is recorded for a person and not retried for the s
     item.board.setAutoPullRequest(item.repoBoard.id, true);
     await later();
     const card = item.reviewedCard();
-    const failing = new AutoPullRequest(item.board, () => "f".repeat(64), item.draft, async () => { throw new Error("GitHub CLI unavailable"); });
+    const failing = new AutoPullRequest(item.board, async () => "f".repeat(64), item.draft, async () => { throw new Error("GitHub CLI unavailable"); });
     await failing.tick();
     assert.match(item.board.getCard(card.id)!.prError!, /could not open the pull request automatically: GitHub CLI unavailable/);
     assert.ok(item.board.listCardEvents(card.id).some(event => /GitHub CLI unavailable/.test(event.reason)));
@@ -83,7 +83,7 @@ test("a card that keeps coming back from a refused push is only tried a few time
     const card = item.reviewedCard();
     let pushes = 0;
     // A pre-push hook refusal returns the card without a pull request and starts a fix run that reaches Review again.
-    const refused = new AutoPullRequest(item.board, () => "f".repeat(64), item.draft, async current => {
+    const refused = new AutoPullRequest(item.board, async () => "f".repeat(64), item.draft, async current => {
       pushes++;
       item.board.setStatus(current.id, "ready");
       const run = item.board.claim(current.id);
@@ -110,7 +110,7 @@ test("with auto-review on, a pull request opens as a draft only after the agent 
     item.board.finishAutoReview(run.id, "needs_human", "Agent requested human review: risky", "f".repeat(64), undefined, "The agent reviewer left this for a person:\n\nrisky");
     assert.deepEqual(item.board.listAutoPullRequestCandidates().map(entry => entry.card.id), [card.id]);
     let handoff: string | undefined;
-    const auto = new AutoPullRequest(item.board, () => "f".repeat(64), item.draft, async (current, _fingerprint, _draft, findings) => { handoff = findings; return item.open(current); });
+    const auto = new AutoPullRequest(item.board, async () => "f".repeat(64), item.draft, async (current, _fingerprint, _draft, findings) => { handoff = findings; return item.open(current); });
     await auto.tick();
     assert.match(handoff ?? "", /risky/);
     assert.deepEqual(item.opened, [card.id]);
@@ -148,7 +148,7 @@ test("nothing is pushed when, while the draft is written, auto-review is turned 
       await later();
       const card = item.reviewedCard();
       let pushed = 0;
-      const auto = new AutoPullRequest(item.board, () => "f".repeat(64), async () => {
+      const auto = new AutoPullRequest(item.board, async () => "f".repeat(64), async () => {
         if (change === "override") item.board.setPullRequestOverride(card.id, "https://github.com/example/repo/pull/99");
         else item.board.setAutoPullRequest(item.repoBoard.id, false);
         return { title: "t", body: "b" };
@@ -170,11 +170,11 @@ test("shutdown waits for a pending push, and a hook refusal after stopStarts can
     let release!: () => void, reached!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; }), inPush = new Promise<void>(resolve => { reached = resolve; });
     let startedFixRun: boolean | undefined;
-    const auto = new AutoPullRequest(item.board, () => "f".repeat(64), item.draft, async current => {
+    const auto = new AutoPullRequest(item.board, async () => "f".repeat(64), item.draft, async current => {
       reached(); await gate;
       // What a pre-push hook refusal does in sendBackRefusedPush.
       item.board.recordPushFailure(current.id, "abc", "hook output");
-      startedFixRun = worker.startHookFix(current);
+      startedFixRun = await worker.startHookFix(current);
       return current;
     });
     const ticking = auto.tick();
@@ -188,5 +188,37 @@ test("shutdown waits for a pending push, and a hook refusal after stopStarts can
     assert.equal(startedFixRun, false, "no run starts once shutdown began");
     assert.equal(item.board.getCiFeedback(card.id)?.source, "push", "the refusal stays for the next start");
     assert.equal(item.board.listRuns(card.id).length, 1);
+  } finally { item.close(); }
+});
+
+/** Resolves once the clock reads a later millisecond than `stamp`, so the next record gets a newer timestamp. */
+async function clockPasses(stamp: string | null | undefined) {
+  while (new Date().toISOString() <= (stamp ?? "")) await new Promise(resolve => setImmediate(resolve));
+}
+
+test("turning automatic pull requests off and on while a card's fingerprint is read neither drafts nor opens it", async () => {
+  const item = fixture();
+  try {
+    item.board.setAutoPullRequest(item.repoBoard.id, true);
+    const first = item.board.getBoard(item.repoBoard.id)!.autoPullRequestEnabledAt;
+    await clockPasses(first);
+    const card = item.reviewedCard();
+    let reading = false, release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const drafted: string[] = [];
+    const auto = new AutoPullRequest(item.board, async () => { reading = true; await held; return "f".repeat(64); },
+      async current => { drafted.push(current.id); return { title: "t", body: "b" }; }, item.open);
+    const ticking = auto.tick();
+    while (!reading) await new Promise(resolve => setImmediate(resolve));
+    // A new opt-in while the fingerprint's Git runs: this run finished before it, so it stays for Approve.
+    item.board.setAutoPullRequest(item.repoBoard.id, false);
+    await clockPasses(first);
+    item.board.setAutoPullRequest(item.repoBoard.id, true);
+    assert.notEqual(item.board.getBoard(item.repoBoard.id)!.autoPullRequestEnabledAt, first);
+    release();
+    await ticking;
+    assert.deepEqual(drafted, [], "no draft agent ran");
+    assert.deepEqual(item.opened, [], "nothing was pushed");
+    assert.match(item.board.getCard(card.id)!.prError ?? "", /turned off or changed/);
   } finally { item.close(); }
 });

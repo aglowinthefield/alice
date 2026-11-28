@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { git } from "./git-async.js";
 
 /**
  * Config arguments to put before a `commit` or `merge` that Alice makes on the operator's behalf. Alice commits as
@@ -6,13 +6,11 @@ import { execFileSync } from "node:child_process";
  * a signed commit's author matches the key and the forge shows it as verified. Only when the repository has no
  * name or email configured does Alice fill in its own, so the commit still succeeds.
  */
-export function commitIdentityArgs(repo: string): string[] {
-  const configured = (key: string) => {
-    try { return execFileSync("git", ["-C", repo, "config", "--get", key], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
-    catch { return ""; }
-  };
+export async function commitIdentityArgs(repo: string): Promise<string[]> {
+  const configured = (key: string) => git(repo, ["config", "--get", key]).catch(() => "");
+  const [name, email] = await Promise.all([configured("user.name"), configured("user.email")]);
   const args: string[] = [];
-  if (!configured("user.name")) args.push("-c", "user.name=Alice");
-  if (!configured("user.email")) args.push("-c", "user.email=alice@localhost");
+  if (!name) args.push("-c", "user.name=Alice");
+  if (!email) args.push("-c", "user.email=alice@localhost");
   return args;
 }

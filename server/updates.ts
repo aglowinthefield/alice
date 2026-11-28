@@ -1,6 +1,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { git } from "./git-async.js";
 
 // Updates for a hosted Alice checkout. A timer fetches origin/main (scripts/update.sh); this lists what the fetch
 // brought in, plus anything merged into the checked-out main since the server started (approving a card merges it
@@ -39,6 +40,7 @@ export class Updates {
   private serverFiles: Set<string>;
   // The pending target whose automatic UI install failed, so the timer does not rebuild it every tick.
   private failedTarget: string | null = null;
+  private refreshing: Promise<void> | null = null;
 
   constructor(
     private root: string,
@@ -46,7 +48,9 @@ export class Updates {
     private onInstalled: () => void,
     private onUiInstalled: () => void = () => promoteStagedUi(root, { keepOldAssets: true }),
   ) {
-    this.serverHead = this.installedHead = this.revParse("HEAD");
+    // Once at startup, before the server listens, so synchronous Git blocks no request.
+    try { this.serverHead = this.installedHead = execFileSync("git", ["-C", root, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim() || null; }
+    catch { this.serverHead = this.installedHead = null; }
     this.serverFiles = serverModules(root);
   }
 
@@ -56,15 +60,21 @@ export class Updates {
 
   /**
    * Re-reads the pending commits: those on origin/main that the checked-out main lacks, and those merged into main
-   * since the server started. Only `main` checkouts update.
+   * since the server started. Only `main` checkouts update. Calls that overlap one in progress share it.
    */
-  refresh(): void {
+  refresh(): Promise<void> {
+    this.refreshing ??= this.reread().finally(() => { this.refreshing = null; });
+    return this.refreshing;
+  }
+  private async reread(): Promise<void> {
     try {
-      if (this.git("rev-parse", "--abbrev-ref", "HEAD") !== "main") { this.commits = []; this.restart = false; return; }
+      if (await this.git("rev-parse", "--abbrev-ref", "HEAD") !== "main") { this.commits = []; this.restart = false; return; }
       // Newest first: what origin/main would bring in, then what was merged locally since startup. Merge commits are
       // left out: approving a card adds a "Merge card:" commit on top of the card's own, which would list it twice.
-      const ranges = [this.originMain() && "HEAD..refs/remotes/origin/main", this.installedHead && `${this.installedHead}..HEAD`];
-      const log = ranges.filter((range): range is string => !!range).map(range => this.git("log", "--no-merges", "--format=%h%x09%s", range)).filter(Boolean).join("\n");
+      const originMain = await this.originMain();
+      const ranges = [originMain && "HEAD..refs/remotes/origin/main", this.installedHead && `${this.installedHead}..HEAD`];
+      const logs = await Promise.all(ranges.filter((range): range is string => !!range).map(range => this.git("log", "--no-merges", "--format=%h%x09%s", range)));
+      const log = logs.filter(Boolean).join("\n");
       // A reworked card lands one commit per attempt under the same subject; list it once, under the newest.
       const seen = new Set<string>();
       this.commits = (log ? log.split("\n") : []).flatMap(line => {
@@ -74,8 +84,10 @@ export class Updates {
         seen.add(subject);
         return [{ sha, subject }];
       });
-      const targets = [this.originMain() && "refs/remotes/origin/main", "HEAD"].filter((ref): ref is string => !!ref);
-      this.restart = this.commits.length > 0 && targets.some(target => this.needsRestart(target));
+      const targets = [originMain && "refs/remotes/origin/main", "HEAD"].filter((ref): ref is string => !!ref);
+      let restart = false;
+      if (this.commits.length > 0) for (const target of targets) if (await this.needsRestart(target)) { restart = true; break; }
+      this.restart = restart;
     } catch (error) {
       this.commits = [];
       this.restart = false;
@@ -90,25 +102,45 @@ export class Updates {
    */
   async poll(): Promise<void> {
     if (this.installing) return;
-    this.refresh();
+    await this.refresh();
     if (this.commits.length === 0 || this.restart) return;
-    if (this.target() === this.failedTarget) return;
-    await this.apply();
+    if (await this.target() === this.failedTarget) return;
+    // This tick awaited Git above, so `begin` reads again: a manual install may have landed, or a server change
+    // arrived, which waits for the button like any other.
+    const started = await this.begin(true);
+    if (!started) return;
+    await started.done;
     // Read after the attempt: a fast-forward can land before the build fails.
-    if (this.error) this.failedTarget = this.target();
+    if (this.error) this.failedTarget = await this.target();
   }
 
   /**
    * Installs pending commits. A UI-only install swaps the new build in and is done; otherwise `onInstalled` drains
-   * and restarts. Throws right away when nothing is pending, so the API can answer 400.
+   * and restarts. Rejects when nothing is pending.
    */
-  apply(): Promise<void> {
-    if (this.installing) return Promise.resolve();
-    this.refresh();
+  async apply(): Promise<void> {
+    await (await this.begin()).done;
+  }
+
+  /**
+   * Starts an install and resolves once it has started, with `done` for its end. Rejects when nothing is pending,
+   * so the API can answer 400 without waiting for the install.
+   */
+  async begin(): Promise<{ done: Promise<void> }>;
+  /**
+   * `automatic`, for the timer: installs only a UI-only update, judged on what the final read finds, and resolves to
+   * null when there is nothing it may install.
+   */
+  async begin(automatic: true): Promise<{ done: Promise<void> } | null>;
+  async begin(automatic = false): Promise<{ done: Promise<void> } | null> {
+    if (this.installing) return { done: Promise.resolve() };
+    await this.refresh();
+    if (this.installing) return { done: Promise.resolve() };
+    if (automatic && (this.commits.length === 0 || this.restart)) return null;
     if (this.commits.length === 0) throw new Error("Already up to date");
     this.installing = true;
     this.error = null;
-    return this.run();
+    return { done: this.run() };
   }
 
   private async run(): Promise<void> {
@@ -122,7 +154,7 @@ export class Updates {
     }
     const count = `${this.commits.length} commit${this.commits.length === 1 ? "" : "s"}`;
     // Decide on what actually landed, not on what refresh() saw before the install.
-    if (this.needsRestart("HEAD")) {
+    if (await this.needsRestart("HEAD")) {
       console.log(`Installed update (${count}); restarting once active runs finish.`);
       this.onInstalled();
       return;
@@ -135,31 +167,29 @@ export class Updates {
       console.error(`UI update failed: ${this.error}`);
       return;
     }
-    this.installedHead = this.revParse("HEAD");
+    this.installedHead = await this.revParse("HEAD");
     this.installing = false;
     console.log(`Installed UI-only update (${count}); no restart needed.`);
-    this.refresh();
+    await this.refresh();
   }
 
   /** Whether moving from the running server's commit to `target` changes anything the server process loads. */
-  private needsRestart(target: string): boolean {
+  private async needsRestart(target: string): Promise<boolean> {
     if (!this.serverHead) return true;
-    const changed = this.git("diff", "--name-only", this.serverHead, target).split("\n").filter(Boolean);
+    const changed = (await this.git("diff", "--name-only", this.serverHead, target)).split("\n").filter(Boolean);
     return changed.some(path => !uiOnly(path, this.serverFiles));
   }
 
   /** What an install would land on: the fetched origin/main and the checked-out HEAD. */
-  private target(): string { return `${this.originMain() ?? ""}:${this.revParse("HEAD") ?? ""}`; }
+  private async target(): Promise<string> { return `${await this.originMain() ?? ""}:${await this.revParse("HEAD") ?? ""}`; }
 
-  private originMain(): string | null { return this.revParse("refs/remotes/origin/main"); }
+  private originMain(): Promise<string | null> { return this.revParse("refs/remotes/origin/main"); }
 
-  private revParse(ref: string): string | null {
-    try { return this.git("rev-parse", "--verify", "-q", ref); } catch { return null; }
+  private async revParse(ref: string): Promise<string | null> {
+    try { return await this.git("rev-parse", "--verify", "-q", ref); } catch { return null; }
   }
 
-  private git(...args: string[]): string {
-    return execFileSync("git", ["-C", this.root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  }
+  private git(...args: string[]): Promise<string> { return git(this.root, args); }
 }
 
 /**

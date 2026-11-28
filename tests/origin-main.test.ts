@@ -12,7 +12,7 @@ function git(repo: string, ...args: string[]) {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 }
 
-function fixture() {
+async function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "alice-origin-main-"));
   const repo = join(dir, "repo"), remote = join(dir, "remote.git"), data = join(dir, "data");
   mkdirSync(repo); mkdirSync(join(data, "worktrees"), { recursive: true });
@@ -35,37 +35,37 @@ function fixture() {
   board.finish(run.id, "review");
   writeFileSync(join(worktree, "README.md"), "original\nreviewed\n");
   const reviewed = board.getCard(card.id)!;
-  integration.approve(reviewed, integration.review(reviewed).fingerprint);
+  await integration.approve(reviewed, (await integration.review(reviewed)).fingerprint);
   return { dir, repo, board, card, repoBoard, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-const state = (item: ReturnType<typeof fixture>, board = item.board.getBoard(item.repoBoard.id)!) =>
-  new OriginMain(item.board).annotate(board, item.board.listCards(item.repo)).find(card => card.id === item.card.id)?.originMain;
+const state = async (item: Awaited<ReturnType<typeof fixture>>, board = item.board.getBoard(item.repoBoard.id)!) =>
+  (await new OriginMain(item.board).annotate(board, item.board.listCards(item.repo))).find(card => card.id === item.card.id)?.originMain;
 
-test("a Done card on a local board with a GitHub remote says whether its merge is on origin/main as of the last fetch", () => {
-  const item = fixture();
+test("a Done card on a local board with a GitHub remote says whether its merge is on origin/main as of the last fetch", async () => {
+  const item = await fixture();
   try {
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/acme/widgets");
     assert.equal(item.board.getCard(item.card.id)!.status, "done");
-    assert.equal(state(item), "local");
+    assert.equal(await state(item), "local");
     // Pushing alone does not change the answer until a fetch updates origin/main: no network on render.
     git(item.repo, "push", "-q", "origin", "main:refs/heads/main");
     git(item.repo, "update-ref", "refs/remotes/origin/main", git(item.repo, "rev-parse", "main~1"));
-    assert.equal(state(item), "local");
+    assert.equal(await state(item), "local");
     git(item.repo, "fetch", "-q", "origin");
-    assert.equal(state(item), "pushed");
+    assert.equal(await state(item), "pushed");
   } finally { item.close(); }
 });
 
-test("no push state without a GitHub remote, on github-pr boards, or for cards that are not Done", () => {
-  const item = fixture();
+test("no push state without a GitHub remote, on github-pr boards, or for cards that are not Done", async () => {
+  const item = await fixture();
   try {
-    assert.equal(state(item), undefined, "origin is a local path and the board has no GitHub link");
+    assert.equal(await state(item), undefined, "origin is a local path and the board has no GitHub link");
     item.board.setRemoteUrl(item.repoBoard.id, "https://gitlab.com/acme/widgets");
-    assert.equal(state(item), undefined);
+    assert.equal(await state(item), undefined);
     item.board.setRemoteUrl(item.repoBoard.id, "https://github.com/acme/widgets");
-    assert.equal(state(item, { ...item.board.getBoard(item.repoBoard.id)!, integration: "github-pr" }), undefined);
+    assert.equal(await state(item, { ...item.board.getBoard(item.repoBoard.id)!, integration: "github-pr" }), undefined);
     item.board.setStatus(item.card.id, "ready");
-    assert.equal(state(item), undefined);
+    assert.equal(await state(item), undefined);
   } finally { item.close(); }
 });

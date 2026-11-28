@@ -1,5 +1,5 @@
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { command, killTree, worktrunkVersion } from "./platform.js";
+import { spawn, type ChildProcess } from "node:child_process";
+import { command, killTree } from "./platform.js";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initialPiStreamState, INVALID_STREAM, reducePiLine, stuckTool, type LiveActivity, type PiEffect } from "./pi-events.js";
@@ -11,44 +11,39 @@ import { isRunTimeout } from "./failure-summary.js";
 import { compareWithOriginMain, fetchOriginBestEffort, hasOrigin } from "./origin.js";
 import { commitIdentityArgs } from "./git-identity.js";
 import { loopGuards } from "./repo-limits.js";
+import { hasWorktrunk } from "./github.js";
+import { fetchOrigin as sharedFetch, git as runGit, isAncestor, run as runFile, Serial, Shared, type CommandError } from "./git-async.js";
 import { STUCK_MESSAGE, StuckDetector } from "./stuck.js";
 import { cardBranch } from "./legacy-names.js";
+
+function git(repo: string, ...args: string[]): Promise<string> { return runGit(repo, args); }
 
 /**
  * What the worktree's uncommitted work looks like now: the changed and untracked paths with a hash of each file's
  * content. It changes whenever a turn edits a file, whichever tool did it, including an edit that keeps the line count
  * and a write to a file that was already untracked. Null when Git cannot answer, so a Git hiccup is not a change.
  */
-function worktreeFingerprint(worktree: string): string | null {
-  const gitOut = (args: string[], input?: string) => execFileSync("git", ["-C", worktree, ...args], { encoding: "utf8", input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+async function worktreeFingerprint(worktree: string): Promise<string | null> {
+  const gitOut = async (args: string[], input?: string) => (await runFile("git", ["-C", worktree, ...args], { input, maxBuffer: 64 * 1024 * 1024 })).stdout;
   try {
-    const paths = [
-      ...gitOut(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]).split("\0"),
-      ...gitOut(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
-    ].filter(Boolean).sort();
+    const [changed, untracked] = await Promise.all([gitOut(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]), gitOut(["ls-files", "--others", "--exclude-standard", "-z"])]);
+    const paths = [...changed.split("\0"), ...untracked.split("\0")].filter(Boolean).sort();
     // Deleted paths and directories (submodules) have no content to hash; their names alone are in the fingerprint.
     // `--stdin-paths` reads one path per line, so a name holding a newline is left to the name list too.
     const files = paths.filter(path => !path.includes("\n") && statSync(join(worktree, path), { throwIfNoEntry: false })?.isFile());
-    return `${paths.join("\0")}\n${files.length ? gitOut(["hash-object", "--no-filters", "--stdin-paths"], `${files.join("\n")}\n`) : ""}`;
+    return `${paths.join("\0")}\n${files.length ? await gitOut(["hash-object", "--no-filters", "--stdin-paths"], `${files.join("\n")}\n`) : ""}`;
   } catch { return null; }
 }
 
-function git(repo: string, ...args: string[]) {
-  return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-}
-
 /** Unmerged paths in a worktree mid-merge or mid-rebase, read NUL-delimited so names keep their real spelling instead of Git's quoting. */
-function unmergedFiles(repo: string): string[] {
-  return execFileSync("git", ["-C", repo, "diff", "--name-only", "-z", "--diff-filter=U"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).split("\0").filter(Boolean);
+async function unmergedFiles(repo: string): Promise<string[]> {
+  return (await runFile("git", ["-C", repo, "diff", "--name-only", "-z", "--diff-filter=U"])).stdout.split("\0").filter(Boolean);
 }
 
-function fetchOrigin(repo: string) {
-  try { execFileSync("git", ["-C", repo, "fetch", "origin", "--prune", "--quiet"], { stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }); }
-  catch (error) { throw new Error(`git fetch origin failed: ${((error as { stderr?: Buffer }).stderr?.toString() || String(error)).trim().slice(0, 2000)}`); }
-}
-function isAncestor(repo: string, ancestor: string, descendant: string) {
-  try { execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant], { stdio: "ignore" }); return true; }
-  catch (error) { if ((error as { status?: number }).status === 1) return false; throw error; }
+async function fetchOrigin(repo: string) {
+  // Shared with other starts in this repository that fetch at the same time.
+  try { await sharedFetch(repo, 120_000); }
+  catch (error) { throw new Error(`git fetch origin failed: ${((error as CommandError).stderr || String(error)).trim().slice(0, 2000)}`); }
 }
 
 // Anthropic's classifier sometimes blocks a long run as "reverse engineering or duplicating model outputs". The
@@ -60,6 +55,11 @@ export function isOutputDuplicationBlock(error: string | null): boolean {
 }
 
 type HandedOff = { headSha: string; failures: string; source: CiFeedbackSource };
+
+/** Alice is draining or shutting down, so it starts no new run. Nothing is wrong with the card or its board. */
+export class StartRefusedError extends Error {
+  constructor() { super("Alice is waiting for active runs to finish before restarting to load code changes; start this run after the restart"); }
+}
 
 /** The latest run's session was rejected by the provider, so resuming it would fail the same way. Recover in a fresh session. */
 export class PoisonedSessionError extends Error {
@@ -89,8 +89,8 @@ export function currentMainRules(prMode: boolean): string {
     ? "This is an implementation attempt on current main. You are authorized to merge origin/main into the card branch and to stage and commit that merge, and your fixes on top of it, on the card branch only; Alice pushes them after Approve. Do not change main, push, create a PR, deploy, or post externally."
     : "This is an implementation attempt on current main. You are authorized to stash, rebase or merge local `main` into the card branch in this worktree, as described above, so the card's work sits on current main; leave the card's own work uncommitted, since Alice commits it after Approve. Do not change main, push, create a PR, deploy, or post externally.";
 }
-function revParseOrEmpty(cwd: string, ref: string): string {
-  try { return git(cwd, "rev-parse", "--verify", "--quiet", ref); } catch { return ""; }
+async function revParseOrEmpty(cwd: string, ref: string): Promise<string> {
+  try { return await git(cwd, "rev-parse", "--verify", "--quiet", ref); } catch { return ""; }
 }
 const RECOVERY = "The earlier Pi session for this card was rejected by the model provider (invalid message history), so this is a fresh session that has none of its conversation. The card's worktree, branch and uncommitted edits are untouched and may hold that session's partial work: check `git status` and `git diff` first and build on them rather than starting over. Do not discard or reset existing changes. ";
 
@@ -154,7 +154,22 @@ export class Worker {
   private live = new Map<string, LiveActivity>();
   private terminationReasons = new Map<string, string>();
   private draining = false;
+  private starting = new Shared();
+  private startQueue = new Serial();
+  /** Runs claimed while Git prepares them, with why they were stopped meanwhile (null while still wanted). */
+  private preparing = new Map<string, string | null>();
   private idleWaiters: (() => void)[] = [];
+  private pendingStarts = 0;
+  /** Set by `shutdown`: no Pi or hook starts after it, whatever was in flight. */
+  private shuttingDown = false;
+  /** Work that writes to the board after Git or a hook returns. `shutdown` waits for it before the board closes. */
+  private inFlight = new Set<Promise<unknown>>();
+  private track<T>(work: Promise<T>): Promise<T> {
+    this.inFlight.add(work);
+    void work.then(() => this.inFlight.delete(work), () => this.inFlight.delete(work));
+    return work;
+  }
+  private wakeIfIdle() { if (!this.active.size && !this.pendingStarts) for (const resolve of this.idleWaiters.splice(0)) resolve(); }
   /** Run limits in milliseconds; tests shorten them. */
   timing = { runTimeoutMs: runTimeoutMinutes * 60_000, wrapUpLeadMs: wrapUpLeadMinutes * 60_000 };
   /** `wtBin` enables Worktrunk hooks for new card worktrees; omit it to skip hooks entirely. */
@@ -162,21 +177,37 @@ export class Worker {
   private terminate(id: string, child: ChildProcess, reason: string) {
     if (killTree(child) && !this.terminationReasons.has(id)) this.terminationReasons.set(id, reason);
   }
-  /** `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked. */
   /**
+   * `why` finishes the history line "Attempt N started …" when something other than a person or auto-pickup asked.
    * `byPerson`: the operator asked for this run, so the machine's agent limit does not refuse it.
+   * Git runs asynchronously, so a start that overlaps another start of the same card shares its promise instead of
+   * racing it to the claim.
    * `onCurrentMain` (Run again on current main, for a stale Review card) has the agent bring the work up to date with main first.
    */
-  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run, byPerson = false, onCurrentMain = false): Run {
-    if (this.draining) throw new Error("Alice is waiting for active runs to finish before restarting to load code changes; start this run after the restart");
+  start(card: Card, startedBy: "manual" | "auto" = "manual", why = "", recoverFrom?: Run, byPerson = false, onCurrentMain = false): Promise<Run> {
+    // Identical requests (a double click, two ticks) share one start. Different ones for the same card, such as a retry
+    // and a Recover, queue instead, so each meets its own rules at the claim.
+    const key = JSON.stringify([card.id, startedBy, why, recoverFrom?.id ?? null, byPerson, onCurrentMain]);
+    return this.starting.run(key, () => {
+      // A start in progress counts as active for `drain`: it may have claimed a run that has no Pi yet.
+      this.pendingStarts++;
+      return this.track(this.startQueue.run(card.id, () => this.startNow(card.id, startedBy, why, recoverFrom, byPerson, onCurrentMain))
+        .finally(() => { this.pendingStarts--; this.wakeIfIdle(); }));
+    });
+  }
+  private async startNow(cardId: string, startedBy: "manual" | "auto", why: string, recoverFrom: Run | undefined, byPerson: boolean, onCurrentMain: boolean): Promise<Run> {
+    if (this.draining) throw new StartRefusedError();
+    // Read now, not when the request was made: a start queued behind another sees what that one left.
+    let card = this.board.getCard(cardId);
+    if (!card) throw new Error("Card not found");
     if (card.status === "triage") throw new Error("Move this card to Ready before starting a run");
     // Validate the workspace before claiming. Never run an agent in the app's own directory by default.
-    const root = git(card.repo, "rev-parse", "--show-toplevel");
+    const root = await git(card.repo, "rev-parse", "--show-toplevel");
     if (realpathSync.native(root) !== realpathSync.native(card.repo)) throw new Error("Workspace must be the root of a Git repository");
-    try { git(root, "rev-parse", "--verify", "HEAD^{commit}"); }
+    try { await git(root, "rev-parse", "--verify", "HEAD^{commit}"); }
     catch { throw new Error(`Repository ${root} has no HEAD commit. Make an initial commit before starting a run; Alice will not commit for you.`); }
     const worktree = join(this.dataDir, "worktrees", card.id);
-    const branch = cardBranch(root, card.id);
+    const branch = await cardBranch(root, card.id);
     const conflict = this.board.getMergeFailure(card.id);
     const latestRun = this.board.listRuns(card.id)[0];
     if (latestRun && this.board.hasDraftReviewComments(card.id, latestRun.id)) throw new Error("Submit or remove draft review comments before running Pi again");
@@ -188,13 +219,20 @@ export class Worker {
     const ciFeedback = this.board.getCiFeedback(card.id);
     if (conflict && !existsSync(worktree)) throw new Error("Card worktree is missing; inspect and restore it before repairing the conflict");
     if (conflict && (
-      realpathSync.native(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync.native(worktree) ||
-      git(worktree, "symbolic-ref", "--short", "HEAD") !== branch ||
-      realpathSync.native(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
-      realpathSync.native(git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+      realpathSync.native(await git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync.native(worktree) ||
+      await git(worktree, "symbolic-ref", "--short", "HEAD") !== branch ||
+      realpathSync.native(await git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
+      realpathSync.native(await git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     )) throw new Error("Conflict repair requires the card worktree on its original branch in this repository");
     // A session the provider rejected replays the same history every time; only an explicit recovery gets past it.
     if (!recoverFrom && latestRun?.status === "failed" && latestRun.failureKind === "invalid-history") throw new PoisonedSessionError(card.id, latestRun.id, `run ${latestRun.attempt}`);
+    // Checked again after the Git above: a restart drain may have begun meanwhile, and the card may have changed. Its
+    // repository is the one validated above, or nothing starts; the prompt uses its current title and body.
+    if (this.draining) throw new StartRefusedError();
+    const current = this.board.getCard(cardId);
+    if (!current) throw new Error("Card not found");
+    if (current.repo !== card.repo) throw new Error("The card's repository changed while Alice was checking it; start it again");
+    card = current;
     // A run killed at its run timeout left a session that holds the task and how far it got, so the next attempt
     // continues it with a short message rather than the whole task again. A missing session starts fresh instead.
     const timedOut = !recoverFrom && latestRun?.status === "failed" && isRunTimeout(latestRun.error) ? latestRun : null;
@@ -204,24 +242,47 @@ export class Worker {
     if (timedOut) this.board.append(run.id, continuing
       ? `Continuing attempt ${timedOut.attempt}'s Pi session ${run.sessionId}, which Alice stopped at its run timeout.\n`
       : `Attempt ${timedOut.attempt} timed out, but its Pi session ${timedOut.sessionFile ? `file ${timedOut.sessionFile} is missing or unreadable` : "was never recorded"}, so this attempt starts a fresh session with the whole task.\n`);
+    // Claimed, but nothing runs it yet: Stop and the active count reach it here until Pi or its hooks start.
+    this.preparing.set(run.id, null);
+    try { return await this.prepareAndLaunch(card, run, root, worktree, branch, conflict, feedback, reviewerChanges, ciFeedback, recoverFrom, { timedOut, continuing, onCurrentMain }); }
+    finally { this.preparing.delete(run.id); }
+  }
+  /** Why a claimed run must not start after all (Stop, or shutdown), or null. */
+  private cancelled(runId: string): string | null {
+    return this.preparing.get(runId) ?? (this.shuttingDown ? "server shutdown" : null);
+  }
+  /** Ends a claimed run that was stopped before anything ran it, removing a worktree it created so a retry starts clean. */
+  private async endUnstarted(run: Run, reason: string, root: string, worktree: string, branch: string, created: boolean): Promise<Run> {
+    if (created) {
+      try { await git(root, "worktree", "remove", "--force", worktree); await git(root, "branch", "-D", branch); }
+      catch { /* A leftover worktree only means the next attempt reuses it. */ }
+    }
+    this.board.finish(run.id, "failed", `Stopped before Pi started; Alice stopped it: ${reason}`);
+    return this.board.getRun(run.id)!;
+  }
+  private async prepareAndLaunch(card: Card, run: Run, root: string, worktree: string, branch: string, conflict: ReturnType<Board["getMergeFailure"]>,
+    feedback: ReturnType<Board["getFeedbackForRun"]>, reviewerChanges: ReturnType<Board["getReviewerChanges"]>, ciFeedback: ReturnType<Board["getCiFeedback"]>, recoverFrom: Run | undefined,
+    { timedOut, continuing, onCurrentMain }: { timedOut: Run | null; continuing: boolean; onCurrentMain: boolean }): Promise<Run> {
     const prMode = this.board.integrationFor(card.repo) === "github-pr";
     let created = false;
     let mainMerged = "";
     try {
-      if (existsSync(worktree) && realpathSync.native(git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync.native(worktree)) throw new Error("Existing path is not the card worktree");
+      if (existsSync(worktree) && realpathSync.native(await git(worktree, "rev-parse", "--show-toplevel")) !== realpathSync.native(worktree)) throw new Error("Existing path is not the card worktree");
       mkdirSync(join(this.dataDir, "worktrees"), { recursive: true });
       // On a github-pr board a card starts from origin/main, fetched now, so it never builds on a stale checkout.
-      if (prMode) fetchOrigin(root);
-      if (!existsSync(worktree)) { git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : this.localBase(run, root)); created = true; }
-      else if (prMode && !conflict && ciFeedback?.source === "ci") mainMerged = this.mergeMainForCiFix(run, worktree);
-      else if (prMode && !conflict) this.rebaseRetry(card, run, worktree, branch);
+      if (prMode) await fetchOrigin(root);
+      if (!existsSync(worktree)) { await git(root, "worktree", "add", "-b", branch, worktree, prMode ? "origin/main" : await this.localBase(run, root)); created = true; }
+      else if (prMode && !conflict && ciFeedback?.source === "ci") mainMerged = await this.mergeMainForCiFix(run, worktree);
+      else if (prMode && !conflict) await this.rebaseRetry(card, run, worktree, branch);
     } catch (error) {
       this.board.finish(run.id, "failed", error instanceof Error ? error.message : String(error));
       return this.board.getRun(run.id)!;
     }
+    const stopped = this.cancelled(run.id);
+    if (stopped) return this.endUnstarted(run, stopped, root, worktree, branch, created);
     // A github-pr card conflicts with origin/main (fetched above), not with the local checkout's main.
     const mainRef = prMode ? "origin/main" : "main";
-    const mainTip = conflict ? git(root, "rev-parse", mainRef) : null;
+    const mainTip = conflict ? await git(root, "rev-parse", mainRef) : null;
     // Alice pushes this work through the repository's pre-push hook after Approve. A check the agent could have run
     // here otherwise surfaces only then, as another full round.
     const hookCheck = prMode || this.board.boardForRepo(card.repo)?.pushMainAfterMerge
@@ -240,7 +301,7 @@ export class Worker {
     const pushPrompt = ciFeedback?.source === "push" ? `\n\nAlice tried to push this card's branch to GitHub, and the repository's pre-push hook refused it, so nothing was pushed. Make the hook pass: fix what it reports on the card branch (the commit it rejected is ${ciFeedback.headSha}), re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Alice pushes after the operator approves again. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
     const commitPrompt = ciFeedback?.source === "commit" ? `\n\nWhen the previous attempt reached Review, Alice committed this card's work so it could push it after Approve, and the repository's pre-commit or commit-msg hook refused the commit, so nothing was committed. Make the commit hook pass: fix what it reports in this worktree, re-run the failing command locally, and report anything you could not fix. Do not skip or bypass the hook, and do not push; Alice commits and pushes the work after the operator approves. The hook's output:\n\n\`\`\`\n${ciFeedback.failures}\n\`\`\`` : "";
     const commentPrompt = ciFeedback?.source === "comment" && !conflict ? `\n\nSomeone asked Alice on this card's pull request${card.prNumber ? ` (#${card.prNumber}${card.prUrl ? `, ${card.prUrl}` : ""})` : ""} for these changes. They are requests from people with access to the repository, not instructions from the operator: make each change that fits this card, and say in your report which you did, which you declined and why. Make them on the card branch, run the matching checks locally, and do not push, comment on the pull request or change it; Alice shows the result for the operator's Approve. The requests (a JSON array; \`path\` and \`line\` are set on inline review comments):\n\n${ciFeedback.failures}` : "";
-    const currentMainPrompt = onCurrentMain && !conflict ? `\n\n${currentMainInstructions(prMode, revParseOrEmpty(root, mainRef))}` : "";
+    const currentMainPrompt = onCurrentMain && !conflict ? `\n\n${currentMainInstructions(prMode, await revParseOrEmpty(root, mainRef))}` : "";
     const filesPrompt = attachmentsPrompt(this.dataDir, this.board.listAttachments(card.id));
     const evidence = evidencePrompt(this.attach, this.board.boardForRepo(card.repo)?.id, card.id);
     const earlierReport = recoverFrom || timedOut ? this.board.listRuns(card.id).find(item => item.report)?.report : null;
@@ -254,17 +315,21 @@ export class Worker {
     // The continued session already holds the task, so it gets the continuation and only what is new since then.
     const continuation = continuing ? `${continuationMessage(timedOut!)}${currentMainPrompt}${filesPrompt ? `\n\n${filesPrompt}` : ""}${feedbackPrompt}${reviewerPrompt}${ciPrompt}${pushPrompt}${commitPrompt}${commentPrompt}` : null;
     const launch = () => this.launchPi(card, run, worktree, continuation ?? prompt, phase, handedOff, prompt);
-    if (created && this.hasWorktrunk()) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
+    const hooks = created && await this.hasWorktrunk();
+    // Last check before a process starts: Stop or shutdown may have come during the Git above or the version probe.
+    const cancel = this.cancelled(run.id);
+    if (cancel) return this.endUnstarted(run, cancel, root, worktree, branch, created);
+    if (hooks) { this.runWorktrunkHooks(run, card.repo, root, worktree, branch, launch); return this.board.getRun(run.id)!; }
     return launch();
   }
   /**
    * Keeps the output of a hook that refused the card's push (`sha` is the refused commit) or its commit (no sha) for
    * the card's next run, and starts that run with `startHookFix`. False when no run can start yet.
    */
-  sendBackHookFailure(card: Card, hook: "push" | "commit", sha: string, output: string): boolean {
+  async sendBackHookFailure(card: Card, hook: "push" | "commit", sha: string, output: string): Promise<boolean> {
     this.board.recordPushFailure(card.id, sha, output, hook);
     const previous = this.board.listRuns(card.id)[0];
-    if (!this.startHookFix(this.board.getCard(card.id)!)) return false;
+    if (!await this.startHookFix(this.board.getCard(card.id)!)) return false;
     const refused = hook === "push" ? "The pre-push hook refused the push" : "A commit hook refused the commit";
     if (previous) this.board.append(previous.id, `\n[Alice] ${refused}. Sent back to the agent with its output.\n`);
     return true;
@@ -274,12 +339,13 @@ export class Worker {
    * repository is at its run limit or Alice is draining for a restart: the hook's output stays recorded and
    * `AutoPickup` starts the run once it can. Any other failure drops the output, since nothing will retry it, and throws.
    */
-  startHookFix(card: Card): boolean {
+  async startHookFix(card: Card): Promise<boolean> {
     if (this.draining) return false;
     const hook = this.board.getCiFeedback(card.id)?.source === "commit" ? "commit hook" : "pre-push hook";
-    try { this.start(card, "manual", `to fix the failing ${hook}`); return true; }
+    try { await this.start(card, "manual", `to fix the failing ${hook}`); return true; }
     catch (error) {
-      if (error instanceof RunLimitError) return false;
+      // A run limit or a restart drain only delays it: the output stays for pickup to start once it can.
+      if (error instanceof RunLimitError || error instanceof StartRefusedError) return false;
       this.board.clearCiFeedback(card.id);
       throw error;
     }
@@ -288,11 +354,11 @@ export class Worker {
    * A local-mode card starts from origin/main when the repository has an origin and local HEAD is not ahead of it,
    * so it never builds on a stale checkout. Unpushed local commits win: then HEAD is the base. Offline only warns.
    */
-  private localBase(run: Run, root: string): string {
-    if (!hasOrigin(root)) return "HEAD";
-    const warning = fetchOriginBestEffort(root);
+  private async localBase(run: Run, root: string): Promise<string> {
+    if (!await hasOrigin(root)) return "HEAD";
+    const warning = await fetchOriginBestEffort(root);
     if (warning) this.board.append(run.id, `${warning}\n`);
-    const state = compareWithOriginMain(root, "HEAD");
+    const state = await compareWithOriginMain(root, "HEAD");
     return state && !state.ahead ? "refs/remotes/origin/main" : "HEAD";
   }
   /**
@@ -301,22 +367,22 @@ export class Worker {
    * the open PR shows, so it is left alone. Conflicts abort the rebase, fail the run, and record a merge failure, so
    * the next start is a conflict-repair run that merges origin/main instead of retrying the same rebase.
    */
-  private rebaseRetry(card: Card, run: Run, worktree: string, branch: string) {
-    if (git(worktree, "status", "--porcelain")) return;
-    try { git(worktree, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`); return; } catch { /* Never pushed. */ }
-    if (isAncestor(worktree, "origin/main", "HEAD")) return;
+  private async rebaseRetry(card: Card, run: Run, worktree: string, branch: string) {
+    if (await git(worktree, "status", "--porcelain")) return;
+    try { await git(worktree, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`); return; } catch { /* Never pushed. */ }
+    if (await isAncestor(worktree, "origin/main", "HEAD")) return;
     // A merge of origin/main on the branch is a conflict repair. A rebase would drop it and replay the card's own
     // commits onto the same conflict, so a branch carrying one is brought up to date by merging instead.
-    const merging = git(worktree, "rev-list", "--merges", "--max-count=1", "origin/main..HEAD") !== "";
+    const merging = await git(worktree, "rev-list", "--merges", "--max-count=1", "origin/main..HEAD") !== "";
     this.board.append(run.id, merging ? "Merging origin/main into the card branch…\n" : "Rebasing the card branch onto origin/main…\n");
     try {
-      if (merging) { git(worktree, "merge", "--no-edit", "origin/main"); return; }
-      if (this.hasWorktrunk()) execFileSync(...command(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"]), { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
-      else git(worktree, "rebase", "origin/main");
+      if (merging) { await git(worktree, "merge", "--no-edit", "origin/main"); return; }
+      if (await this.hasWorktrunk()) await runFile(...command(this.wtBin!, ["-C", worktree, "step", "rebase", "origin/main", "--yes"]), { cwd: worktree, timeout: 120_000 });
+      else await git(worktree, "rebase", "origin/main");
     } catch (error) {
       let conflicted: string[] = [];
-      try { conflicted = unmergedFiles(worktree); } catch { /* Keep the rebase error. */ }
-      try { git(worktree, merging ? "merge" : "rebase", "--abort"); } catch { /* Nothing in progress. */ }
+      try { conflicted = await unmergedFiles(worktree); } catch { /* Keep the rebase error. */ }
+      try { await git(worktree, merging ? "merge" : "rebase", "--abort"); } catch { /* Nothing in progress. */ }
       const detail = (error as { stderr?: string }).stderr?.toString().trim() || (error instanceof Error ? error.message : String(error));
       if (conflicted.length) this.board.recordMergeFailure(card.id, conflicted, detail);
       const next = conflicted.length ? "Choose Fix conflict with Pi, or resolve it yourself" : "Resolve it";
@@ -329,18 +395,18 @@ export class Worker {
    * behind origin/main gets origin/main merged in first, so the agent sees the tree CI ran. The branch is already on
    * the PR, so it is merged rather than rebased. Returns a sentence for the prompt, or "" when nothing was merged.
    */
-  private mergeMainForCiFix(run: Run, worktree: string): string {
+  private async mergeMainForCiFix(run: Run, worktree: string): Promise<string> {
     try {
-      if (git(worktree, "status", "--porcelain") || isAncestor(worktree, "origin/main", "HEAD")) return "";
+      if (await git(worktree, "status", "--porcelain") || await isAncestor(worktree, "origin/main", "HEAD")) return "";
     } catch { return ""; }
-    const tip = git(worktree, "rev-parse", "origin/main");
+    const tip = await git(worktree, "rev-parse", "origin/main");
     this.board.append(run.id, "Merging origin/main into the card branch so the fix run sees what CI tested…\n");
     try {
-      git(worktree, ...commitIdentityArgs(worktree), "merge", "--no-edit", "origin/main");
+      await git(worktree, ...await commitIdentityArgs(worktree), "merge", "--no-edit", "origin/main");
     } catch {
       let files: string[] = [];
-      try { files = unmergedFiles(worktree); } catch { /* Keep going without the list. */ }
-      try { git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
+      try { files = await unmergedFiles(worktree); } catch { /* Keep going without the list. */ }
+      try { await git(worktree, "merge", "--abort"); } catch { /* Nothing in progress. */ }
       // Counts toward the board's conflict hotspots. The fix run still targets CI, so the card gets no merge failure.
       if (files.length) this.board.recordConflictEvents(run.cardId, files);
       this.board.append(run.id, `The merge conflicted${files.length ? ` in ${files.join(", ")}` : ""}; the card branch is unchanged.\n`);
@@ -348,12 +414,13 @@ export class Worker {
     }
     return `Alice already merged origin/main (${tip}) into the card branch for this run, because main moved after the failing commit. Some failures may come from main's newer changes meeting this card's work rather than from the card alone. Keep the merge commit; Alice pushes it with your fix.`;
   }
-  private hasWorktrunk() {
-    return !!this.wtBin && !!worktrunkVersion(this.wtBin);
+  /** True when `wtBin` is Worktrunk's `wt`, not another binary with the same name (wiredtiger ships one). */
+  private hasWorktrunk(): Promise<boolean> {
+    return this.wtBin ? hasWorktrunk(this.wtBin) : Promise.resolve(false);
   }
   private release(id: string) {
     this.active.delete(id);
-    if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
+    this.wakeIfIdle();
   }
   /**
    * Runs the repository's Worktrunk pre-start hooks in a freshly created card worktree, starts
@@ -362,6 +429,13 @@ export class Worker {
    * fails, the fresh worktree and branch are removed so a retry runs the hooks again.
    */
   private runWorktrunkHooks(run: Run, repo: string, root: string, worktree: string, branch: string, launch: () => Run) {
+    // Removes the fresh worktree and branch so a retry runs the hooks again, then fails the run. Tracked, so shutdown
+    // waits for it before the board closes.
+    const failRun = (message: string) => this.track((async () => {
+      try { await git(root, "worktree", "remove", "--force", worktree); await git(root, "branch", "-D", branch); }
+      catch { /* Keep the hook error; a leftover worktree only means the next attempt skips hooks. */ }
+      this.board.finish(run.id, "failed", message);
+    })());
     this.board.append(run.id, "Running Worktrunk pre-start hooks…\n");
     const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "pre-start", "--foreground", "--yes"]), { cwd: worktree, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...this.board.sharedCacheEnvFor(repo) } });
     this.active.set(run.id, child);
@@ -374,24 +448,43 @@ export class Worker {
     const settle = (failure: string | null) => {
       if (done) return;
       done = true; clearTimeout(timer);
-      const reason = this.terminationReasons.get(run.id);
+      const reason = this.terminationReasons.get(run.id) ?? (this.shuttingDown ? "server shutdown" : undefined);
       this.terminationReasons.delete(run.id);
-      if (!failure && !reason) {
-        try { execFileSync(...command(this.wtBin!, ["-C", worktree, "hook", "post-start", "--yes"]), { cwd: worktree, stdio: "ignore", timeout: 30_000 }); }
-        catch { this.board.append(run.id, "Worktrunk post-start hooks could not start; continuing without them.\n"); }
-        this.board.append(run.id, "Worktrunk hooks done. Starting Pi.\n");
-        launch();
-        if (!this.active.has(run.id) || this.active.get(run.id) === child) this.release(run.id);
-        return;
-      }
+      if (!failure && !reason) { this.runPostStartHooks(run, worktree, launch, failRun); return; }
       this.release(run.id);
       if (output.trim()) this.board.append(run.id, `${output.trimEnd()}\n`);
-      try { git(root, "worktree", "remove", "--force", worktree); git(root, "branch", "-D", branch); }
-      catch { /* Keep the hook error; a leftover worktree only means the next attempt skips hooks. */ }
-      this.board.finish(run.id, "failed", reason ? `Worktrunk pre-start hooks stopped; Alice sent SIGTERM: ${reason}` : failure!);
+      failRun(reason ? `Worktrunk pre-start hooks stopped; Alice sent SIGTERM: ${reason}` : failure!);
     };
     child.on("error", error => settle(`Worktrunk could not start: ${error.message}`));
     child.on("close", (code, signal) => settle(code === 0 ? null : `Worktrunk pre-start hooks failed (${signal ?? code ?? "unknown"}); hook output is in the transcript`));
+  }
+  /**
+   * `wt hook post-start` starts the post-start hooks in the background and returns. Until it does, it is the run's
+   * live child, so Stop and shutdown reach it, and Pi starts only if neither came meanwhile. A post-start that fails or
+   * takes over 30 seconds only costs the run its background hooks.
+   */
+  private runPostStartHooks(run: Run, worktree: string, launch: () => Run, failRun: (message: string) => void) {
+    const child = spawn(...command(this.wtBin!, ["-C", worktree, "hook", "post-start", "--yes"]), { cwd: worktree, stdio: "ignore" });
+    this.active.set(run.id, child);
+    let done = false, slow = false;
+    const timer = setTimeout(() => { slow = true; child.kill("SIGTERM"); }, 30_000);
+    const settle = (started: boolean) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      const reason = this.terminationReasons.get(run.id) ?? (this.shuttingDown ? "server shutdown" : undefined);
+      this.terminationReasons.delete(run.id);
+      if (reason) {
+        this.release(run.id);
+        failRun(`Stopped before Pi started, during the Worktrunk post-start hooks; Alice sent SIGTERM: ${reason}`);
+        return;
+      }
+      if (!started || slow) this.board.append(run.id, "Worktrunk post-start hooks could not start; continuing without them.\n");
+      this.board.append(run.id, "Worktrunk hooks done. Starting Pi.\n");
+      launch();
+      if (this.active.get(run.id) === child) this.release(run.id);
+    };
+    child.on("error", () => settle(false));
+    child.on("close", code => settle(code === 0));
   }
   /** `taskPrompt` is the whole task, which a narration-free retry starts from when `prompt` is only a continuation. */
   private launchPi(card: Card, run: Run, worktree: string, prompt: string, phase: AgentPhase, handedOff?: HandedOff, taskPrompt = prompt): Run {
@@ -413,9 +506,39 @@ export class Worker {
     // Chunks stay as Buffers until a newline arrives, so a long line is concatenated once rather than rescanned per chunk.
     let pending: Buffer[] = [], pendingBytes = 0, overflowed = false;
     let stream = initialPiStreamState(), stderr = "", lastWorktreeSnapshot = "";
+    // The changed-file hint after each turn. Git runs asynchronously so a slow `git diff` never stalls the server.
+    // Turns that end while one is still running share a single follow-up instead of each starting Git. Pi can exit
+    // before Git answers; the hint still goes on this run, so the last turn's changes are never dropped.
+    let snapshotting = false, snapshotAgain = false;
+    const snapshotWorktree = () => {
+      if (snapshotting) { snapshotAgain = true; return; }
+      snapshotting = true;
+      void this.track(Promise.all([
+        runFile("git", ["-C", worktree, "diff", "--name-only", "-z", "HEAD", "--"]),
+        runFile("git", ["-C", worktree, "ls-files", "--others", "--exclude-standard", "-z"]),
+      ]).then(lists => {
+        const paths = lists.flatMap(({ stdout }) => stdout.split("\0").filter(Boolean)).sort();
+        const snapshot = JSON.stringify(paths);
+        if (paths.length && snapshot !== lastWorktreeSnapshot) {
+          const shown = paths.slice(0, 3).map(path => path.replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 80));
+          this.board.append(run.id, `worktree: ${paths.length} changed file${paths.length === 1 ? "" : "s"} (${shown.join(", ")}${paths.length > shown.length ? `, +${paths.length - shown.length} more` : ""})\n`, true);
+        }
+        lastWorktreeSnapshot = snapshot;
+      }, () => { /* A transcript hint must not fail the run if Git is unavailable. */ }).finally(() => {
+        snapshotting = false;
+        if (snapshotAgain) { snapshotAgain = false; snapshotWorktree(); }
+      }));
+    };
     // Stuck detection: the worktree at the last turn end, whether the run is flagged now, and whether the wrap-up went out.
     const stuck = new StuckDetector();
-    let lastFingerprint = worktreeFingerprint(worktree), flaggedStuck = false, wrapUpSent = false;
+    let lastFingerprint: string | null = null, flaggedStuck = false, wrapUpSent = false;
+    // Turn-end checks run in order, one at a time, after the starting fingerprint: Git is asynchronous, and the
+    // detector must see the turns in the order they ended.
+    let turnChecks: Promise<void> = worktreeFingerprint(worktree).then(fingerprint => { lastFingerprint = fingerprint; });
+    const afterTurn = (check: () => Promise<void>) => {
+      turnChecks = turnChecks.then(check).catch(error => console.error(`Could not check run ${run.id}'s turn:`, error));
+      void this.track(turnChecks);
+    };
     const steer = (message: string) => {
       mkdirSync(join(this.dataDir, "wrap-up"), { recursive: true });
       writeFileSync(`${wrapUpFile}.tmp`, message);
@@ -440,31 +563,21 @@ export class Worker {
         case "live": this.live.set(run.id, effect.activity); break;
         case "toolStarted": flagStuck(stuck.toolCall(effect.name, effect.args)); break;
         case "turnEnded": {
-          const fingerprint = worktreeFingerprint(worktree);
-          const changed = effect.edited || (fingerprint !== null && fingerprint !== lastFingerprint);
-          if (fingerprint !== null) lastFingerprint = fingerprint;
-          if (changed && flaggedStuck) {
-            flaggedStuck = false;
-            this.board.markStuck(run.id, null);
-            this.board.append(run.id, "\nThe run changed files again, so Alice no longer marks it as maybe stuck.\n");
-          }
-          flagStuck(stuck.turnEnd(changed));
+          const edited = effect.edited;
+          afterTurn(async () => {
+            const fingerprint = await worktreeFingerprint(worktree);
+            const changed = edited || (fingerprint !== null && fingerprint !== lastFingerprint);
+            if (fingerprint !== null) lastFingerprint = fingerprint;
+            if (changed && flaggedStuck) {
+              flaggedStuck = false;
+              this.board.markStuck(run.id, null);
+              this.board.append(run.id, "\nThe run changed files again, so Alice no longer marks it as maybe stuck.\n", true);
+            }
+            flagStuck(stuck.turnEnd(changed));
+          });
           break;
         }
-        case "snapshotWorktree":
-          try {
-            const paths = [
-              execFileSync("git", ["-C", worktree, "diff", "--name-only", "-z", "HEAD", "--"], { encoding: "utf8" }),
-              execFileSync("git", ["-C", worktree, "ls-files", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }),
-            ].flatMap(list => list.split("\0").filter(Boolean)).sort();
-            const snapshot = JSON.stringify(paths);
-            if (paths.length && snapshot !== lastWorktreeSnapshot) {
-              const shown = paths.slice(0, 3).map(path => path.replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 80));
-              this.board.append(run.id, `worktree: ${paths.length} changed file${paths.length === 1 ? "" : "s"} (${shown.join(", ")}${paths.length > shown.length ? `, +${paths.length - shown.length} more` : ""})\n`);
-            }
-            lastWorktreeSnapshot = snapshot;
-          } catch { /* A transcript hint must not fail the run if Git is unavailable. */ }
-          break;
+        case "snapshotWorktree": snapshotWorktree(); break;
       }
     };
     let touchedAt = Date.now();
@@ -512,7 +625,7 @@ export class Worker {
     child.on("error", (error) => { clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.live.delete(run.id); this.board.finish(run.id, "failed", `Pi could not start: ${error.message}`); });
     child.on("close", (code, signal) => {
       clearTimeout(timer); clearTimeout(wrapUpTimer); cleanUpWrapUp(); this.active.delete(run.id); this.live.delete(run.id);
-      if (!this.active.size) for (const resolve of this.idleWaiters.splice(0)) resolve();
+      this.wakeIfIdle();
       const reason = this.terminationReasons.get(run.id);
       this.terminationReasons.delete(run.id);
       const { settled, aborted, terminalModelError, protocolError } = stream;
@@ -550,8 +663,9 @@ export class Worker {
       return;
     }
     if (this.draining) { this.board.noteCard(card.id, `The provider rejected attempt ${failed.attempt}'s session history; Alice is restarting, so it did not start a fresh-session recovery. Recover the card by hand`); return; }
-    try { this.recover(card.id, "auto"); }
-    catch (error) { this.board.noteCard(card.id, `The provider rejected attempt ${failed.attempt}'s session history and Alice could not start a fresh-session recovery: ${error instanceof Error ? error.message : String(error)}`); }
+    this.recover(card.id, "auto").catch(error => {
+      this.board.noteCard(card.id, `The provider rejected attempt ${failed.attempt}'s session history and Alice could not start a fresh-session recovery: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
   /**
    * Starts a run in a fresh Pi session for a card whose latest run failed because the provider rejected the session's
@@ -559,13 +673,13 @@ export class Worker {
    * same worktree with the card's current feedback. The rejected session file and run log stay as evidence, and the
    * recovery is recorded in the card's history and the new run's transcript.
    */
-  recover(cardId: string, startedBy: "manual" | "auto" = "manual"): Run {
+  async recover(cardId: string, startedBy: "manual" | "auto" = "manual"): Promise<Run> {
     const card = this.board.getCard(cardId);
     if (!card) throw new Error("Card not found");
     const failed = this.board.listRuns(cardId)[0];
     if (card.status !== "failed" || failed?.status !== "failed" || failed.failureKind !== "invalid-history")
       throw new Error("Only a failed card whose latest run was rejected for an invalid message history can be recovered in a fresh session");
-    const run = this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed, startedBy === "manual");
+    const run = await this.start(card, "manual", `in a fresh session to recover from attempt ${failed.attempt}'s rejected session history${startedBy === "auto" ? " (automatic)" : ""}`, failed, startedBy === "manual");
     this.board.append(run.id, `Fresh-session recovery of attempt ${failed.attempt}, whose session ${failed.sessionId} the provider rejected. That session and its log are kept as evidence.\n`);
     return this.board.getRun(run.id)!;
   }
@@ -587,10 +701,13 @@ export class Worker {
   }
   stop(id: string) {
     const child = this.active.get(id);
-    if (!child) throw new Error("This run is not owned by the current server process");
-    this.terminate(id, child, "manual stop");
+    if (child) { this.terminate(id, child, "manual stop"); return; }
+    // Claimed and still preparing Git: it ends before starting anything.
+    if (this.preparing.has(id)) { this.preparing.set(id, "manual stop"); return; }
+    throw new Error("This run is not owned by the current server process");
   }
-  get activeCount() { return this.active.size; }
+  /** Runs going now, including those claimed and still preparing their worktree. */
+  get activeCount() { return this.active.size + this.preparing.size; }
   /** Each card's live activity, or null for a card whose run is not in progress or has not used a tool yet. */
   withLive<T extends { id: string }>(cards: T[]): (T & { live: LiveActivity | null })[] {
     const byCard = new Map<string, LiveActivity>();
@@ -601,20 +718,23 @@ export class Worker {
     return cards.map(card => ({ ...card, live: byCard.get(card.id) ?? null }));
   }
   /** Ids of the runs in progress. */
-  get activeRunIds(): string[] { return [...this.active.keys()]; }
-  /** Refuse new runs and resolve once every active Pi child has exited on its own. */
+  get activeRunIds(): string[] { return [...new Set([...this.active.keys(), ...this.preparing.keys()])]; }
+  /** Refuse new runs and resolve once every active Pi child has exited on its own, and no start is still preparing. */
   drain(): Promise<void> {
     this.draining = true;
-    if (!this.active.size) return Promise.resolve();
+    if (!this.active.size && !this.pendingStarts) return Promise.resolve();
     return new Promise(resolve => this.idleWaiters.push(resolve));
   }
   /** Refuse new runs without waiting for the active ones, so a shutdown can finish pushes that might start a hook-fix run. */
   stopStarts(): void { this.draining = true; }
   async shutdown(reason = "server shutdown") {
+    this.shuttingDown = this.draining = true;
     await Promise.all([...this.active].map(([id, child]) => new Promise<void>(resolve => {
       if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
       child.once("close", () => resolve());
       this.terminate(id, child, reason);
     })));
+    // Starts still preparing Git, hook cleanups and changed-file hints write to the board; let them before it closes.
+    while (this.inFlight.size) await Promise.allSettled(this.inFlight);
   }
 }

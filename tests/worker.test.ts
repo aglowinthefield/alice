@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, readdirSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,8 +10,9 @@ import { Board } from "../server/board.js";
 import { PoisonedSessionError, WRAP_UP_MESSAGE, Worker, continuationMessage, sessionIntact } from "../server/worker.js";
 import { STUCK_MESSAGE } from "../server/stuck.js";
 import { Integration, IntegrationConflictError } from "../server/integration.js";
+import { fakeGit, waitFor as waitUntil, withPath } from "./fake-git.js";
 
-test("an uncommitted repository cannot start a worktree or consume an attempt", () => {
+test("an uncommitted repository cannot start a worktree or consume an attempt", async () => {
   const dir = mkdtempSync(join(tmpdir(), "alice-worker-"));
   const repo = join(dir, "repo");
   try {
@@ -20,9 +21,9 @@ test("an uncommitted repository cannot start a worktree or consume an attempt", 
     const board = new Board(join(dir, "board.sqlite"));
     const worker = new Worker(board, join(dir, "data"), join(dir, "missing-pi"));
     const card = board.createCard({ title: "Start", body: "", repo });
-    assert.throws(() => worker.start(card), /Move.*Ready/);
+    await assert.rejects(async () => worker.start(card), /Move.*Ready/);
     board.setStatus(card.id, "ready");
-    assert.throws(() => worker.start(board.getCard(card.id)!), /initial commit/);
+    await assert.rejects(async () => worker.start(board.getCard(card.id)!), /initial commit/);
     assert.equal(board.getCard(card.id)?.status, "ready");
     assert.deepEqual(board.listRuns(card.id), []);
     board.close();
@@ -57,7 +58,7 @@ test("card transcript groups tool activity by turn without storing tool argument
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Transcript", body: "", repo });
     board.setStatus(card.id, "ready");
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.listCards(repo)[0]?.turns === 1);
     assert.equal(board.getRun(run.id)?.status, "running");
     await waitFor(() => board.getRun(run.id)?.status === "review");
@@ -87,7 +88,7 @@ test("a board's shared caches point the agent at the main checkout's cache, and 
     const runCard = async (title: string) => {
       const card = board.createCard({ title, body: "", repo });
       board.setStatus(card.id, "ready");
-      const run = worker.start(board.getCard(card.id)!);
+      const run = await worker.start(board.getCard(card.id)!);
       await waitFor(() => board.getRun(run.id)?.status === "review");
       assert.equal(readFileSync(join(dir, `impression-${card.id}`), "utf8"), "read", "a card run reads Impression's memories without sending its transcript");
       return readFileSync(join(dir, `seen-${card.id}`), "utf8");
@@ -114,7 +115,7 @@ test("a multi-megabyte Pi event line (a screenshot read back) does not kill the 
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Big event", body: "", repo });
     board.setStatus(card.id, "ready");
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status !== "running");
     assert.equal(board.getRun(run.id)?.status, "review", board.getRun(run.id)?.error ?? "");
     board.close();
@@ -145,7 +146,7 @@ test("a run keeps the agent's final message as its markdown report, separate fro
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Research", body: "", repo });
     board.setStatus(card.id, "ready");
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status === "review");
     assert.equal(board.getRun(run.id)!.report, "**Answer: yes.**\n\n- one\n- two");
     board.close();
@@ -167,14 +168,14 @@ test("a transient provider error followed by successful Pi settlement is Review,
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Recover", body: "", repo });
     board.setStatus(card.id, "ready");
-    const recovered = worker.start(board.getCard(card.id)!);
+    const recovered = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(recovered.id)?.status !== "running");
     assert.equal(board.getRun(recovered.id)?.status, "review");
     assert.match(board.getRun(recovered.id)!.output, /provider request failed \(HTTP 503\)/i);
     assert.match(board.getRun(recovered.id)!.output, /recovered and continued/i);
     assert.match(board.getRun(recovered.id)!.output, /SECRET_PROVIDER_DETAIL/);
     writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' '${errorEvent}' '{"type":"agent_settled","aborted":false}'\necho 'SECRET_STDERR' >&2\n`);
-    const terminal = worker.start(board.getCard(card.id)!);
+    const terminal = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(terminal.id)?.status !== "running");
     assert.equal(board.getRun(terminal.id)?.status, "failed");
     assert.match(board.getRun(terminal.id)!.error!, /provider request failed \(HTTP 503\)/i);
@@ -198,7 +199,7 @@ test("a run Anthropic blocks as output duplication is retried once, without narr
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Blocked", body: "", repo });
     board.setStatus(card.id, "ready");
-    const first = worker.start(board.getCard(card.id)!);
+    const first = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.listRuns(card.id).length === 2 && board.listRuns(card.id).every(run => run.status !== "running"));
     await new Promise(resolve => setTimeout(resolve, 300));
     const runs = board.listRuns(card.id);
@@ -232,17 +233,17 @@ test("a Pi settlement requests review; retry uses the same card worktree and ses
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "No network", repo });
     board.setStatus(card.id, "ready");
-    const first = worker.start(board.getCard(card.id)!);
+    const first = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     assert.match(board.getRun(first.id)!.output, /Worked offline/);
     assert.equal(board.getRun(first.id)!.agent, "anthropic/claude-sonnet-4-5");
     assert.equal(board.getCard(card.id)!.runAgent, "anthropic/claude-sonnet-4-5");
     const fingerprint = "a".repeat(64);
     board.addReviewComment(card.id, first.id, fingerprint, "README.md", 4, "add", "changed", "Add a regression test", 2);
-    assert.throws(() => worker.start(board.getCard(card.id)!), /Submit or remove draft review comments/);
+    await assert.rejects(async () => worker.start(board.getCard(card.id)!), /Submit or remove draft review comments/);
     assert.equal(board.listRuns(card.id).length, 1);
     board.requestChanges(card.id, first.id, fingerprint);
-    const next = worker.start(board.getCard(card.id)!);
+    const next = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(next.id)?.status === "review");
     assert.equal(next.attempt, 2);
     assert.match(readFileSync(promptFile, "utf8"), /Add a regression test/);
@@ -267,7 +268,7 @@ test("the agent reviewer's requested changes still reach the run after a failed 
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Test", body: "", repo });
     board.setStatus(card.id, "ready");
-    const first = worker.start(board.getCard(card.id)!);
+    const first = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     const db = new DatabaseSync(join(dir, "board.sqlite"));
     db.prepare("INSERT INTO auto_review_jobs(cardId,runId,state,startedAt,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,cost,changes) VALUES (?,?,'needs_human',?,0,0,0,0,0,?)")
@@ -275,7 +276,7 @@ test("the agent reviewer's requested changes still reach the run after a failed 
     db.close();
     // The next attempt dies before Pi starts (a rebase conflict, say).
     board.finish(board.claim(card.id, "manual").id, "failed", "Rebase conflicted");
-    const retry = worker.start(board.getCard(card.id)!);
+    const retry = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(retry.id)?.status === "review");
     assert.equal(retry.attempt, 3);
     assert.match(readFileSync(promptFile, "utf8"), /Compute the limit once/);
@@ -296,7 +297,7 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, data, fakePi);
     const card = board.createCard({ title: "Resolve safely", body: "Update README", repo });
     board.setStatus(card.id, "ready");
-    const first = worker.start(board.getCard(card.id)!);
+    const first = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     writeFileSync(join(first.worktree!, "README.md"), "card change\n");
     writeFileSync(join(repo, "README.md"), "main change\n");
@@ -304,20 +305,20 @@ test("a conflict retry tells Pi to reconcile only the card branch with current m
     git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "main change");
     const main = git("rev-parse", "main");
     const integration = new Integration(board, data);
-    assert.throws(() => integration.approve(board.getCard(card.id)!, integration.review(board.getCard(card.id)!).fingerprint), IntegrationConflictError);
+    await assert.rejects(async () => integration.approve(board.getCard(card.id)!, (await integration.review(board.getCard(card.id)!)).fingerprint), IntegrationConflictError);
     assert.equal(board.listMergeFailures(repo).length, 1);
     renameSync(first.worktree!, `${first.worktree!}-moved`);
-    assert.throws(() => worker.start(board.getCard(card.id)!), /worktree is missing/);
+    await assert.rejects(async () => worker.start(board.getCard(card.id)!), /worktree is missing/);
     assert.equal(board.listRuns(card.id).length, 1);
     assert.equal(board.listMergeFailures(repo).length, 1);
     renameSync(`${first.worktree!}-moved`, first.worktree!);
     writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nexit 1\n`);
-    const failed = worker.start(board.getCard(card.id)!);
+    const failed = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(failed.id)?.status === "failed");
     assert.match(readFileSync(promptFile, "utf8"), /README\.md/);
     assert.equal(board.listMergeFailures(repo).length, 1);
     writeFileSync(fakePi, `#!/bin/sh\nprintf '%s' "$8" > '${promptFile}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
-    const retry = worker.start(board.getCard(card.id)!);
+    const retry = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(retry.id)?.status === "review");
     const prompt = readFileSync(promptFile, "utf8");
     assert.match(prompt, /README\.md/);
@@ -346,17 +347,17 @@ test("Pi termination distinguishes Alice stop and shutdown from an unexplained e
     board.setStatus(card.id, "ready");
     writeFileSync(fakePi, "#!/bin/sh\nexit 143\n");
     chmodSync(fakePi, 0o755);
-    const external = worker.start(board.getCard(card.id)!);
+    const external = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(external.id)?.status === "failed");
     assert.match(board.getRun(external.id)!.error!, /Pi exited \(143\); termination source unknown \(Alice did not send SIGTERM\)/);
 
     writeFileSync(fakePi, "#!/bin/sh\nexec sleep 30\n");
-    const stopped = worker.start(board.getCard(card.id)!);
+    const stopped = await worker.start(board.getCard(card.id)!);
     worker.stop(stopped.id);
     await waitFor(() => board.getRun(stopped.id)?.status === "failed");
     assert.match(board.getRun(stopped.id)!.error!, /Alice sent SIGTERM: manual stop/);
 
-    const shutdown = worker.start(board.getCard(card.id)!);
+    const shutdown = await worker.start(board.getCard(card.id)!);
     await worker.shutdown("server received SIGTERM");
     assert.match(board.getRun(shutdown.id)!.error!, /Alice sent SIGTERM: server received SIGTERM/);
     board.close();
@@ -377,14 +378,14 @@ test("a killed run's error names the tool call it was stuck in", async () => {
     const board = new Board(join(dir, "board.sqlite")), worker = new Worker(board, join(dir, "data"), fakePi);
     const card = board.createCard({ title: "Stuck", body: "", repo });
     board.setStatus(card.id, "ready");
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => worker.withLive([board.getCard(card.id)!])[0].live?.tool === "bash");
     worker.stop(run.id);
     await waitFor(() => board.getRun(run.id)?.status === "failed");
     assert.match(board.getRun(run.id)!.error!, /Alice sent SIGTERM: manual stop; stuck in bash for 0 min: timeout 1800 sh -c 'until ! pgrep -f verify; do sleep 5; done'; no settlement event/);
 
     writeFileSync(fakePi, "#!/bin/sh\nexec sleep 30\n");
-    const idle = worker.start(board.getCard(card.id)!);
+    const idle = await worker.start(board.getCard(card.id)!);
     worker.stop(idle.id);
     await waitFor(() => board.getRun(idle.id)?.status === "failed");
     assert.match(board.getRun(idle.id)!.error!, /manual stop; no tool was running;/);
@@ -406,14 +407,14 @@ test("an agent run is terminated after 60 minutes, not earlier", async (t) => {
     const card = board.createCard({ title: "Timeout", body: "", repo });
     board.setStatus(card.id, "ready");
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     t.mock.timers.tick(60 * 60 * 1000 - 1);
     t.mock.timers.reset();
     assert.equal(board.getRun(run.id)?.status, "running");
     const other = board.createCard({ title: "Timeout 2", body: "", repo });
     board.setStatus(other.id, "ready");
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const second = worker.start(board.getCard(other.id)!);
+    const second = await worker.start(board.getCard(other.id)!);
     t.mock.timers.tick(60 * 60 * 1000);
     t.mock.timers.reset();
     await waitFor(() => board.getRun(second.id)?.status === "failed");
@@ -446,10 +447,10 @@ test("draining refuses new runs and resolves only after active Pi runs finish on
     const card = board.createCard({ title: "Long run", body: "", repo });
     const other = board.createCard({ title: "Queued", body: "", repo });
     board.setStatus(card.id, "ready"); board.setStatus(other.id, "ready");
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     let drained = false;
     const drain = worker.drain().then(() => { drained = true; });
-    assert.throws(() => worker.start(board.getCard(other.id)!), /waiting for active runs to finish before restarting/);
+    await assert.rejects(async () => worker.start(board.getCard(other.id)!), /waiting for active runs to finish before restarting/);
     assert.equal(board.listRuns(other.id).length, 0);
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(drained, false);
@@ -492,7 +493,7 @@ test("Pi usage is summed per attempt and per card, and older attempts stay unrec
     db.close();
     board = new Board(path);
     const worker = new Worker(board, join(dir, "data"), fakePi);
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status === "review");
     const recorded = board.getRun(run.id)!;
     assert.deepEqual([recorded.inputTokens, recorded.outputTokens, recorded.cacheReadTokens, recorded.cacheWriteTokens], [1505, 300, 300, 30]);
@@ -521,16 +522,16 @@ test("card runs and conflict repairs pass their resolved Pi model and thinking l
     const card = board.createCard({ title: "Models", body: "", repo });
     board.setStatus(card.id, "ready");
     const args = () => readFileSync(argsFile, "utf8").split("\n").slice(0, -1);
-    const unset = worker.start(board.getCard(card.id)!);
+    const unset = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(unset.id)?.status === "review");
     assert.deepEqual(args().slice(0, 7), ["--mode", "json", "--session-id", unset.sessionId, "-e", wrapUpExtension, "--"]);
     board.updateSettings({ agentModels: { work: { model: "anthropic/claude-sonnet-4-5", thinking: "medium" }, conflict: { model: "anthropic/claude-sonnet-4-5", thinking: "" }, review: { model: "", thinking: "" }, draft: { model: "", thinking: "" } } });
     board.setAgentModels(board.listBoards()[0].id, { conflict: { model: "openai-codex/gpt-5.5", thinking: "xhigh" } });
-    const work = worker.start(board.getCard(card.id)!);
+    const work = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(work.id)?.status === "review");
     assert.deepEqual(args().slice(0, 11), ["--mode", "json", "--session-id", work.sessionId, "--model", "anthropic/claude-sonnet-4-5", "--thinking", "medium", "-e", wrapUpExtension, "--"]);
     board.recordMergeFailure(card.id, ["README.md"], "conflict");
-    const conflict = worker.start(board.getCard(card.id)!);
+    const conflict = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(conflict.id)?.status === "review");
     assert.deepEqual(args().slice(0, 11), ["--mode", "json", "--session-id", conflict.sessionId, "--model", "openai-codex/gpt-5.5", "--thinking", "xhigh", "-e", wrapUpExtension, "--"]);
     assert.match(args().slice(11).join("\n"), /merge-conflict repair attempt/);
@@ -553,12 +554,12 @@ test("a board's model ladder runs attempt 1 on the card-run model and later atte
     board.setStatus(card.id, "ready");
     board.setAgentModels(board.listBoards()[0].id, { work: { model: "anthropic/claude-sonnet-4-5", thinking: "high" }, conflict: { model: "openai-codex/gpt-5.5", thinking: "" }, retry: { model: "anthropic/claude-opus-4-1", thinking: "" } });
     const models = () => readFileSync(argsFile, "utf8").split("\n").slice(4, 8);
-    const first = worker.start(board.getCard(card.id)!);
+    const first = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(first.id)?.status === "review");
     assert.equal(first.attempt, 1);
     assert.deepEqual(models(), ["--model", "anthropic/claude-sonnet-4-5", "--thinking", "high"]);
     for (const attempt of [2, 3]) {
-      const retry = worker.start(board.getCard(card.id)!);
+      const retry = await worker.start(board.getCard(card.id)!);
       await waitFor(() => board.getRun(retry.id)?.status === "review");
       assert.equal(retry.attempt, attempt);
       // A blank retry thinking level keeps the card-run level.
@@ -566,7 +567,7 @@ test("a board's model ladder runs attempt 1 on the card-run model and later atte
     }
     // Conflict repairs keep their own model; the ladder covers card runs only.
     board.recordMergeFailure(card.id, ["README.md"], "conflict");
-    const conflict = worker.start(board.getCard(card.id)!);
+    const conflict = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(conflict.id)?.status === "review");
     assert.deepEqual(models(), ["--model", "openai-codex/gpt-5.5", "-e", wrapUpExtension]);
     board.close();
@@ -594,12 +595,12 @@ test("a new card worktree runs Worktrunk pre-start hooks before Pi, and a retry 
   const { dir, fakePi, fakeWt, log, board, card } = worktrunkFixture();
   try {
     const worker = new Worker(board, join(dir, "data"), fakePi, fakeWt);
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status === "review");
     assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["hook pre-start", "hook post-start", "pi"]);
     assert.match(board.getRun(run.id)!.output, /Worktrunk hooks done/);
     board.setStatus(card.id, "ready");
-    const retry = worker.start(board.getCard(card.id)!);
+    const retry = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(retry.id)?.status === "review");
     assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["hook pre-start", "hook post-start", "pi", "pi"]);
     board.close();
@@ -611,7 +612,7 @@ test("a failed Worktrunk pre-start hook fails the attempt and removes the fresh 
   try {
     writeFileSync(join(dir, "fail"), "");
     const worker = new Worker(board, join(dir, "data"), fakePi, fakeWt);
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status === "failed");
     const failed = board.getRun(run.id)!;
     assert.match(failed.error ?? "", /Worktrunk pre-start hooks failed \(3\)/);
@@ -621,7 +622,7 @@ test("a failed Worktrunk pre-start hook fails the attempt and removes the fresh 
     assert.throws(() => readFileSync(join(dir, "data", "worktrees", card.id, "README.md")));
     rmSync(join(dir, "fail"));
     board.setStatus(card.id, "ready");
-    const retry = worker.start(board.getCard(card.id)!);
+    const retry = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(retry.id)?.status === "review");
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -634,7 +635,7 @@ test("a `wt` binary that is not Worktrunk is ignored", async () => {
     writeFileSync(other, `#!/bin/sh\necho "WiredTiger 11.2"\n`);
     chmodSync(other, 0o755);
     writeFileSync(fakePi, `#!/bin/sh\necho pi >> '${log}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
-    const run = new Worker(board, join(dir, "data"), fakePi, other).start(board.getCard(card.id)!);
+    const run = await new Worker(board, join(dir, "data"), fakePi, other).start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status === "review");
     assert.equal(readFileSync(log, "utf8").trim(), "pi");
     board.close();
@@ -648,7 +649,7 @@ test("stopping a run during Worktrunk pre-start hooks fails it without starting 
     writeFileSync(slowWt, `#!/bin/sh\n[ "$1" = --version ] && { echo "wt v0.81.0"; exit 0; }\necho "$3 $4" >> '${log}'\nexec sleep 5\n`);
     chmodSync(slowWt, 0o755);
     const worker = new Worker(board, join(dir, "data"), fakePi, slowWt);
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => readFileSync(log, { encoding: "utf8", flag: "a+" }).includes("pre-start"));
     worker.stop(run.id);
     await waitFor(() => board.getRun(run.id)?.status === "failed");
@@ -657,6 +658,72 @@ test("stopping a run during Worktrunk pre-start hooks fails it without starting 
     assert.equal(worker.activeCount, 0);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("stopping a run while the Worktrunk post-start hook is held fails it without starting Pi", { skip: process.platform === "win32" && "the fake wt is a shell script" }, async () => {
+  const { dir, fakePi, log, board, card } = worktrunkFixture();
+  try {
+    // Pre-start succeeds; post-start says it started, then waits on a file the test never writes until the end.
+    const heldWt = join(dir, "wt-held"), waiting = join(dir, "post-start-waiting"), release = join(dir, "post-start-release");
+    writeFileSync(heldWt, `#!/bin/sh\n[ "$1" = --version ] && { echo "wt v0.81.0"; exit 0; }\necho "$3 $4" >> '${log}'\nif [ "$4" = pre-start ]; then touch "$2/hooked"; exit 0; fi\n: > '${waiting}'\nwhile [ ! -f '${release}' ]; do sleep 0.02; done\n`);
+    chmodSync(heldWt, 0o755);
+    const worker = new Worker(board, join(dir, "data"), fakePi, heldWt);
+    const run = await worker.start(board.getCard(card.id)!);
+    await waitUntil(() => existsSync(waiting), "the post-start hook to be held");
+    assert.equal(worker.activeCount, 1, "the held post-start hook is the run's live child");
+    worker.stop(run.id);
+    await waitUntil(() => board.getRun(run.id)?.status === "failed", "the stopped run to fail");
+    assert.match(board.getRun(run.id)!.error ?? "", /during the Worktrunk post-start hooks; Alice sent SIGTERM: manual stop/);
+    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["hook pre-start", "hook post-start"], "Pi never started");
+    assert.equal(worker.activeCount, 0);
+    writeFileSync(release, "");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("shutdown while the post-start hook is held starts no Pi and finishes the run before returning", { skip: process.platform === "win32" && "the fake wt is a shell script" }, async () => {
+  const { dir, fakePi, log, board, card } = worktrunkFixture();
+  try {
+    const heldWt = join(dir, "wt-held"), waiting = join(dir, "post-start-waiting"), release = join(dir, "post-start-release");
+    writeFileSync(heldWt, `#!/bin/sh\n[ "$1" = --version ] && { echo "wt v0.81.0"; exit 0; }\necho "$3 $4" >> '${log}'\nif [ "$4" = pre-start ]; then touch "$2/hooked"; exit 0; fi\n: > '${waiting}'\nwhile [ ! -f '${release}' ]; do sleep 0.02; done\n`);
+    chmodSync(heldWt, 0o755);
+    const worker = new Worker(board, join(dir, "data"), fakePi, heldWt);
+    const run = await worker.start(board.getCard(card.id)!);
+    await waitUntil(() => existsSync(waiting), "the post-start hook to be held");
+    await worker.shutdown("test shutdown");
+    // Shutdown returned only after the run's cleanup wrote to the board, so closing it now loses nothing.
+    assert.match(board.getRun(run.id)!.error ?? "", /post-start hooks; Alice sent SIGTERM: test shutdown/);
+    assert.equal(readFileSync(log, "utf8").includes("pi"), false, "Pi never started");
+    writeFileSync(release, "");
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the changed-file hint for the last turn lands on the run even when Pi exits before Git answers", { skip: process.platform === "win32" && "the fake git is a shell script" }, async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "alice-worker-")));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake");
+  execFileSync("git", ["init", "-q", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  // One turn that edits a file and uses a tool, then Pi settles and exits at once.
+  writeFileSync(fakePi, `#!/bin/sh\necho changed > feature.txt\nprintf '%s\\n' '{"type":"turn_start"}' '{"type":"tool_execution_start","toolCallId":"t1","toolName":"write","args":{}}' '{"type":"tool_execution_end","toolCallId":"t1","isError":false}' '{"type":"turn_end"}' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fakePi, 0o755);
+  const board = new Board(join(dir, "board.sqlite"));
+  const card = board.createCard({ title: "Hint", body: "", repo });
+  board.setStatus(card.id, "ready");
+  const worktree = join(data, "worktrees", card.id);
+  const fake = fakeGit(dir, [{ name: "diff", match: `${worktree} diff --name-only -z HEAD` }]);
+  try {
+    await withPath(fake.bin, async () => {
+      const run = await new Worker(board, data, fakePi).start(board.getCard(card.id)!);
+      await waitUntil(() => fake.waiting("diff"), "the hint's git diff to be held");
+      await waitUntil(() => board.getRun(run.id)?.status === "review", "Pi to exit and the run to reach Review");
+      assert.doesNotMatch(board.getRun(run.id)!.output, /worktree:/);
+      fake.release("diff");
+      await waitUntil(() => /worktree: 1 changed file \(feature\.txt\)/.test(board.getRun(run.id)!.output), "the hint after Pi exited");
+    });
+  } finally { fake.releaseAll(); board.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a local-mode card worktree starts from origin/main when local main is behind it, and from main when ahead", async () => {
@@ -682,7 +749,7 @@ test("a local-mode card worktree starts from origin/main when local main is behi
     const board = new Board(join(dir, "board.sqlite")), data = join(dir, "data"), worker = new Worker(board, data, fakePi);
     const behind = board.createCard({ title: "Behind", body: "", repo });
     board.setStatus(behind.id, "ready");
-    const first = worker.start(board.getCard(behind.id)!);
+    const first = await worker.start(board.getCard(behind.id)!);
     assert.equal(git(join(data, "worktrees", behind.id), "rev-parse", "HEAD"), git(other, "rev-parse", "HEAD"), "starts from fetched origin/main");
     await waitFor(() => board.getRun(first.id)?.status !== "running");
 
@@ -690,14 +757,14 @@ test("a local-mode card worktree starts from origin/main when local main is behi
     commit(repo, "local.txt");
     const ahead = board.createCard({ title: "Ahead", body: "", repo });
     board.setStatus(ahead.id, "ready");
-    const second = worker.start(board.getCard(ahead.id)!);
+    const second = await worker.start(board.getCard(ahead.id)!);
     assert.equal(git(join(data, "worktrees", ahead.id), "rev-parse", "HEAD"), git(repo, "rev-parse", "main"), "keeps unpushed local commits");
     await waitFor(() => board.getRun(second.id)?.status !== "running");
 
     git(repo, "remote", "set-url", "origin", join(dir, "missing.git"));
     const offline = board.createCard({ title: "Offline", body: "", repo });
     board.setStatus(offline.id, "ready");
-    const third = worker.start(board.getCard(offline.id)!);
+    const third = await worker.start(board.getCard(offline.id)!);
     assert.equal(git(join(data, "worktrees", offline.id), "rev-parse", "HEAD"), git(repo, "rev-parse", "main"));
     assert.match(board.getRun(third.id)!.output, /git fetch origin failed/);
     await waitFor(() => board.getRun(third.id)?.status !== "running");
@@ -766,7 +833,7 @@ function providerFixture(script: string[]) {
 test("a rejected message history fails as a provider failure, then recovers once in a fresh session that keeps the worktree edits", async () => {
   const f = providerFixture([rejectedHistory, "ok"]);
   try {
-    const first = f.worker.start(f.board.getCard(f.card.id)!);
+    const first = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.listRuns(f.card.id).length === 2 && f.settled());
     const [recovery, rejected] = f.board.listRuns(f.card.id);
     assert.equal(rejected.status, "failed");
@@ -798,15 +865,15 @@ test("a rejected message history fails as a provider failure, then recovers once
 test("a recovery that is rejected again stops; ordinary retry refuses the poisoned session; manual recover runs again", async () => {
   const f = providerFixture([rejectedHistory, rejectedHistory, rejectedHistory, "ok"]);
   try {
-    f.worker.start(f.board.getCard(f.card.id)!);
+    await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.listRuns(f.card.id).length === 2 && f.settled());
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(f.board.listRuns(f.card.id).length, 2, "no third automatic attempt");
     assert.equal(f.board.getCard(f.card.id)!.status, "failed");
     assert.ok(f.board.listCardEvents(f.card.id).some(event => /fresh-session recovery, was rejected by the provider again; Alice will not recover automatically a second time/.test(event.reason)));
-    assert.throws(() => f.worker.start(f.board.getCard(f.card.id)!), (error: unknown) => error instanceof PoisonedSessionError && /recover this card in a fresh session/.test(error.message));
+    await assert.rejects(async () => f.worker.start(f.board.getCard(f.card.id)!), (error: unknown) => error instanceof PoisonedSessionError && /recover this card in a fresh session/.test(error.message));
     assert.equal(f.board.listRuns(f.card.id).length, 2, "the refused retry claimed nothing");
-    const manual = f.worker.recover(f.card.id);
+    const manual = await f.worker.recover(f.card.id);
     assert.equal(manual.attempt, 3);
     assert.equal(manual.sessionId, `alice-${f.card.id}-3`);
     await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
@@ -816,7 +883,7 @@ test("a recovery that is rejected again stops; ordinary retry refuses the poison
     // Evidence is kept: every attempt's error and every edit is still there.
     assert.equal(readFileSync(join(f.worktree, "README.md"), "utf8"), "fixture\nedit from call 1\nedit from call 2\nedit from call 3\n");
     // A fourth call finally succeeds, by hand again.
-    const last = f.worker.recover(f.card.id);
+    const last = await f.worker.recover(f.card.id);
     await waitFor(() => f.board.getRun(last.id)!.status !== "running");
     assert.equal(f.board.getRun(last.id)!.status, "review");
   } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
@@ -825,9 +892,9 @@ test("a recovery that is rejected again stops; ordinary retry refuses the poison
 test("only a rejected-history failure can be recovered", async () => {
   const f = providerFixture([JSON.stringify("503 upstream unavailable")]);
   try {
-    f.worker.start(f.board.getCard(f.card.id)!);
+    await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.settled());
-    assert.throws(() => f.worker.recover(f.card.id), /Only a failed card whose latest run was rejected/);
+    await assert.rejects(async () => f.worker.recover(f.card.id), /Only a failed card whose latest run was rejected/);
   } finally { f.board.close(); rmSync(f.dir, { recursive: true, force: true }); }
 });
 
@@ -840,14 +907,14 @@ for (const [name, message, kind] of [
   test(`a ${name} provider failure is classified, not recovered automatically, and an ordinary retry resumes the same session`, async () => {
     const f = providerFixture([JSON.stringify(message), "ok"]);
     try {
-      const first = f.worker.start(f.board.getCard(f.card.id)!);
+      const first = await f.worker.start(f.board.getCard(f.card.id)!);
       await waitFor(() => f.settled());
       await new Promise(resolve => setTimeout(resolve, 300));
       assert.equal(f.board.listRuns(f.card.id).length, 1, "no automatic second run");
       assert.equal(f.board.getRun(first.id)!.status, "failed");
       assert.equal(f.board.getRun(first.id)!.failureKind, kind);
       assert.match(f.board.getRun(first.id)!.error!, /^Provider request failed/);
-      const retry = f.worker.start(f.board.getCard(f.card.id)!);
+      const retry = await f.worker.start(f.board.getCard(f.card.id)!);
       assert.equal(retry.sessionId, first.sessionId);
       await waitFor(() => f.board.getRun(retry.id)!.status !== "running");
       assert.equal(f.board.getRun(retry.id)!.status, "review");
@@ -861,7 +928,7 @@ for (const [name, message, kind] of [
 test("a clean run records no failure kind and reads as a success", async () => {
   const f = providerFixture(["ok"]);
   try {
-    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    const run = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.settled());
     const done = f.board.getRun(run.id)!;
     assert.equal(done.status, "review");
@@ -895,7 +962,7 @@ const outputBlocked = JSON.stringify("This request was blocked as it seems to vi
 test("a recovery's spent budget survives a narration-free retry: invalid-history, recovery, output-blocked, retry, invalid-history stops", async () => {
   const f = providerFixture([rejectedHistory, outputBlocked, rejectedHistory, "ok"]);
   try {
-    f.worker.start(f.board.getCard(f.card.id)!);
+    await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
     await new Promise(resolve => setTimeout(resolve, 400));
     const runs = f.board.listRuns(f.card.id);
@@ -911,7 +978,7 @@ test("CI feedback a run consumed is restored when its narration-free replacement
   const f = providerFixture([outputBlocked, rejectedHistory, "ok"]);
   try {
     f.board.recordCiFailure(f.card.id, "abc1234", "FAILED unit tests: SENTINEL_CI_FAILURE");
-    f.worker.start(f.board.getCard(f.card.id)!);
+    await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
     const [recovery, , first] = f.board.listRuns(f.card.id);
     assert.equal(first.failureKind, "output-blocked");
@@ -925,7 +992,7 @@ test("CI feedback a run consumed is restored when its narration-free replacement
 test("later runs resume the session of the latest run, including a successful narration-free replacement after a recovery", async () => {
   const f = providerFixture([rejectedHistory, outputBlocked, "ok"]);
   try {
-    f.worker.start(f.board.getCard(f.card.id)!);
+    await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
     const [replacement, , original] = f.board.listRuns(f.card.id);
     assert.equal(replacement.status, "review");
@@ -981,7 +1048,7 @@ test("a run still going near its timeout is steered once to write its report, an
   const f = wrapUpFixture("obey");
   try {
     f.worker.timing = { runTimeoutMs: 20_000, wrapUpLeadMs: 19_000 };
-    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    const run = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
     const finished = f.board.getRun(run.id)!;
     assert.equal(finished.status, "review", finished.error ?? "");
@@ -997,7 +1064,7 @@ test("a run that ignores the wrap-up message is still stopped at the run timeout
   const f = wrapUpFixture("ignore");
   try {
     f.worker.timing = { runTimeoutMs: 3000, wrapUpLeadMs: 2000 };
-    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    const run = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.getRun(run.id)?.status !== "running", 10_000);
     const finished = f.board.getRun(run.id)!;
     assert.equal(finished.status, "failed");
@@ -1036,6 +1103,120 @@ test("the wrap-up extension steers only a busy session, once per message, so it 
   }
 });
 
+/** A canonical temp dir with a one-commit repository, a board on it, a Ready card and a fake Pi that settles at once. */
+function heldStartFixture() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "alice-worker-held-")));
+  const repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "pi-fake"), piRan = join(dir, "pi-ran");
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  writeFileSync(join(repo, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", repo, "add", "README.md"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial"]);
+  writeFileSync(fakePi, `#!/bin/sh\n: > '${piRan}'\nprintf '%s\\n' '{"type":"agent_settled","aborted":false}'\n`);
+  chmodSync(fakePi, 0o755);
+  const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
+  const card = board.createCard({ title: "Held", body: "", repo });
+  board.setStatus(card.id, "ready");
+  return { dir, repo, data, fakePi, piRan, board, repoBoard, card, worktree: join(data, "worktrees", card.id), close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+const posixOnly = process.platform === "win32" && "the fakes are shell scripts";
+
+test("a board moved to another repository while a start validates the old one starts nothing", { skip: posixOnly }, async () => {
+  const f = heldStartFixture();
+  const moved = join(f.dir, "moved");
+  execFileSync("git", ["init", "-q", "-b", "main", moved]);
+  const fake = fakeGit(f.dir, [{ name: "root", match: `${f.repo} rev-parse --show-toplevel` }]);
+  try {
+    await withPath(fake.bin, async () => {
+      const starting = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(f.card.id)!);
+      await waitUntil(() => fake.waiting("root"), "the workspace check to be held");
+      f.board.renameBoard(f.repoBoard.id, moved);
+      fake.release("root");
+      await assert.rejects(starting, /repository changed while Alice was checking it/);
+    });
+    assert.equal(f.board.listRuns(f.card.id).length, 0, "nothing was claimed");
+    assert.equal(existsSync(f.worktree), false, "no worktree in the old repository");
+    assert.equal(existsSync(f.piRan), false, "no agent started");
+  } finally { fake.releaseAll(); f.close(); }
+});
+
+test("Stop during a held worktree add ends the claimed run before anything starts, and counts it as active meanwhile", { skip: posixOnly }, async () => {
+  const f = heldStartFixture();
+  const fake = fakeGit(f.dir, [{ name: "add", match: `${f.repo} worktree add` }]);
+  try {
+    await withPath(fake.bin, async () => {
+      const worker = new Worker(f.board, f.data, f.fakePi);
+      const starting = worker.start(f.board.getCard(f.card.id)!);
+      await waitUntil(() => fake.waiting("add"), "the worktree add to be held");
+      const run = f.board.listRuns(f.card.id)[0];
+      assert.equal(run.status, "running");
+      assert.equal(worker.activeCount, 1, "a run preparing its worktree counts as active");
+      assert.deepEqual(worker.activeRunIds, [run.id]);
+      worker.stop(run.id);
+      fake.release("add");
+      const ended = await starting;
+      assert.equal(ended.status, "failed");
+      assert.match(ended.error ?? "", /Stopped before Pi started; Alice stopped it: manual stop/);
+      assert.equal(worker.activeCount, 0);
+    });
+    assert.equal(existsSync(f.piRan), false, "Pi never started");
+    assert.equal(existsSync(f.worktree), false, "the fresh worktree is removed so a retry starts clean");
+  } finally { fake.releaseAll(); f.close(); }
+});
+
+test("shutdown during a held Worktrunk version probe starts no hook and no Pi, and returns after the run ends", { skip: posixOnly }, async () => {
+  const f = heldStartFixture();
+  const wt = join(f.dir, "wt-probe-held"), waiting = join(f.dir, "probe-waiting"), release = join(f.dir, "probe-release"), hooks = join(f.dir, "hooks.log");
+  writeFileSync(wt, `#!/bin/sh\nif [ "$1" = --version ]; then : > '${waiting}'; while [ ! -f '${release}' ]; do sleep 0.02; done; echo "wt v0.81.0"; exit 0; fi\necho "$3 $4" >> '${hooks}'\n`);
+  chmodSync(wt, 0o755);
+  try {
+    const worker = new Worker(f.board, f.data, f.fakePi, wt);
+    const starting = worker.start(f.board.getCard(f.card.id)!);
+    await waitUntil(() => existsSync(waiting), "the version probe to be held");
+    const stopping = worker.shutdown("test shutdown");
+    writeFileSync(release, "");
+    const ended = await starting;
+    await stopping;
+    assert.match(ended.error ?? "", /Stopped before Pi started; Alice stopped it: server shutdown/);
+    assert.equal(existsSync(hooks), false, "no Worktrunk hook ran");
+    assert.equal(existsSync(f.piRan), false, "Pi never started");
+  } finally { writeFileSync(release, ""); f.close(); }
+});
+
+test("an ordinary retry and an explicit Recover that overlap each meet their own rules", async () => {
+  const f = heldStartFixture();
+  try {
+    f.board.setStatus(f.card.id, "ready");
+    const rejected = f.board.claim(f.card.id);
+    f.board.finish(rejected.id, "failed", "Provider request failed (HTTP 400): invalid message history", "invalid-history");
+    const worker = new Worker(f.board, f.data, f.fakePi);
+    // Both are asked for at once, before either has run any Git.
+    const retry = worker.start(f.board.getCard(f.card.id)!);
+    const recovery = worker.recover(f.card.id);
+    await assert.rejects(retry, PoisonedSessionError, "a plain retry still refuses the poisoned session");
+    const recovered = await recovery;
+    assert.equal(recovered.recoveryOf, rejected.id, "the Recover is not handed the retry's refusal");
+    await waitFor(() => f.board.getRun(recovered.id)?.status === "review");
+  } finally { f.close(); }
+});
+
+test("a restart drain that begins while a hook-fix start runs Git keeps the hook output for pickup", { skip: posixOnly }, async () => {
+  const f = heldStartFixture();
+  const fake = fakeGit(f.dir, [{ name: "root", match: `${f.repo} rev-parse --show-toplevel` }]);
+  try {
+    f.board.recordPushFailure(f.card.id, "abc123", "pre-push: tests failed", "push");
+    await withPath(fake.bin, async () => {
+      const worker = new Worker(f.board, f.data, f.fakePi);
+      const fixing = worker.startHookFix(f.board.getCard(f.card.id)!);
+      await waitUntil(() => fake.waiting("root"), "the start's Git to be held");
+      worker.stopStarts();
+      fake.release("root");
+      assert.equal(await fixing, false, "not started, and not an error");
+    });
+    assert.equal(f.board.getCiFeedback(f.card.id)?.failures, "pre-push: tests failed", "the output waits for pickup after the restart");
+    assert.equal(f.board.listRuns(f.card.id).length, 0);
+  } finally { fake.releaseAll(); f.close(); }
+});
+
 for (const mode of ["local", "github-pr"] as const) {
   test(`Run again on current main on a ${mode} board authorizes the card-branch update and nothing beyond it`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "alice-worker-"));
@@ -1056,7 +1237,7 @@ for (const mode of ["local", "github-pr"] as const) {
       if (mode === "github-pr") { board.setRemoteUrl(repoBoard.id, "https://github.com/example/repo"); board.setIntegration(repoBoard.id, "github-pr"); }
       const card = board.createCard({ title: "Stale work", body: "Keep it working", repo });
       board.setStatus(card.id, "ready");
-      const first = worker.start(board.getCard(card.id)!);
+      const first = await worker.start(board.getCard(card.id)!);
       await waitFor(() => board.getRun(first.id)?.status === "review");
       const plain = readFileSync(promptFile, "utf8");
       assert.match(plain, /Do not stage, commit, push, create a PR, merge, deploy, or post externally/, "an ordinary run keeps the blanket ban");
@@ -1065,7 +1246,7 @@ for (const mode of ["local", "github-pr"] as const) {
       git("commit", "-qm", "main moves on");
       git("push", "-q", "origin", "main");
       const tip = git("rev-parse", "main");
-      const again = worker.start(board.getCard(card.id)!, "manual", "on current main", undefined, true, true);
+      const again = await worker.start(board.getCard(card.id)!, "manual", "on current main", undefined, true, true);
       await waitFor(() => board.getRun(again.id)?.status === "review");
       const prompt = readFileSync(promptFile, "utf8");
       assert.ok(prompt.startsWith(`Task from Alice card ${card.id}: Stale work\n\nKeep it working\n\nThis card sat in Review long enough`), "the catch-up task comes straight after the card");
@@ -1139,7 +1320,8 @@ const step = () => {
   }
   emit({ type: "turn_end" });
   if (steered && existsSync(${JSON.stringify(release)})) settle("I was rerunning a flaky test; the failure is in the fixture, not the code.");
-  else if (turn >= ${turns}) settle("Done.");
+  // A loop ends only on the steer, whose mailbox the extension polls once a second, however fast the turns run.
+  else if (mode !== "loop" && turn >= ${turns}) settle("Done.");
   setTimeout(step, 0);
 };
 step();
@@ -1156,7 +1338,7 @@ step();
 test("a run repeating one command is shown as maybe stuck and steered once to step back", async () => {
   const f = stuckFixture("loop");
   try {
-    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    const run = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => !!f.board.getCard(f.card.id)?.stuck, 10_000);
     assert.equal(f.board.getCard(f.card.id)?.stuck, "repeated the same bash call 5 times in its last 5 tool calls");
     assert.equal(f.board.getCard(f.card.id)?.status, "running");
@@ -1175,7 +1357,7 @@ test("a run repeating one command is shown as maybe stuck and steered once to st
 test("a normal long run that keeps changing files is not flagged", async () => {
   const f = stuckFixture("long");
   try {
-    const run = f.worker.start(f.board.getCard(f.card.id)!);
+    const run = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
     const finished = f.board.getRun(run.id)!;
     assert.equal(finished.status, "review", finished.error ?? "");
@@ -1191,7 +1373,7 @@ for (const behaviour of ["append-untracked", "rewrite-tracked"] as const) {
     // Well past the 25-turn idle limit, so a fingerprint blind to these changes would flag the run.
     const f = stuckFixture(behaviour, 40);
     try {
-      const run = f.worker.start(f.board.getCard(f.card.id)!);
+      const run = await f.worker.start(f.board.getCard(f.card.id)!);
       await waitFor(() => f.board.getRun(run.id)?.status !== "running", 15_000);
       const finished = f.board.getRun(run.id)!;
       assert.equal(finished.status, "review", finished.error ?? "");
@@ -1244,7 +1426,7 @@ else {
   const settled = () => board.listRuns(card.id).every(run => run.status !== "running");
   const called = (): { session: string; prompt: string; resumed: boolean }[] => readFileSync(calls, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
   const timeOut = async () => {
-    const run = worker.start(board.getCard(card.id)!);
+    const run = await worker.start(board.getCard(card.id)!);
     await waitFor(() => board.getRun(run.id)?.status !== "running", 10_000);
     const finished = board.getRun(run.id)!;
     assert.equal(finished.status, "failed");
@@ -1260,7 +1442,7 @@ test("the attempt after a run timeout continues the same Pi session with a conti
     const first = await f.timeOut();
     assert.equal(first.sessionFile, join(f.dir, "sessions", `${first.sessionId}.jsonl`), "Alice keeps the session file Pi reported");
     assert.deepEqual(readdirSync(join(f.dir, "data", "wrap-up")), [], "the session record is removed with the mailbox");
-    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    const next = await f.worker.start(f.board.getCard(f.card.id)!);
     assert.equal(next.sessionId, first.sessionId);
     await waitFor(() => f.settled());
     assert.equal(f.board.getRun(next.id)!.status, "review");
@@ -1280,7 +1462,7 @@ test("after a run timeout whose session file is gone, the next attempt starts a 
   try {
     const first = await f.timeOut();
     rmSync(first.sessionFile!);
-    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    const next = await f.worker.start(f.board.getCard(f.card.id)!);
     assert.equal(next.sessionId, `alice-${f.card.id}-2`);
     await waitFor(() => f.settled());
     assert.equal(f.board.getRun(next.id)!.status, "review");
@@ -1297,7 +1479,7 @@ test("a continued session the provider rejects falls back to the fresh-session r
   const f = timeoutFixture(["hang", "reject", "ok"]);
   try {
     const first = await f.timeOut();
-    const continued = f.worker.start(f.board.getCard(f.card.id)!);
+    const continued = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => f.board.listRuns(f.card.id).length === 3 && f.settled());
     const [recovery, rejected] = f.board.listRuns(f.card.id);
     assert.equal(rejected.id, continued.id);
@@ -1316,12 +1498,12 @@ test("a run that failed some other way (a manual stop) is retried as before: sam
   const f = timeoutFixture(["hang", "ok"]);
   try {
     f.worker.timing = { runTimeoutMs: 60_000, wrapUpLeadMs: 1000 };
-    const first = f.worker.start(f.board.getCard(f.card.id)!);
+    const first = await f.worker.start(f.board.getCard(f.card.id)!);
     await waitFor(() => existsSync(join(f.dir, "calls.jsonl")));
     f.worker.stop(first.id);
     await waitFor(() => f.settled());
     assert.match(f.board.getRun(first.id)!.error!, /manual stop/);
-    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    const next = await f.worker.start(f.board.getCard(f.card.id)!);
     assert.equal(next.sessionId, first.sessionId);
     await waitFor(() => f.settled());
     const [, retry] = f.called();
@@ -1338,7 +1520,7 @@ test("a timed-out session whose only user message was cut short starts fresh, si
     const metadata = JSON.stringify({ type: "model_change", provider: "anthropic", modelId: "claude" });
     const task = JSON.stringify({ type: "message", message: { role: "user", content: "Task from Alice card: Add the flag" } });
     writeFileSync(first.sessionFile!, `${header}\n${metadata}\n${task.slice(0, 30)}`);
-    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    const next = await f.worker.start(f.board.getCard(f.card.id)!);
     assert.equal(next.sessionId, `alice-${f.card.id}-2`);
     await waitFor(() => f.settled());
     const [, fresh] = f.called();
@@ -1355,7 +1537,7 @@ test("a timed-out session with its task intact and a final entry cut short by SI
   try {
     const first = await f.timeOut();
     writeFileSync(first.sessionFile!, readFileSync(first.sessionFile!, "utf8") + JSON.stringify({ type: "message", message: { role: "assistant", content: "Half a thought" } }).slice(0, 25));
-    const next = f.worker.start(f.board.getCard(f.card.id)!);
+    const next = await f.worker.start(f.board.getCard(f.card.id)!);
     assert.equal(next.sessionId, first.sessionId);
     await waitFor(() => f.settled());
     const [, resumed] = f.called();

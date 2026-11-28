@@ -35,7 +35,7 @@ export class Readiness {
   constructor(private board: Board, private integration: Integration, private deps: {
     draft: (card: Card, run: Run, onProgress: (step: string) => void) => Promise<PullRequestDraft>;
     /** Sends a refused hook's output to the agent as a new run. False when no run can start yet. */
-    sendBack: (card: Card, error: PushHookError | CommitHookError) => boolean;
+    sendBack: (card: Card, error: PushHookError | CommitHookError) => Promise<boolean>;
   }) {}
 
   private latest(card: Card): Run | undefined {
@@ -158,7 +158,7 @@ export class Readiness {
           this.save(run, { hooks: result });
           job.hookState = result;
           try {
-            if (!this.deps.sendBack(card, error)) this.board.noteCard(cardId, `${name} refused this attempt at Review. Its output goes to the agent once a run can start.`);
+            if (!await this.deps.sendBack(card, error)) this.board.noteCard(cardId, `${name} refused this attempt at Review. Its output goes to the agent once a run can start.`);
           } catch (sendError) {
             this.board.noteCard(cardId, `${name} refused this attempt at Review, and Alice could not send it back to the agent: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
           }

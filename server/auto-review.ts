@@ -1,9 +1,10 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { command, killTree } from "./platform.js";
 import { Board, RunLimitError, type Attachment, type Card, type RepoBoard, type Run } from "./board.js";
 import { agentsInStream, settledReply, usageInStream } from "./agent.js";
 import { piModelArgs } from "../shared/agent-models.js";
 import { Integration } from "./integration.js";
+import { git } from "./git-async.js";
 import { attachmentPath } from "./attachments.js";
 import { atReviewCapacity, loopGuards, needsPatchSize, reviewDiffRefusal } from "./repo-limits.js";
 
@@ -125,6 +126,7 @@ export function reviewerVerdict(stream: string): ReviewerVerdict {
   return { verdict: "request_changes", reason: fields.reason, changes };
 }
 
+const stoppedMessage = "Alice shut down during the agent review, so a person reviews this one";
 export class AutoReview {
   /** Reviews in progress, by run id. A board runs at most `autoReviewConcurrency` at once; boards do not share a limit. */
   private activeReviews = new Map<string, { cardId: string; repo: string }>();
@@ -136,13 +138,16 @@ export class AutoReview {
    * `openPullRequest` pushes the approved work on a github-pr board and opens (or updates) its PR, returning the card
    * afterwards. Without it, an agent approval on a github-pr board is only advice and Approve stays with a person.
    */
-  constructor(private board: Board, private integration: Integration, private piBin = "pi", private sendBack?: (card: Card) => unknown,
+  constructor(private board: Board, private integration: Integration, private piBin = "pi", private sendBack?: (card: Card) => Promise<unknown>,
     private openPullRequest?: (card: Card, fingerprint: string) => Promise<Card>) {}
   start(): void {
     this.timer = setInterval(() => { void this.tick(); }, 5000);
     void this.tick();
   }
+  private stopping = false;
   async shutdown(): Promise<void> {
+    // First, so a review still preparing its Git sees it and launches no reviewer after the kill below.
+    this.stopping = this.draining = true;
     if (this.timer) clearInterval(this.timer);
     for (const reviewer of this.reviewers.values()) killTree(reviewer);
     while (this.activeReviews.size) await new Promise(resolve => setTimeout(resolve, 50));
@@ -191,18 +196,18 @@ export class AutoReview {
     // Local main moves while a review runs (another card merges, an update fast-forwards it), which changes the
     // fingerprint but not this card's work. Only a new run or a new tree stops the review; when only main moved,
     // carry on with the fingerprint for the current main.
-    const stillSameWork = (latest: Card, during: string) => {
-      const now = this.integration.reviewState(latest);
+    const stillSameWork = async (latest: Card, during: string) => {
+      const now = await this.integration.reviewState(latest);
       if (now.work !== work) {
         // Name what changed, so a reviewer's stray build output can be told apart from a real edit.
-        const paths = this.integration.workChanges(latest, work, now.work);
+        const paths = await this.integration.workChanges(latest, work, now.work);
         const named = paths.length ? `: ${paths.slice(0, 10).join(", ")}${paths.length > 10 ? ` and ${paths.length - 10} more` : ""}` : "";
         throw new PublicReviewError(`Work changed during ${during}${named}`);
       }
       fingerprint = now.fingerprint;
     };
     try {
-      const diff = this.integration.reviewSummary(card, needsPatchSize(repoBoard));
+      const diff = await this.integration.reviewSummary(card, needsPatchSize(repoBoard));
       fingerprint = diff.fingerprint;
       work = diff.work;
       if (!diff.paths.length) throw new PublicReviewError("Nothing changed on this card, so there is nothing to review");
@@ -214,7 +219,9 @@ export class AutoReview {
       const pullRequests = this.board.integrationFor(card.repo) === "github-pr";
       const attachments: Attachment[] = this.board.listAttachments(card.id);
       const evidence: ReviewEvidence = { report: run.report, files: attachments.map(item => ({ path: attachmentPath(this.integration.dataDir, item), name: item.name, type: item.type })) };
-      const prompt = reviewerPrompt(card, promptDiff(diff.paths, execFileSync("git", ["-C", run.worktree, "merge-base", "main", "HEAD"], { encoding: "utf8" }).trim()), evidence, pullRequests);
+      const prompt = reviewerPrompt(card, promptDiff(diff.paths, await git(run.worktree, ["merge-base", "main", "HEAD"])), evidence, pullRequests);
+      // The Git above can outlast the start of a shutdown, which has already killed the reviewers it knew about.
+      if (this.stopping) throw new Error(stoppedMessage);
       this.board.setAutoReviewProgress(run.id, "The reviewer agent is reading the diff and running checks…");
       let verdict: ReviewerVerdict;
       try {
@@ -223,10 +230,12 @@ export class AutoReview {
       } catch (error) { throw new ReviewerError(error instanceof Error ? error.message : String(error)); }
       const latest = this.board.getCard(card.id);
       if (!latest || latest.title !== card.title || latest.body !== card.body) throw new PublicReviewError("Card changed during agent review");
-      stillSameWork(latest, "agent review");
+      await stillSameWork(latest, "agent review");
+      // A verdict is acted on (a new attempt, a push) only while Alice is not shutting down.
+      if (this.stopping) throw new Error(stoppedMessage);
       if (verdict.verdict === "request_changes" && this.sendBack && this.board.reviewerSendBacks(card.id) < maxReviewerSendBacks) {
         this.board.finishAutoReview(run.id, "needs_human", `Sent back to the implementer: ${verdict.reason}`, fingerprint, verdict.changes);
-        try { this.sendBack(latest); console.log(`Auto-review sent card ${card.id} back to its implementer`); }
+        try { await this.sendBack(latest); console.log(`Auto-review sent card ${card.id} back to its implementer`); }
         catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           // At the run limit the attempt waits for a slot. The run keeps the reviewer's changes, so the worker hands

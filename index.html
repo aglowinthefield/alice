@@ -6,13 +6,16 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>Alice</title>
     <script>
+      // Default is dark. Dark palettes put .dark on <html> for the house tokens; src/apply-theme.ts keeps it in step.
+      document.documentElement.classList.add("dark");
       try {
-        const theme = localStorage.getItem("alice-theme");
-        if (theme && theme !== "default" && /^[a-z-]+$/.test(theme)) {
-          // "compline-system" has no palette; main.tsx tracks the OS after load.
-          document.documentElement.dataset.theme = theme === "compline-system"
-            ? (matchMedia("(prefers-color-scheme: light)").matches ? "compline-light" : "compline")
-            : theme;
+        const stored = localStorage.getItem("alice-theme") ?? "default";
+        // A "match system" setting has no palette; main.tsx tracks the OS after load.
+        const system = { "default-system": ["light", "default"], "compline-system": ["compline-light", "compline"], "gruvbox-system": ["gruvbox-light", "gruvbox-dark"] }[stored];
+        const theme = system ? system[matchMedia("(prefers-color-scheme: light)").matches ? 0 : 1] : stored;
+        if (/^[a-z-]+$/.test(theme)) {
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.classList.toggle("dark", !/(^|-)light$/.test(theme));
         }
         const density = localStorage.getItem("alice-density");
         if (density === "compact" || density === "cozy") document.documentElement.dataset.density = density;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Search, type LucideIcon } from "lucide-react";
-import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "./dialog.js";
 import { cn } from "./lib/utils";
 import { searchRank } from "./model.js";
 
@@ -112,10 +112,8 @@ export function CommandPalette({
         aria-label="Command palette"
         aria-describedby={undefined}
         showClose={false}
-        overlayClassName="bg-black/40"
-        // Sits high, like Spotlight, so the list grows down without moving the field. The pop keyframe restates the translate.
-        style={{ "--pop-y": "6px" } as React.CSSProperties}
-        className="top-[14vh] flex max-h-[min(70vh,520px)] w-[min(92vw,560px)] translate-y-0 flex-col overflow-hidden p-0 text-[13px]"
+        // Sits high, like Spotlight, so the list grows down without moving the field.
+        className="top-[14vh] right-0 left-0 mx-auto flex max-h-[min(70vh,520px)] w-[min(92vw,560px)] translate-0 flex-col overflow-hidden p-0 text-[13px]"
         onEscapeKeyDown={(event) => {
           if (!pages.length) return;
           event.preventDefault();

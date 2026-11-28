@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Alice takes its look from the [@house registry](https://aglowinthefield.github.io/house/): ink on paper, with a blue pen for Alice's own marks. Today has one display title over small print, dense rows with Approve, Run again and Close, and Alice's line drawing naming the stale card that has waited longest. The current sidebar entry gets a pen circle, and sidebar entries are links, so a modified click opens a tab. The Default palette is the house one in light and dark; the other palettes keep their colours on the same roles, and card statuses share the house's seven tones, so Triage and Done now match.
 - An interrupted run no longer pauses automatic pickup. Its card waits in Interrupted for you, and pickup carries on with the next Ready card.
 - Empty lanes stay collapsed and can't be expanded, and lanes holding only Done or archived cards always start collapsed. The board's Auto-collapse checkbox and its `autoCollapseEmptySwimlanes` setting are gone.
 - Repository icons are Alice's nine expressions instead of the bakery set, in the web app, on iOS and on Alice's PR comments. Each board on a bakery icon moves to an expression once; the bakery images stay in `public/icons` so old PR comments still show theirs.

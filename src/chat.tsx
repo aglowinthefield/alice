@@ -710,7 +710,7 @@ export function ChatView({
         >
           <div className={`flex gap-1 ${collapsed ? "flex-col" : ""}`}>
             <Button
-              variant="ghost"
+              variant="text"
               size="sm"
               aria-label={collapsed ? "Expand chat list" : "Collapse chat list"}
               aria-expanded={!collapsed}
@@ -724,7 +724,7 @@ export function ChatView({
               )}
             </Button>
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               aria-label="New chat"
               title="New chat"
@@ -948,7 +948,7 @@ export function ChatView({
             {busy ? (
               <Button
                 type="button"
-                variant="outline"
+                variant="secondary"
                 onClick={() =>
                   void api(`${base}/${chatId}/stop`, {
                     method: "POST",
@@ -959,7 +959,11 @@ export function ChatView({
                 <Square size={13} aria-hidden="true" /> Stop
               </Button>
             ) : (
-              <Button type="submit" disabled={!draft.trim() || sending}>
+              <Button
+                variant="main"
+                type="submit"
+                disabled={!draft.trim() || sending}
+              >
                 Send
               </Button>
             )}

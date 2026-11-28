@@ -63,7 +63,7 @@ export function ConflictHotspots({
           </div>
           <Button
             size="sm"
-            variant="outline"
+            variant="secondary"
             disabled={busy}
             aria-label={`Dismiss conflict hint for ${hotspot.file}`}
             onClick={() => onDismiss(hotspot.file)}
@@ -76,7 +76,7 @@ export function ConflictHotspots({
       {hidden > 0 && (
         <Button
           size="sm"
-          variant="ghost"
+          variant="text"
           className="justify-self-start"
           onClick={() => setExpanded(true)}
         >

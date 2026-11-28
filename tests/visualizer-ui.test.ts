@@ -129,7 +129,7 @@ test("colors follow the active theme and are re-read when data-theme changes", a
     const darkColor = await label.evaluate(el => getComputedStyle(el).color);
     assert.ok(dark[0] < 80 && dark[1] < 80 && dark[2] < 80, `dark theme background ${dark}`);
 
-    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    await page.evaluate(() => { document.documentElement.classList.remove("dark"); document.documentElement.dataset.theme = "light"; });
     await page.waitForFunction(({ was }) => getComputedStyle(document.querySelector('[data-viz-label="mid"] div:last-child')!).color !== was, { was: darkColor });
     await page.waitForTimeout(150);
     const light = await pixel(page, 20, 400);

@@ -255,7 +255,7 @@ export function AttemptList({
                         </span>
                         <Button
                           type="button"
-                          variant="outline"
+                          variant="secondary"
                           size="sm"
                           className="shrink-0"
                           onClick={() => {

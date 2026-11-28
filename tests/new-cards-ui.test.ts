@@ -96,7 +96,7 @@ test("new cards from elsewhere badge the sidebar, then highlight on the board an
       .locator("xpath=..");
     await otherRow.getByRole("status", { name: "3 new cards" }).waitFor();
     await page
-      .getByRole("button", { name: /Kanban/ })
+      .getByRole("link", { name: /Kanban/ })
       .getByRole("status", { name: "1 new card" })
       .waitFor();
     release();

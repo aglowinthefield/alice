@@ -56,7 +56,7 @@ export function MainReset({
       <Button
         className="mt-2"
         size="sm"
-        variant="outline"
+        variant="secondary"
         disabled={busy}
         onClick={async () => {
           if (
@@ -155,7 +155,7 @@ export function LocalMerges({
                 {integration === "github-pr" && (
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="secondary"
                     disabled={busy || !!item.blocker}
                     onClick={async () => {
                       setBusy(true);

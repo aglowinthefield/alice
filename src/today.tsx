@@ -1,14 +1,26 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { CalendarClock, Check, RotateCcw, X, Eye } from "lucide-react";
+import { Eye } from "lucide-react";
+import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
+import { ListRow } from "./components/ui/card";
+import {
+  Bubble,
+  Display,
+  EmptyState,
+  Figure,
+  SmallPrint,
+} from "./components/ui/drawn";
+import { Input, Select } from "./components/ui/input";
+import { Circled } from "./components/ui/pen-mark";
+import { cn } from "./lib/utils";
 import { date } from "./api.js";
 import { formatCost } from "./usage.js";
-import { RepoBadge } from "./repo-badge.js";
 import { repoName } from "./repo-appearance.js";
 import {
   needsYouLabels,
   reviewOrder,
   reviewWaitText,
+  statusTone,
   todaySections,
   type Board,
   type Card,
@@ -18,6 +30,7 @@ import {
   isStaleReview,
   reviewAgeDays,
 } from "./stale-review.js";
+import aliceLine from "./alice-line.png";
 
 /** Review cards past their board's stale threshold, oldest first: what the daily push digest lists. */
 export const staleReviewCards = (
@@ -54,6 +67,18 @@ type Props = {
   onCapture: (board: Board, title: string) => Promise<boolean>;
 };
 
+// Alice and her bubble stand to the right once the page is wide enough that they cover nothing; the column leaves them room.
+const wide = "@min-[64rem]:block";
+const column =
+  "relative z-10 w-full max-w-[640px] @min-[64rem]:w-[min(640px,calc(100%-300px))]";
+
+/** A card's short name for Alice to say: its leading ID (SIL-912, gh-6638/t1) or its quoted title. */
+const shortName = (card: Card) =>
+  /^[A-Za-z]+-\d+(\/t\d+)?(?=[:\s]|$)/.exec(card.title)?.[0] ??
+  `“${card.title.length > 40 ? `${card.title.slice(0, 39)}…` : card.title}”`;
+
+const days = (count: number) => `${count} ${count === 1 ? "day" : "days"}`;
+
 export function Today({
   boards,
   cards,
@@ -72,33 +97,61 @@ export function Today({
   );
   const reviews = reviewOrder(cards).length;
   const spent = boards.reduce((sum, board) => sum + (board.cost24h ?? 0), 0);
+  const today = new Date();
+  const oldest = stale[0];
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10 lg:px-10">
-      <div className="mb-2 text-sm text-muted-foreground">
-        {new Date().toLocaleDateString([], {
-          weekday: "long",
-          month: "long",
-          day: "numeric",
-        })}
-      </div>
-      <h1 className="text-[27px] font-semibold tracking-[-.05em]">Today</h1>
+    <div className="@container relative min-h-[calc(100vh_-_var(--titlebar-h))] overflow-hidden px-6 py-10 lg:pl-14">
+      <Figure
+        src={aliceLine}
+        label="Alice"
+        fade={["left"]}
+        className={cn(
+          "absolute top-8 -right-24 hidden h-[840px] w-[500px]",
+          wide,
+        )}
+      />
+      <SmallPrint>
+        {today.toLocaleDateString("en", { weekday: "short" })}{" "}
+        {today.toLocaleDateString("en-CA")}
+      </SmallPrint>
+      <Display className="mt-2">Today</Display>
       <p
         role="status"
         aria-label="Since your last visit"
-        className="mt-1 text-sm text-muted-foreground"
+        className="small-print mt-3 flex flex-wrap gap-x-6 gap-y-1 text-ink-muted"
       >
-        {finished.length} merged · {attention.length} need you ·{" "}
-        {formatCost(spent)} in the last 24 hours
+        <span>
+          <b className="text-ink">{finished.length}</b> merged
+        </span>
+        <span>
+          <b className="text-ink">{attention.length}</b> need you
+        </span>
+        <span>
+          <b className="text-ink">{formatCost(spent)}</b> last 24h
+        </span>
       </p>
+      {oldest && (
+        <Bubble
+          className={cn("absolute top-10 right-[300px] hidden w-[330px]", wide)}
+        >
+          {shortName(oldest)} has waited {days(reviewAgeDays(oldest) ?? 0)}.
+          <br />
+          Approve it, or close it?
+        </Bubble>
+      )}
       <Capture boards={boards} onCapture={onCapture} />
       {stale.length > 0 && (
-        <Section title="Stale in Review">
-          <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-            {stale.map((card) => (
+        <Section title="Stale in review" count={stale.length}>
+          <ul className="bg-paper">
+            {stale.map((card, index) => (
               <StaleRow
                 key={card.id}
                 card={card}
-                board={boards.find((item) => item.repo === card.repo)}
+                oldest={index === 0}
+                threshold={
+                  boards.find((item) => item.repo === card.repo)
+                    ?.staleReviewDays ?? defaultStaleReviewDays
+                }
                 onOpen={onOpen}
                 onApprove={onApprove}
                 onRunAgain={onRunAgain}
@@ -108,38 +161,31 @@ export function Today({
           </ul>
         </Section>
       )}
-      <Section title="Needs you">
-        {attention.length === 0 && (
-          <p className="text-sm text-muted-foreground">Nothing needs you.</p>
-        )}
+      <Section title="Needs you" count={attention.length}>
         {reviews > 0 && (
-          <Button className="mb-3" onClick={onReview}>
-            <Eye size={15} /> Review {reviews}{" "}
+          <Button className="mt-2 mb-1" onClick={onReview}>
+            <Eye aria-hidden /> Review {reviews}{" "}
             {reviews === 1 ? "card" : "cards"}
           </Button>
         )}
+        {attention.length === 0 && (
+          <EmptyState mark="tick">Nothing needs you.</EmptyState>
+        )}
         <CardList
           cards={attention}
-          boards={boards}
           onOpen={onOpen}
           label={(card) => needsYouLabels[card.status] ?? card.status}
         />
       </Section>
       {approved.length > 0 && (
-        <Section title="Agent approved">
-          <CardList
-            cards={approved}
-            boards={boards}
-            onOpen={onOpen}
-            label={() => "Approve"}
-          />
+        <Section title="Agent approved" count={approved.length}>
+          <CardList cards={approved} onOpen={onOpen} label={() => "Approve"} />
         </Section>
       )}
       {running.length > 0 && (
-        <Section title="In progress">
+        <Section title="In progress" count={running.length}>
           <CardList
             cards={running}
-            boards={boards}
             onOpen={onOpen}
             label={(card) =>
               card.reviewWait ? reviewWaitText(card) : "Started"
@@ -148,137 +194,149 @@ export function Today({
         </Section>
       )}
       {finished.length > 0 && (
-        <Section title="Finished since your last visit">
-          <CardList
-            cards={finished}
-            boards={boards}
-            onOpen={onOpen}
-            label={() => "Done"}
-          />
+        <Section title="Finished since your last visit" count={finished.length}>
+          <CardList cards={finished} onOpen={onOpen} label={() => "Done"} />
         </Section>
       )}
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** A small-print heading ruled across to its tally. */
+function Section({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count: number;
+  children: ReactNode;
+}) {
   const id = `today-${title.toLowerCase().replace(/\W+/g, "-")}`;
   return (
-    <section aria-labelledby={id} className="mt-8">
-      <h2 id={id} className="mb-3 text-sm font-semibold text-muted-foreground">
-        {title}
-      </h2>
+    <section aria-labelledby={id} className={cn(column, "mt-9")}>
+      <div className="small-print mb-1 flex items-center gap-3">
+        <h2 id={id}>{title}</h2>
+        <i aria-hidden="true" className="flex-1 border-t border-ink" />
+        <span>{count}</span>
+      </div>
       {children}
     </section>
   );
 }
 
+/** The row's title opens the card. */
+function OpenTitle({ card, onOpen }: { card: Card; onOpen: Props["onOpen"] }) {
+  return (
+    <button
+      onClick={() => onOpen(card)}
+      className="cursor-pointer text-left hover:underline"
+    >
+      {card.title}
+    </button>
+  );
+}
+
 function CardList({
   cards,
-  boards,
   onOpen,
   label,
 }: {
   cards: Card[];
-  boards: Board[];
-  onOpen: (card: Card) => void;
+  onOpen: Props["onOpen"];
   label: (card: Card) => string;
 }) {
   if (!cards.length) return null;
   return (
-    <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-      {cards.map((card) => {
-        const board = boards.find((item) => item.repo === card.repo);
-        return (
-          <li key={card.id}>
-            <button
-              onClick={() => onOpen(card)}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {board && <RepoBadge board={board} size={14} />}
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">
-                  {card.title}
-                </span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {repoName(card.repo)} · {label(card)} {date(card.updatedAt)}
-                </span>
+    <ul className="bg-paper">
+      {cards.map((card) => (
+        <li key={card.id}>
+          <ListRow
+            title={<OpenTitle card={card} onOpen={onOpen} />}
+            meta={
+              <span className="flex flex-wrap items-center gap-x-1.5">
+                {repoName(card.repo)} ·
+                <Badge
+                  tone={statusTone[card.status]}
+                  hollow={card.status === "running"}
+                >
+                  {label(card)}
+                </Badge>
+                {date(card.updatedAt)}
               </span>
-            </button>
-          </li>
-        );
-      })}
+            }
+          />
+        </li>
+      ))}
     </ul>
   );
 }
 
 function StaleRow({
   card,
-  board,
+  oldest,
+  threshold,
   onOpen,
   onApprove,
   onRunAgain,
   onClose,
 }: {
   card: Card;
-  board: Board | undefined;
+  /** The oldest card gets the pen circle round its age; Alice's bubble names it. */
+  oldest: boolean;
+  threshold: number;
 } & Pick<Props, "onOpen" | "onApprove" | "onRunAgain" | "onClose">) {
-  const days = reviewAgeDays(card) ?? 0;
+  const age = reviewAgeDays(card) ?? 0;
   // Approve and a new run wait while an agent, CI or GitHub still has the card; Close never does.
   const waiting = card.reviewWait ? reviewWaitText(card) : "";
   return (
-    <li className="flex items-start gap-3 px-4 py-3">
-      {board && <RepoBadge board={board} size={14} />}
-      <div className="min-w-0 flex-1">
-        <button
-          onClick={() => onOpen(card)}
-          className="block w-full min-w-0 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="block truncate text-sm font-medium">
-            {card.title}
-          </span>
-          <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-            <CalendarClock
-              size={11}
-              className="shrink-0 text-status-interrupted"
-              aria-hidden
-            />
-            {repoName(card.repo)} · {days} {days === 1 ? "day" : "days"} in
-            Review{waiting && ` · ${waiting}`}
-          </span>
-        </button>
-        <span className="mt-2 flex flex-wrap gap-1.5">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!!waiting}
-            title={waiting || "Open the review to approve it"}
-            onClick={() => onApprove(card)}
-          >
-            <Check size={13} aria-hidden /> Approve
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!!waiting}
-            title={
-              waiting ||
-              "Start a run that brings the work up to date with main first"
-            }
-            onClick={() => onRunAgain(card)}
-          >
-            <RotateCcw size={13} aria-hidden /> Run again on current main
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            title="Close without merging"
-            onClick={() => onClose(card)}
-          >
-            <X size={13} aria-hidden /> Close
-          </Button>
-        </span>
-      </div>
+    <li>
+      <ListRow
+        // A pen star marks a card twice past its board's stale threshold.
+        starred={age >= threshold * 2}
+        title={<OpenTitle card={card} onOpen={onOpen} />}
+        meta={
+          <>
+            {repoName(card.repo)} ·{" "}
+            <Circled on={oldest}>
+              <b className="text-ink">{age}d</b>
+            </Circled>{" "}
+            in review{waiting && ` · ${waiting}`}
+          </>
+        }
+        actions={
+          <>
+            <Button
+              variant="row"
+              size="sm"
+              disabled={!!waiting}
+              title={waiting || "Open the review to approve it"}
+              onClick={() => onApprove(card)}
+            >
+              Approve
+            </Button>
+            <Button
+              size="sm"
+              disabled={!!waiting}
+              title={
+                waiting ||
+                "Start a run that brings the work up to date with main first"
+              }
+              onClick={() => onRunAgain(card)}
+            >
+              Run again on current main
+            </Button>
+            <Button
+              variant="text"
+              size="sm"
+              title="Close without merging"
+              onClick={() => onClose(card)}
+            >
+              Close
+            </Button>
+          </>
+        }
+      />
     </li>
   );
 }
@@ -308,9 +366,9 @@ function Capture({
     setAdded(`Added to ${repoName(board.repo)} Triage`);
   };
   return (
-    <form onSubmit={submit} className="relative mt-6">
+    <form onSubmit={submit} className={cn(column, "mt-7")}>
       <div className="flex gap-2">
-        <input
+        <Input
           aria-label="Capture a card"
           placeholder="What needs doing?"
           value={title}
@@ -318,30 +376,29 @@ function Capture({
             setTitle(event.target.value);
             setAdded("");
           }}
-          className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
-        <select
+        <Select
           aria-label="Repository"
           value={board.id}
           onChange={(event) => {
             setBoardId(event.target.value);
             localStorage.setItem(captureKey, event.target.value);
           }}
-          className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+          className="w-40 shrink-0"
         >
           {boards.map((item) => (
             <option key={item.id} value={item.id}>
               {repoName(item.repo)}
             </option>
           ))}
-        </select>
-        <Button type="submit" disabled={!title.trim()}>
-          Add card
+        </Select>
+        <Button variant="main" type="submit" disabled={!title.trim()}>
+          Add
         </Button>
       </div>
       <p
         role="status"
-        className="absolute left-0 top-full mt-1 text-xs text-muted-foreground"
+        className="absolute top-full left-0 mt-1 text-xs text-ink-muted"
       >
         {added}
       </p>

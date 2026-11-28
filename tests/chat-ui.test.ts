@@ -39,7 +39,7 @@ test("the Chat tab lists chats, shows tool calls, streams the live reply", async
     const row = page.getByRole("button", { name: "b1", exact: true });
     await row.waitFor();
     if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("link", { name: "Chat", exact: true }).click();
     assert.match(page.url(), /\/board\/b1\/chat$/);
     await page.getByRole("navigation", { name: "Chats" }).getByRole("button", { name: "What is blocked?", exact: true }).waitFor();
     await page.locator("[data-role='agent']").getByText("Card B waits on A.").waitFor();
@@ -189,7 +189,7 @@ test("unread replies show per chat and as board totals, and looking at a chat cl
     const list = [{ id: "c1", topic: "First", unread: 1 }, { id: "c2", topic: "Second", unread: 2 }];
     const { views, nav, unreadOf } = await unreadHarness(page, list);
     await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
-    const sidebarChat = page.getByRole("button", { name: /^Chat\b/ });
+    const sidebarChat = page.getByRole("link", { name: /^Chat\b/ });
     await sidebarChat.locator("[data-chat-unread='3']").waitFor();
     await unreadOf("First").filter({ hasText: "1" }).waitFor();
     await unreadOf("Second").filter({ hasText: "2" }).waitFor();
@@ -310,7 +310,7 @@ test("unread counts that move between chats show up even when the board's total 
     list[2].unread = 1;
     await unreadOf("Third").filter({ hasText: "1" }).waitFor({ timeout: 10_000 });
     assert.equal(await unreadOf("Second").count(), 0);
-    await page.getByRole("button", { name: /^Chat\b/ }).locator("[data-chat-unread='1']").waitFor();
+    await page.getByRole("link", { name: /^Chat\b/ }).locator("[data-chat-unread='1']").waitFor();
   } finally {
     await browser.close();
     await server.close();
@@ -561,7 +561,7 @@ async function openChat(opts: { onC2?: (route: Route) => Promise<void>; onSend?:
   const row = page.getByRole("button", { name: "b1", exact: true });
   await row.waitFor();
   if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await page.getByRole("link", { name: "Chat", exact: true }).click();
   const nav = page.getByRole("navigation", { name: "Chats" });
   await nav.getByRole("button", { name: "What is blocked?", exact: true }).waitFor();
   await page.locator("[data-role='agent']").getByText("Card B waits on A.").waitFor();

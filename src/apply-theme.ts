@@ -1,19 +1,24 @@
 import {
   isTheme,
   resolveTheme,
+  themeType,
   themeVariants,
   type ThemeName,
 } from "./themes.js";
 
 // `data-theme` always holds a concrete palette name. A "match system" setting
-// is resolved here and re-resolved when the operating system flips.
+// is resolved here and re-resolved when the operating system flips. Dark
+// palettes also put .dark on <html>, which switches the house tokens.
 const query = "(prefers-color-scheme: light)";
 let current: ThemeName = "default";
 let watching = false;
 
 function show() {
   const light = window.matchMedia(query).matches;
-  document.documentElement.dataset.theme = resolveTheme(current, light);
+  const theme = resolveTheme(current, light);
+  const root = document.documentElement;
+  root.classList.toggle("dark", themeType(theme) === "dark");
+  root.dataset.theme = theme;
 }
 
 // Settings from an older or partial server reply may lack a valid theme; show Default then.

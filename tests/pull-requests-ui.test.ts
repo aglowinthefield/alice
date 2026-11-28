@@ -31,7 +31,7 @@ test("Pull requests appears only for GitHub remotes and links PRs to their cards
     });
     await page.goto(server.resolvedUrls!.local[0]);
     // Opening a repository closes the others, so check each one's links in turn.
-    const prLink = page.getByRole("button", { name: "Pull requests" });
+    const prLink = page.getByRole("link", { name: "Pull requests" });
     for (const [name, count] of [["gl", 0], ["none", 0], ["gh", 1]] as const) {
       const row = page.getByRole("button", { name, exact: true });
       if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();

@@ -8,6 +8,7 @@ import type {
 } from "../shared/agent-models.js";
 import type { Card, CardPriority, CardStatus } from "../shared/wire.js";
 import type { RepoColor, RepoIcon } from "./repo-appearance.js";
+import type { Tone } from "./components/ui/badge";
 
 export type { Card, ReviewAction, ReviewWait, Run } from "../shared/wire.js";
 export {
@@ -27,6 +28,17 @@ export {
   waitingOn,
 } from "../shared/card-state.js";
 export type Status = CardStatus;
+/** Each card status's house tone. src/style.css maps the --status-* colours the same way. */
+export const statusTone: Record<Status, Tone> = {
+  triage: "neutral",
+  ready: "attention",
+  running: "info",
+  review: "success",
+  failed: "danger",
+  interrupted: "warning",
+  done: "neutral",
+  archived: "other",
+};
 export type Board = {
   id: string;
   repo: string;

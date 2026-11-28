@@ -6,7 +6,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "./components/ui/dialog";
+} from "./dialog.js";
 import type { Card, PullRequestDraft } from "./model.js";
 import { semanticTitleProblem } from "./pr-title.js";
 import { PushProgressPanel, type PushProgress } from "./push-progress.js";
@@ -196,12 +196,16 @@ export function PullRequestDialog({
             <div className="flex justify-end gap-2">
               <Button
                 type="button"
-                variant="ghost"
+                variant="text"
                 onClick={() => onOpenChange(false)}
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={busy || !!titleProblem}>
+              <Button
+                variant="main"
+                type="submit"
+                disabled={busy || !!titleProblem}
+              >
                 Approve and open PR
               </Button>
             </div>

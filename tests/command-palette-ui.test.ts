@@ -91,7 +91,7 @@ test("command palette: open anywhere, search cards, run board actions", async ()
       await field.waitFor();
     };
 
-    // Opens from inside a text field, and uses the shared dialog motion.
+    // Opens from inside a text field, and uses the house dialog motion.
     await page
       .getByPlaceholder(/Search/)
       .first()
@@ -99,7 +99,7 @@ test("command palette: open anywhere, search cards, run board actions", async ()
     await open();
     assert.equal(
       await palette.evaluate((node) => getComputedStyle(node).animationName),
-      "dialog-pop-in",
+      "house-pop",
     );
     // Each command shows its shortcut; cards appear only once you type.
     assert.match(await option(/^New card/).innerText(), /n$/);
@@ -207,14 +207,12 @@ test("command palette: open anywhere, search cards, run board actions", async ()
     await page.keyboard.press("Enter");
     await page.waitForURL(/\/settings/);
 
-    // Reduced motion shortens the dialog animation to nothing.
+    // Reduced motion turns the dialog animation off.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await open();
     assert.equal(
-      await palette.evaluate(
-        (node) => getComputedStyle(node).animationDuration,
-      ),
-      "0.001s",
+      await palette.evaluate((node) => getComputedStyle(node).animationName),
+      "none",
     );
   } finally {
     await browser.close();

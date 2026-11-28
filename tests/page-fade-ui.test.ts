@@ -98,6 +98,17 @@ test("prefers-reduced-motion starts no fade", async () => {
   } finally { await page.close(); }
 });
 
+test("a dialog and its overlay animate in only when motion is allowed", async () => {
+  for (const [motion, expected] of [["no-preference", ["house-fade", "house-pop"]], ["reduce", ["none", "none"]]] as const) {
+    const page = await open(motion);
+    try {
+      await page.getByRole("button", { name: /Open card/ }).click();
+      const names = await page.locator("[data-slot=dialog-content]").evaluate(el => [getComputedStyle(el.previousElementSibling!).animationName, getComputedStyle(el).animationName]);
+      assert.deepEqual(names, expected, motion);
+    } finally { await page.close(); }
+  }
+});
+
 test("navigation uses no View Transition, and its pseudo-elements cannot animate", async () => {
   const page = await open("no-preference");
   try {

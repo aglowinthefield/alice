@@ -1943,6 +1943,81 @@ test("github-pr readiness: at Review Alice drafts the PR and runs the hooks, so 
   } finally { f.cleanup(); }
 });
 
+test("readiness lists PR drafts while their agents write them, and a draft waiting for a slot as queued until it gets one", async () => {
+  const f = fixture();
+  try {
+    const cards = [await reviewedCard(f, "One"), await reviewedCard(f, "Two"), await reviewedCard(f, "Three")];
+    const releases = new Map<string, () => void>();
+    const readiness = new Readiness(f.board, new Integration(f.board, f.data), {
+      draft: async (card, _run, onProgress) => {
+        onProgress("Model is thinking");
+        await new Promise<void>(resolve => releases.set(card.id, resolve));
+        return { title: "feat: add feature", body: "Drafted", source: "agent", problem: "", templatePath: null, semantic: null };
+      },
+      sendBack: () => true,
+    });
+    const state = () => new Map(readiness.drafts().map(item => [item.cardId, item.since === null ? "queued" : item.step]));
+    assert.deepEqual(readiness.drafts(), []);
+    const drafts = cards.map(card => readiness.draft(card));
+    // Two drafting slots: the third draft waits for one.
+    await waitFor(() => releases.size === 2);
+    assert.deepEqual(state(), new Map([[cards[0].id, "Model is thinking"], [cards[1].id, "Model is thinking"], [cards[2].id, "queued"]]));
+    // A new attempt drops the card's job (the server calls cancel when a run starts), but its draft still holds or
+    // waits for a slot, so it stays listed until its promise settles.
+    readiness.cancel(cards[0].id);
+    readiness.cancel(cards[2].id);
+    assert.deepEqual(state(), new Map([[cards[0].id, "Model is thinking"], [cards[1].id, "Model is thinking"], [cards[2].id, "queued"]]), "a rerun during drafting keeps both drafts listed");
+    releases.get(cards[0].id)!();
+    await drafts[0];
+    await waitFor(() => releases.has(cards[2].id));
+    assert.deepEqual(state(), new Map([[cards[1].id, "Model is thinking"], [cards[2].id, "Model is thinking"]]), "the waiting draft got the free slot");
+    assert.ok(readiness.drafts().every(item => typeof item.since === "number"));
+    releases.get(cards[1].id)!(); releases.get(cards[2].id)!();
+    await Promise.all(drafts);
+    assert.deepEqual(readiness.drafts(), [], "finished drafts are no longer listed");
+  } finally { f.cleanup(); }
+});
+
+test("an agent-approved review leaves the running work when its reviewer exits, and its PR draft takes over", async () => {
+  const f = fixture();
+  const release = join(f.dir, "release"), piBin = join(f.dir, "fake-reviewer");
+  const settled = [
+    JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: '{"verdict":"approve","reason":"Looks right"}' }] } }),
+    JSON.stringify({ type: "agent_settled", aborted: false }),
+  ].join("\n");
+  // The fake reviewer calls one tool, then waits to be released before its verdict.
+  writeFileSync(piBin, `#!/bin/sh\necho '{"type":"tool_execution_start","toolCallId":"a","toolName":"read"}'\nwhile [ ! -f '${release}' ]; do sleep 0.05; done\ncat <<'EVENTS'\n${settled}\nEVENTS\n`);
+  chmodSync(piBin, 0o755);
+  try {
+    const enabledAt = f.board.setAutoReview(f.repoBoard.id, true).autoReviewEnabledAt!;
+    while (new Date().toISOString() <= enabledAt) { /* The run must finish after auto-review was enabled. */ }
+    const card = await reviewedCard(f);
+    let finishDraft!: () => void;
+    const integration = new Integration(f.board, f.data);
+    const readiness = new Readiness(f.board, integration, {
+      draft: async () => {
+        await new Promise<void>(resolve => { finishDraft = resolve; });
+        return { title: "feat: add feature", body: "Drafted", source: "agent", problem: "", templatePath: null, semantic: null };
+      },
+      sendBack: () => true,
+    });
+    // Like the server: an approval drafts the PR, then pushes; the push is left out here.
+    const auto = new AutoReview(f.board, integration, piBin, undefined, async current => { await readiness.draft(current); return f.board.getCard(current.id)!; });
+    const ticking = auto.tick();
+    await waitFor(() => auto.inProgress[0]?.tool === "read");
+    assert.deepEqual(auto.inProgress.map(item => item.cardId), [card.id]);
+    assert.deepEqual(readiness.drafts(), []);
+    writeFileSync(release, "");
+    await waitFor(() => readiness.drafts().length === 1);
+    assert.deepEqual(auto.inProgress, [], "the review is not listed while its job drafts the PR");
+    assert.equal(auto.activeCount, 1, "the review still holds its slot");
+    assert.equal(readiness.drafts()[0].cardId, card.id);
+    finishDraft();
+    await ticking;
+    assert.deepEqual([auto.inProgress, readiness.drafts(), auto.activeCount], [[], [], 0]);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr readiness: work that changed after the check runs the hook again on Approve", async () => {
   const f = fixture();
   try {

@@ -453,6 +453,7 @@ test("reviewer progress reports elapsed time, turns, tool counts and narration w
     { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Checking the migration. Now running the tests." }] } },
   ]) progress.feed(JSON.stringify(event));
   progress.feed("not json");
+  assert.equal(progress.tool, "read", "the latest tool, for alice running");
   const text = progress.text(95_000);
   assert.equal(text, "Reviewer agent working · 1m 35s · turn 1 · read ×2, bash ×1\nNow running the tests.");
   progress.feed(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: '{"verdict":"approve","reason":"ok"}' }] } }));

@@ -9,7 +9,8 @@ import type { Board, Card } from "./board.js";
  */
 export type PullRequestDraft = { title: string; body: string };
 export class AutoPullRequest {
-  private active = new Set<string>();
+  /** The cards being opened now, with when each started (epoch milliseconds). */
+  private active = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private draining = false;
   constructor(private board: Board, private fingerprint: (card: Card) => string, private draft: (card: Card, fingerprint: string) => Promise<PullRequestDraft>,
@@ -25,13 +26,15 @@ export class AutoPullRequest {
     while (this.active.size) await new Promise(resolve => setTimeout(resolve, 50));
   }
   get activeCount(): number { return this.active.size; }
+  /** The cards being opened now, with when each started (epoch milliseconds). */
+  get inProgress(): ReadonlyMap<string, number> { return this.active; }
   /** Starts every waiting card not already being opened, and resolves once those it started have finished. */
   async tick(): Promise<void> {
     if (this.draining) return;
     const started: Promise<void>[] = [];
     for (const { card, run } of this.board.listAutoPullRequestCandidates()) {
       if (this.active.has(card.id) || !this.board.claimAutoPullRequest(card.id, run.id)) continue;
-      this.active.add(card.id);
+      this.active.set(card.id, Date.now());
       started.push(this.process(card, run.id).finally(() => this.active.delete(card.id)));
     }
     await Promise.all(started);

@@ -10,6 +10,7 @@ import { Integration } from "../server/integration.js";
 import { Worker } from "../server/worker.js";
 import { AutoPickup } from "../server/auto-pickup.js";
 import { AutoReview, sendBackReason } from "../server/auto-review.js";
+import { runningWork } from "../server/running.js";
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "alice-pickup-")), repo = join(dir, "repo"), data = join(dir, "data"), fakePi = join(dir, "fake-pi");
@@ -354,6 +355,32 @@ test("a refused push at the run limit keeps the hook output and goes to the agen
     assert.equal(item.board.listRuns(refused.id)[0]?.status, "running");
     assert.equal(item.board.listRuns(refused.id)[0]?.startedBy, "manual", "an operator's Approve asked for it, so it does not count as auto-pickup");
     assert.equal(item.board.getCiFeedback(refused.id), undefined, "the run took the hook output");
+  } finally { await item.close(); }
+});
+
+test("a refused push held by the run limit shows in running as a queued run, not as a card waiting for you", async () => {
+  const { runningView } = await import(new URL("../scripts/cli-board.mjs", import.meta.url).href);
+  const item = fixture();
+  try {
+    const refused = item.card("Refused push"), busy = item.card("Busy");
+    item.worker.start(refused);
+    item.release();
+    await waitFor(() => item.board.getCard(refused.id)?.status === "review");
+    rmSync(join(item.dir, "release"));
+    item.worker.start(busy);
+    item.board.setAutoPickup(item.repoBoard.id, true, 1);
+    item.board.recordPushFailure(refused.id, "abc123", "Unused exports (1)");
+    assert.equal(item.worker.startHookFix(item.board.getCard(refused.id)!), false, "at the limit the fix waits");
+    assert.equal(item.board.getCard(refused.id)!.startQueued, false, "a hook fix is not a queued start");
+    const work = () => runningWork(item.board, { runs: item.worker.activeRuns(), reviews: [], drafts: [], opening: new Map() });
+    assert.deepEqual(work().map(entry => [entry.kind, entry.title, entry.queued]), [["run", "Busy", false], ["run", "Refused push", true]]);
+    const view = runningView(work(), item.board.listCards(), item.board.listBoards());
+    assert.deepEqual(view.waiting, [], "the refused card is the agent's next, not yours");
+    assert.deepEqual([view.active.map((entry: { title: string }) => entry.title), view.queued.runs], [["Busy"], 1]);
+    item.release();
+    await waitFor(() => item.board.getCard(busy.id)?.status === "review");
+    item.pickup.tick();
+    assert.deepEqual(work().map(entry => [entry.kind, entry.title, entry.queued]), [["run", "Refused push", false]], "the fix runs once a slot frees");
   } finally { await item.close(); }
 });
 

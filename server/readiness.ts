@@ -14,6 +14,8 @@ export type HookCheck = { state: "queued" | "running" | "passed" | "failed" | "u
 export type ReadinessProgress = { startedAt: number; steps: { at: number; text: string }[] };
 type Stored = { draft?: PullRequestDraft; hooks?: HookCheck };
 type Job = { runId: string; abort: AbortController; progress: ReadinessProgress; draft?: Promise<PullRequestDraft>; hooks?: Promise<void>; hookState?: HookCheck };
+/** A draft from its request until its promise settles: when its agent started (null while it waits for a slot) and its latest step. */
+type DraftState = { cardId: string; since: number | null; step: string };
 
 /** Hook failures in a row sent back to the agent from Review before Alice leaves the next one for a person. */
 const maxHookSendBacks = loopGuards.hookSendBacks;
@@ -31,6 +33,7 @@ export class Readiness {
   private jobs = new Map<string, Job>();
   private repoQueues = new Map<string, Promise<void>>();
   private drafting = 0;
+  private pendingDrafts = new Set<DraftState>();
   private draftWaiters: (() => void)[] = [];
   constructor(private board: Board, private integration: Integration, private deps: {
     draft: (card: Card, run: Run, onProgress: (step: string) => void) => Promise<PullRequestDraft>;
@@ -97,12 +100,18 @@ export class Readiness {
 
   private startDraft(card: Card, run: Run, job: Job): Promise<PullRequestDraft> {
     const pending = (async () => {
-      await this.draftSlot();
+      // Kept apart from the job, which a new attempt replaces while this draft still runs or waits for its slot.
+      const state: DraftState = { cardId: card.id, since: null, step: "" };
+      this.pendingDrafts.add(state);
       try {
-        const draft = await this.deps.draft(card, run, text => this.step(job, text));
-        if (draft.source === "agent" || !draft.problem) this.save(run, { draft });
-        return draft;
-      } finally { this.releaseDraftSlot(); }
+        await this.draftSlot();
+        state.since = Date.now();
+        try {
+          const draft = await this.deps.draft(card, run, text => { state.step = text; this.step(job, text); });
+          if (draft.source === "agent" || !draft.problem) this.save(run, { draft });
+          return draft;
+        } finally { this.releaseDraftSlot(); }
+      } finally { this.pendingDrafts.delete(state); }
     })();
     job.draft = pending;
     // A failed or unkept draft is retried by the next request.
@@ -198,6 +207,8 @@ export class Readiness {
     return hooks?.state === "passed" ? hooks.candidate : null;
   }
 
+  /** The pull request drafts being written now, each with its latest step (see `progressLine`), and those waiting for a slot (`since` null). */
+  drafts(): DraftState[] { return [...this.pendingDrafts].map(state => ({ ...state })); }
   /** What the PR dialog shows: the steps so far, and the hook check (in progress or stored). */
   status(cardId: string): { progress: ReadinessProgress; hooks: HookCheck | null } {
     const card = this.board.getCard(cardId), run = card && this.board.listRuns(cardId)[0];

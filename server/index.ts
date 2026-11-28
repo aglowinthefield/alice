@@ -23,6 +23,7 @@ import { discuss, discussionPrompt } from "./discuss.js";
 import { Chats, writeTopic } from "./chat.js";
 import { chatImagePath, publishChatImages, rasterType } from "./chat-images.js";
 import { draftPullRequest } from "./pr-draft.js";
+import { runningWork } from "./running.js";
 import { Readiness } from "./readiness.js";
 import { attachmentPath, attachmentsPrompt, removeAttachmentFiles, removeCardAttachmentFiles, safeFileName, storeUpload, sweepOrphanAttachments } from "./attachments.js";
 
@@ -381,6 +382,9 @@ const server = createServer(async (req, res) => {
       // Every visible board's cards, for the Today view. Removed boards and archived cards stay out.
       const repos = new Set(board.listBoards().map(item => item.repo));
       send(res, 200, worker.withLive(board.listCards().filter(card => repos.has(card.repo) && card.status !== "archived"))); return;
+    }
+    if (path === "/api/running" && req.method === "GET") {
+      send(res, 200, runningWork(board, { runs: worker.activeRuns(), reviews: autoReview.inProgress, drafts: readiness.drafts(), opening: autoPullRequest.inProgress })); return;
     }
     if (path === "/api/stats" && req.method === "GET") {
       const params = new URL(req.url ?? "/", "http://localhost").searchParams;

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `alice running [--watch]` shows what Alice is doing on every board, sized for a terminal pane about 40 columns wide: the runs, agent reviews, PR drafts and automatic PR openings going now with their repository, time so far and current tool, then the cards waiting for you, then how many are queued. In a short pane `--watch` keeps the counts at the top and scrolls the list with `j`/`k`, which `cards --watch` now does too. Piped, it prints tab-separated lines. A Herdr plugin in `herdr/` opens it as a narrow split with one toggle action; see the CLI section of docs/reference.md to install it.
 - An interrupted run no longer pauses automatic pickup. Its card waits in Interrupted for you, and pickup carries on with the next Ready card.
 - Empty lanes stay collapsed and can't be expanded, and lanes holding only Done or archived cards always start collapsed. The board's Auto-collapse checkbox and its `autoCollapseEmptySwimlanes` setting are gone.
 - Repository icons are Alice's nine expressions instead of the bakery set, in the web app, on iOS and on Alice's PR comments. Each board on a bakery icon moves to an expression once; the bakery images stay in `public/icons` so old PR comments still show theirs.

@@ -27,7 +27,7 @@ export const COMMANDS = [
   {
     name: "cards", group: "Cards", summary: "the board's lanes and cards",
     full: "[--board ID|PATH] [--all] [--watch] [--json]",
-    options: [BOARD, ["--all", "include Archive and every Done card"], ["--watch", "redraw every 2 seconds until Ctrl-C (terminal only)"], JSON_OUT],
+    options: [BOARD, ["--all", "include Archive and every Done card"], ["--watch", "redraw every 2 seconds until q; j/k scroll (terminal only)"], JSON_OUT],
     details: "On a terminal, cards print in the board's lanes with its badges. Piped, each card is one tab-separated line.",
   },
   {
@@ -91,6 +91,12 @@ export const COMMANDS = [
     full: "CARD_ID [--board ID|PATH] --yes",
     details: "For a Failed card whose provider rejected its saved session history, which start refuses. The worktree, edits and review feedback carry over; the old session and log are kept.",
     options: [BOARD, ["--yes", "confirm the paid run"]],
+  },
+  {
+    name: "running", group: "Runs", summary: "what agents are doing on every board, and what waits for you",
+    full: "[--watch] [--json]",
+    details: "Lists the runs, agent reviews, PR drafts and automatic PR openings going now (card, repository, kind, time so far, current tool), then the cards waiting for you, then how many will start without you. Sized for a terminal pane about 40 columns wide; --watch keeps it open, as the Herdr plugin does (docs/reference.md). In a short pane the counts stay at the top and j/k scroll the list.\nPiped, each item is one tab-separated line led by running, waiting or queued.",
+    options: [["--watch", "redraw every 2 seconds until q (terminal only)"], ["--json", "print { active, waiting, queued }"]],
   },
   {
     name: "runs", group: "Runs", args: "CARD_ID", summary: "a card's attempts, tokens and cost",

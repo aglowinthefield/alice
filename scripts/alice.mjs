@@ -7,8 +7,8 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { doctor, report } from "./doctor.mjs";
 import { commandHelp, overview, suggest, usageLine } from "./cli-help.mjs";
-import { c, columns, layout, paint, pretty } from "./cli-style.mjs";
-import { renderBoard } from "./cli-board.mjs";
+import { c, columns, footer, frame, keyPresses, layout, paint, plain, pretty } from "./cli-style.mjs";
+import { renderBoard, renderRunning, runningLines, runningScreen, runningView } from "./cli-board.mjs";
 import { ACTIONS as SERVICE_ACTIONS, service } from "./service.mjs";
 import { openUrl, runTui } from "./cli-tui.mjs";
 import { formatVersion, readVersion } from "./version.mjs";
@@ -74,10 +74,11 @@ async function request(origin, path, method = "GET", input, timeoutMs = 10000) {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    throw new Error(`Cannot reach Alice at ${origin.origin}: ${error instanceof Error ? error.message : error}`);
+    throw new Error(`Cannot reach Alice at ${origin.origin}: ${plain(error instanceof Error ? error.message : error)}`);
   }
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(`Alice ${response.status}: ${data?.error ?? response.statusText}`);
+  // The server's text goes to a terminal, so it loses escape sequences and line breaks on the way.
+  if (!response.ok) throw new Error(`Alice ${response.status}: ${plain(data?.error ?? response.statusText)}`);
   return data;
 }
 
@@ -171,18 +172,47 @@ function print(data, json, lines) {
   else for (const line of pretty() ? layout(lines) : lines) console.log(line);
 }
 
-// Redraws on the terminal's alternate screen until Ctrl-C, keeping the last good board when a fetch fails.
+// Scroll keys for watch: j/k and the arrows move a line, space/b and Page Down/Up a screen, g/G jump to either end.
+const scrollKeys = { j: 1, "\x1b[B": 1, "\x1bOB": 1, k: -1, "\x1b[A": -1, "\x1bOA": -1, " ": "page", "\x1b[6~": "page", b: "-page", "\x1b[5~": "-page", g: -Infinity, G: Infinity };
+
+// Redraws on the terminal's alternate screen every 2 seconds until q or Ctrl-C, keeping the last good screen when a
+// fetch fails. `render({ rows })` returns lines, or `{ head, body }` whose head stays put while the body scrolls.
 async function watch(render) {
-  const out = process.stdout;
-  let last = [], problem = "";
-  const leave = () => { out.write("\x1b[?25h\x1b[?1049l"); process.exit(0); };
+  const out = process.stdout, input = process.stdin;
+  let screen = { head: [], body: [] }, problem = "", offset = 0, updated = "", room = 1;
+  const leave = () => { if (input.isTTY) input.setRawMode(false); out.write("\x1b[?25h\x1b[?1049l"); process.exit(0); };
+  const draw = () => {
+    const rows = out.rows || 24, shown = frame(screen, rows, offset);
+    offset = shown.top;
+    room = rows - screen.head.length - 1;
+    out.write(`\x1b[H\x1b[2J${[...shown.lines, footer({ problem, updated, scrolls: shown.scrolls }, columns())].join("\n")}`);
+  };
   process.on("SIGINT", leave);
+  out.on("resize", draw);
+  if (input.isTTY) {
+    input.setRawMode(true);
+    input.on("data", data => {
+      let moved = false;
+      for (const key of keyPresses(data)) {
+        if (key === "q" || key === "\x03") leave();
+        const step = scrollKeys[key];
+        if (step === undefined) continue;
+        // Clamp after each key, so k after G moves up from the last row rather than from past it.
+        offset = frame(screen, out.rows || 24, offset + (step === "page" ? room : step === "-page" ? -room : step)).top;
+        moved = true;
+      }
+      if (moved) draw();
+    });
+  }
   out.write("\x1b[?1049h\x1b[?25l");
   for (;;) {
-    try { last = await render(); problem = ""; } catch (error) { problem = error instanceof Error ? error.message : String(error); }
-    const footer = problem ? c.bad(problem) : c.dim(`updated ${new Date().toLocaleTimeString()} · Ctrl-C to quit`);
-    const room = (out.rows || 24) - 1;
-    out.write(`\x1b[H\x1b[2J${[...last.slice(0, room - 1), footer].join("\n")}`);
+    try {
+      const next = await render({ rows: out.rows || 24 });
+      screen = Array.isArray(next) ? { head: [], body: next } : next;
+      problem = "";
+      updated = new Date().toLocaleTimeString();
+    } catch (error) { problem = error instanceof Error ? error.message : String(error); }
+    draw();
     await new Promise(done => setTimeout(done, 2000));
   }
 }
@@ -206,7 +236,7 @@ async function main() {
     return;
   }
   const variadic = ["start", "recover", "archive", "add", "purge-attachments", "attach"];
-  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
+  const expected = { service: 1, doctor: 0, open: 0, limits: 0, agents: 0, board: 0, "board-add": 0, pr: 1, boards: 0, cards: 0, running: 0, tui: 0, create: 0, ready: 1, triage: 1, runs: 1, conflicts: 0, show: 1, edit: 1, restore: 1, close: 1, stats: 0, depend: 1, undepend: 1 };
   if (!(command in expected) && command !== "pickup" && !variadic.includes(command)) throw unknown(command);
   if ((command === "board" || command === "board-add" || command === "open") && args.length > 1 || command === "pr" && args.length > 2) throw new Error(`Invalid arguments for ${command}\n${usageLine(command)}`);
   if (command === "attach" && args.length < 2) throw new Error(`attach needs a card ID and at least one file\n${usageLine(command)}`);
@@ -228,7 +258,8 @@ async function main() {
   if (command === "pr") cardId(args[0]);
   if (["show", "edit", "archive", "purge-attachments", "close", "restore", "depend", "undepend"].includes(command)) args.forEach(cardId);
   if (command === "attach") cardId(args[0]);
-  if ((opts.all || opts.watch) && command !== "cards") throw new Error("--all and --watch are only valid with cards");
+  if (opts.all && command !== "cards") throw new Error("--all is only valid with cards");
+  if (opts.watch && command !== "cards" && command !== "running") throw new Error("--watch is only valid with cards or running");
   if (opts.print && command !== "open") throw new Error("--print is only valid with open");
   if (command === "tui" && (opts.json || !process.stdout.isTTY || !process.stdin.isTTY)) throw new Error("tui needs a terminal and no --json; use cards for a pipe");
   if (opts.watch && (opts.json || !process.stdout.isTTY)) throw new Error("--watch needs a terminal and no --json");
@@ -276,6 +307,15 @@ async function main() {
     const settings = args.length ? await request(origin, "/api/settings", "PATCH", { maxActiveAgents: args[0] === "auto" ? 0 : Number(args[0]) }) : await request(origin, "/api/settings");
     print({ maxActiveAgents: settings.maxActiveAgents, limit: settings.activeAgentsLimit, active: settings.activeAgents }, opts.json,
       [`Agents at once, all boards: ${settings.activeAgentsLimit}${settings.maxActiveAgents ? "" : " (automatic)"}; ${settings.activeAgents} running now. Automatic work waits for a slot; runs you start always start.`]);
+    return;
+  }
+  if (command === "running") {
+    if (opts.board) throw new Error("--board is not valid with running; it covers every board");
+    const load = async () => runningView(...await Promise.all(["/api/running", "/api/cards", "/api/boards"].map(route => request(origin, route))));
+    if (opts.watch) return watch(({ rows }) => load().then(view => runningScreen(view, { width: columns(), rows })));
+    const view = await load();
+    if (opts.json) console.log(JSON.stringify(view, null, 2));
+    else for (const line of pretty() ? renderRunning(view, { width: columns() }) : runningLines(view)) console.log(line);
     return;
   }
   const boards = await request(origin, "/api/boards");

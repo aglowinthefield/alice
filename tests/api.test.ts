@@ -473,11 +473,16 @@ ${event({ type: "agent_settled", aborted: false })}
       assert.deepEqual([item.live?.tool, item.live?.turn], ["tool", 1]);
       assert.ok(!Number.isNaN(Date.parse(item.live.since)));
     }
+    const working = (await request("/running")).data;
+    assert.deepEqual(working.map((item: { kind: string; cardId: string; boardId: string; repo: string; title: string; tool: string; queued: boolean }) => [item.kind, item.cardId, item.boardId, item.repo, item.title, item.tool, item.queued]),
+      [["run", card.id, board.id, board.repo, "Live", "tool", false]], "running lists the run with its latest tool");
+    assert.ok(!Number.isNaN(Date.parse(working[0].startedAt)));
     writeFileSync(release, "");
     const done = Date.now() + 10_000;
     let finished = await lists();
     while (finished[0].status === "running" && Date.now() < done) { await new Promise(resolve => setTimeout(resolve, 50)); finished = await lists(); }
     for (const item of finished) { assert.equal(item.status, "review"); assert.equal(item.live, null); }
+    assert.deepEqual((await request("/running")).data, [], "a finished run leaves the list");
   } finally {
     if (child.exitCode === null) {
       child.kill("SIGTERM");

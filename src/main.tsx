@@ -182,7 +182,14 @@ function ServerHost() {
       .then((status) => setHost(status.hostname ?? ""))
       .catch(() => {});
   }, []);
-  return <span data-testid="server-host">{host || "Alice"}</span>;
+  return (
+    <span
+      data-testid="server-host"
+      className="truncate text-[length:var(--text-sidebar-meta)] text-muted-foreground"
+    >
+      {host ? `${host} · v0.1` : "v0.1"}
+    </span>
+  );
 }
 
 /** Count of cards created outside this UI that the operator has not seen yet. */
@@ -1936,8 +1943,11 @@ export function App() {
         />
         <div className="desktop-sidebar-head flex items-center gap-3 px-5 py-5">
           <BrandIcon />
-          <span className="text-[18px] font-semibold tracking-[-.04em]">
-            alice<span className="text-primary">.</span>
+          <span className="flex min-w-0 flex-col leading-tight">
+            <span className="text-[length:var(--text-sidebar)] font-medium">
+              Alice
+            </span>
+            <ServerHost />
           </span>
           <button
             aria-label="Hide sidebar"
@@ -2174,12 +2184,6 @@ export function App() {
             <Settings2 size={16} aria-hidden="true" />
             <span>Settings</span>
           </button>
-        </div>
-        <div className="mt-auto hidden border-t border-border px-5 py-3 lg:block">
-          <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-status-review" />{" "}
-            <ServerHost /> <span className="ml-auto font-mono">v0.1</span>
-          </div>
         </div>
       </aside>
       {view === "today" && (

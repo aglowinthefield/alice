@@ -142,6 +142,8 @@ One radius, `--radius: 0.3rem`, with Tailwind's `rounded-sm` to `rounded-xl` der
 
 Built on Radix primitives and shadcn's new-york style with Lucide icons. Dialogs fade in over 160 ms and pop with a spring-like curve over 180 ms; view transitions are off.
 
+The sidebar opens with Alice's face, zoomed so her expression reads at 40px, beside "Alice" over the server's host name and version. There is no footer.
+
 In the sidebar, a repository's pages (Kanban, Pull requests, Visualizer, Chat) sit 16px in, on a 1px rail in the border colour. The current page has no highlight: a 2px accent stripe on the rail marks it and slides to the new page over 180 ms. The list slides open and shut over the same 180 ms.
 
 The Cmd+K (Ctrl+K) command palette is a dialog with the same motion, placed high on the screen like Spotlight. Its rows are 32px, show the command's own shortcut at the right, and cards appear only once something is typed. A command that needs a card acts on the focused or open card, or asks which card.

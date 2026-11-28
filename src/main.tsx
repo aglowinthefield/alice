@@ -4623,6 +4623,40 @@ const shortcutList: [string, string][] = [
   [`${modKey} Enter`, "Create or save card in the form"],
   ["?", "Show or hide keyboard shortcuts"],
 ];
+/**
+ * The images on a paste. Office apps put a rendered image next to copied text; when the paste has text, the text
+ * wins and nothing is attached.
+ */
+function pastedImages(data: DataTransfer): File[] {
+  if (data.getData("text/plain")) return [];
+  return [...data.files].filter((file) => file.type.startsWith("image/"));
+}
+/**
+ * `pasted` with each generic clipboard name ("image.png") replaced by `pasted-image-N`, taking the lowest N that no
+ * file in `pending` or earlier in this paste uses, so removing one and pasting again never repeats a name.
+ */
+function namePastedImages(pasted: File[], pending: File[]): File[] {
+  const taken = new Set(pending.map((file) => file.name));
+  return pasted.map((file) => {
+    if (file.name && !/^image\.\w+$/i.test(file.name)) return file;
+    const extension = file.type.split("/")[1]?.split("+")[0] || "png";
+    let number = 1;
+    while (taken.has(`pasted-image-${number}.${extension}`)) number++;
+    const name = `pasted-image-${number}.${extension}`;
+    taken.add(name);
+    return new File([file], name, {
+      type: file.type,
+      lastModified: file.lastModified,
+    });
+  });
+}
+// A pending file's list key. An index key would hand a removed file's focused Remove button to the next file.
+const fileKeys = new WeakMap<File, number>();
+let nextFileKey = 0;
+const fileKey = (file: File) => {
+  if (!fileKeys.has(file)) fileKeys.set(file, ++nextFileKey);
+  return fileKeys.get(file)!;
+};
 function CardForm({
   onSubmit,
   busy,
@@ -4641,6 +4675,28 @@ function CardForm({
   const [body, setBody] = useState(initial?.body ?? "");
   const [priority, setPriority] = useState<Priority>(initial?.priority ?? 0);
   const [files, setFiles] = useState<File[]>([]);
+  const form = useRef<HTMLFormElement>(null);
+  // A new card takes a pasted image anywhere in its dialog, not only inside the form: removing an attachment
+  // unmounts the focused button, and the dialog then moves focus to its own content element.
+  useEffect(() => {
+    if (initial) return;
+    const dialog =
+      form.current?.closest<HTMLElement>('[role="dialog"]') ?? form.current;
+    if (!dialog) return;
+    const paste = (event: ClipboardEvent) => {
+      const pasted = event.clipboardData
+        ? pastedImages(event.clipboardData)
+        : [];
+      if (!pasted.length) return;
+      event.preventDefault();
+      setFiles((previous) => [
+        ...previous,
+        ...namePastedImages(pasted, previous),
+      ]);
+    };
+    dialog.addEventListener("paste", paste);
+    return () => dialog.removeEventListener("paste", paste);
+  }, [initial]);
   function submit(event: FormEvent) {
     event.preventDefault();
     onSubmit({ title, body, priority, files });
@@ -4649,6 +4705,7 @@ function CardForm({
     "w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary";
   return (
     <form
+      ref={form}
       onSubmit={submit}
       onKeyDown={(event) => {
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -4706,7 +4763,7 @@ function CardForm({
             />
             {files.map((file, index) => (
               <span
-                key={index}
+                key={fileKey(file)}
                 className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 font-normal"
               >
                 {file.name} ({formatSize(file.size)})
@@ -4724,6 +4781,9 @@ function CardForm({
               </span>
             ))}
           </div>
+          <p className="mt-1.5 font-normal text-muted-foreground">
+            Or paste an image into the form.
+          </p>
         </div>
       )}
       <p className="text-xs leading-5 text-muted-foreground">

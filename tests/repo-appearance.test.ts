@@ -10,7 +10,7 @@ test("repository icon and color picker updates navigation and heading after save
     await server.listen();
     browser = await chromium.launch();
     const page = await browser.newPage();
-    let board = { id: "board", repo: "/tmp/example", icon: "alice_smile", color: "violet", autoCollapseEmptySwimlanes: false };
+    let board = { id: "board", repo: "/tmp/example", icon: "alice_smile", color: "violet" };
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/boards/board" && route.request().method() === "PATCH") {

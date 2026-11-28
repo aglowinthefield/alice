@@ -25,7 +25,7 @@ async function open(cards: unknown[], theme = "default", triage = "show") {
   // Triage cards start hidden; most tests draw them, so they opt in unless a test says otherwise.
   await page.addInitScript((value) => localStorage.setItem("alice-visualizer-triage", value), triage);
   const data: Record<string, unknown> = {
-    "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+    "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
     "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme },
     "/api/boards/board/cards": cards,
     "/api/boards/board/conflicts": [],
@@ -372,7 +372,7 @@ test("without WebGL the graph is plain SVG with state colors, labels, hover and 
       };
     `);
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": chainCards,
       "/api/boards/board/conflicts": [],

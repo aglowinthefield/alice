@@ -12,7 +12,7 @@ test("a follow-up added from a run report is created with source follow-up, and 
     const card = { id: "card", title: "Ship the importer", body: "", repo: "/tmp/repo", source: "manual", status: "done", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false, idempotencyKey: "alice-local-1234" };
     const run = { id: "run", cardId: "card", attempt: 1, status: "review", report: "Done.\n\n## Follow-ups\n- Add an index on `cards.repo`", output: "", error: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, startedBy: "manual", agent: "", lastActivityAt: null, ciFix: 0, failureKind: null, recoveryOf: null, retryScheduled: 0, changedFiles: null };
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],
@@ -38,6 +38,7 @@ test("a follow-up added from a run report is created with source follow-up, and 
       await route.fulfill({ json: path in data ? data[path] : [] });
     });
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     await page.getByRole("button", { name: /Ship the importer/ }).first().click();
     await page.getByRole("button", { name: "Add to Triage" }).click();
     await page.getByRole("button", { name: "In Triage" }).waitFor();

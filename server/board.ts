@@ -19,18 +19,18 @@ import type { StatsInput } from "./stats.js";
 import type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields } from "../shared/wire.js";
 export type { Card, CardPriority, CardPullRequest, CardSource, CardStatus, ReviewAction, ReviewWait, Run, UsageFields };
 export { reviewActionLabels } from "../shared/card-state.js";
-export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: boolean; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[];
+export type RepoBoard = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoReviewEnabled: boolean; autoReviewEnabledAt: string | null; limitsEnabled: boolean; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: boolean; pickupConcurrency: number; pickupDailyLimit: number; autoPickupStarts: number; autoPickupNextAt: string | null; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: BoardAgentModels; pickupCostBudget: number | null; cost24h: number; autoPickupBudgetReached: boolean; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: boolean; githubMainProtected: boolean | null; integrationNote: string; pushMainAfterMerge: boolean; autoPullRequestEnabled: boolean; autoPullRequestEnabledAt: string | null; sharedCaches: SharedCache[];
   /** Days a card may sit in Review before the board marks it stale and the push digest lists it; 0 is off. */
   staleReviewDays: number };
 /** `local` merges into local main on Approve; `github-pr` opens a PR and waits for it to merge on GitHub. */
 export type IntegrationMode = "local" | "github-pr";
 export type AliceSettings = { confirmRunStart: boolean; notifyOnReview: boolean; cardDetailsLayout: "dialog" | "side"; theme: ThemeName; density: "compact" | "default" | "cozy"; showCardModels: boolean; agentModels: AgentModels; discordWebhookUrl: string; telemetryEnabled: boolean; maxActiveAgents: number };
-type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoCollapseEmptySwimlanes: number; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string; staleReviewDays: number };
+type BoardRow = { id: string; repo: string; icon: RepoIcon; color: RepoColor; remoteUrl: string; autoReviewEnabled: number; autoReviewEnabledAt: string | null; limitsEnabled: number; autoReviewConcurrency: number; autoReviewMaxFiles: number; autoReviewMaxPatchChars: number; autoPickupEnabled: number; pickupConcurrency: number; pickupDailyLimit: number; autoPickupResetRunRowid: number; autoPickupEnabledAt: string | null; autoPickupError: string; agentModels: string; pickupCostBudget: number | null; integration: IntegrationMode; integrationError: string; integrationWarning: string; integrationSyncedAt: string | null; integrationChosen: number; githubMainProtected: number | null; integrationNote: string; pushMainAfterMerge: number; autoPullRequestEnabled: number; autoPullRequestEnabledAt: string | null; sharedCaches: string; staleReviewDays: number };
 const toRepoBoard = (row: BoardRow, starts: string[], cost24h: number): RepoBoard => ({
   id: row.id, repo: row.repo, icon: row.icon, color: row.color, remoteUrl: row.remoteUrl,
   autoReviewEnabledAt: row.autoReviewEnabledAt, autoReviewConcurrency: row.autoReviewConcurrency, autoReviewMaxFiles: row.autoReviewMaxFiles, autoReviewMaxPatchChars: row.autoReviewMaxPatchChars, pickupConcurrency: row.pickupConcurrency,
   pickupDailyLimit: row.pickupDailyLimit, autoPickupEnabledAt: row.autoPickupEnabledAt, autoPickupError: row.autoPickupError,
-  autoCollapseEmptySwimlanes: row.autoCollapseEmptySwimlanes !== 0, pushMainAfterMerge: row.pushMainAfterMerge !== 0,
+  pushMainAfterMerge: row.pushMainAfterMerge !== 0,
   autoPullRequestEnabled: row.autoPullRequestEnabled !== 0, autoPullRequestEnabledAt: row.autoPullRequestEnabledAt,
   autoReviewEnabled: row.autoReviewEnabled !== 0, autoPickupEnabled: row.autoPickupEnabled !== 0,
   autoPickupStarts: starts.length, agentModels: parseBoardAgentModels(row.agentModels), sharedCaches: validateSharedCaches(JSON.parse(row.sharedCaches)),
@@ -107,7 +107,7 @@ export { conflictHotspotCards, conflictHotspotDays, type ConflictHotspot };
 // Conflict events older than this are pruned; only the hotspot window reads them.
 const conflictEventRetentionDays = 30;
 export type ReviewComment = { id: string; cardId: string; runId: string; fingerprint: string; path: string; line: number; fileLine: number | null; kind: "add" | "remove" | "context"; code: string; body: string; state: "draft" | "requested"; createdAt: string };
-const boardFields = "id, repo, icon, color, remoteUrl, autoCollapseEmptySwimlanes, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches, staleReviewDays";
+const boardFields = "id, repo, icon, color, remoteUrl, autoReviewEnabled, autoReviewEnabledAt, limitsEnabled, autoReviewConcurrency, autoReviewMaxFiles, autoReviewMaxPatchChars, autoPickupEnabled, pickupConcurrency, pickupDailyLimit, autoPickupResetRunRowid, autoPickupEnabledAt, autoPickupError, agentModels, pickupCostBudget, integration, integrationError, integrationWarning, integrationSyncedAt, integrationChosen, githubMainProtected, integrationNote, pushMainAfterMerge, autoPullRequestEnabled, autoPullRequestEnabledAt, sharedCaches, staleReviewDays";
 /** Where a card was created: the board's own UI, or anywhere else (CLI, chat, agents, GitHub, plans). */
 export type CardOrigin = "ui" | "api";
 const now = () => new Date().toISOString();
@@ -172,7 +172,7 @@ export class Board {
     this.db.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, repo TEXT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, unseen INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, cardId TEXT NOT NULL REFERENCES cards(id), attempt INTEGER NOT NULL, status TEXT NOT NULL, pid INTEGER, worktree TEXT, sessionId TEXT NOT NULL, output TEXT NOT NULL DEFAULT '', error TEXT, startedAt TEXT, finishedAt TEXT, turns INTEGER NOT NULL DEFAULT 0, turnsIncomplete INTEGER NOT NULL DEFAULT 0, startedBy TEXT NOT NULL DEFAULT 'manual', ${usageDefinitions}, UNIQUE(cardId, attempt));
-      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'alice_smile', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0, autoReviewEnabled INTEGER NOT NULL DEFAULT 0, autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
+      CREATE TABLE IF NOT EXISTS boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'alice_smile', color TEXT NOT NULL DEFAULT 'violet', remoteUrl TEXT NOT NULL DEFAULT '', autoReviewEnabled INTEGER NOT NULL DEFAULT 0, autoReviewEnabledAt TEXT, autoPickupEnabled INTEGER NOT NULL DEFAULT 0, pickupConcurrency INTEGER NOT NULL DEFAULT 2, pickupDailyLimit INTEGER NOT NULL DEFAULT 6, autoPickupResetRunRowid INTEGER NOT NULL DEFAULT 0, autoPickupEnabledAt TEXT, autoPickupError TEXT NOT NULL DEFAULT '', agentModels TEXT NOT NULL DEFAULT '{}', pickupCostBudget REAL);
       CREATE TABLE IF NOT EXISTS approvals (cardId TEXT PRIMARY KEY, runId TEXT NOT NULL, candidate TEXT NOT NULL, preparedHead TEXT, merged INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS external_integrations (cardId TEXT PRIMARY KEY REFERENCES cards(id), runId TEXT NOT NULL REFERENCES runs(id), candidate TEXT NOT NULL, mergeCommit TEXT NOT NULL, integratedAt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queued_starts (cardId TEXT PRIMARY KEY REFERENCES cards(id), queuedAt TEXT NOT NULL);
@@ -307,7 +307,6 @@ export class Board {
     }
     if (!boardColumns.has("color")) this.db.exec("ALTER TABLE boards ADD COLUMN color TEXT NOT NULL DEFAULT 'violet'");
     if (!boardColumns.has("remoteUrl")) this.db.exec("ALTER TABLE boards ADD COLUMN remoteUrl TEXT NOT NULL DEFAULT ''");
-    if (!boardColumns.has("autoCollapseEmptySwimlanes")) this.db.exec("ALTER TABLE boards ADD COLUMN autoCollapseEmptySwimlanes INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoReviewEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewEnabled INTEGER NOT NULL DEFAULT 0");
     if (!boardColumns.has("autoReviewEnabledAt")) this.db.exec("ALTER TABLE boards ADD COLUMN autoReviewEnabledAt TEXT");
     if (!boardColumns.has("autoPickupEnabled")) this.db.exec("ALTER TABLE boards ADD COLUMN autoPickupEnabled INTEGER NOT NULL DEFAULT 0");
@@ -766,11 +765,7 @@ export class Board {
     const row = this.db.prepare("SELECT agentModels FROM boards WHERE repo=?").get(repo) as { agentModels: string } | undefined;
     return resolveAgentModel(phase, row && parseBoardAgentModels(row.agentModels), this.getSettings().agentModels, attempt);
   }
-  setAutoCollapseEmptySwimlanes(id: string, enabled: boolean): RepoBoard {
-    if (!this.getBoard(id)) throw new Error("Board not found");
-    this.db.prepare("UPDATE boards SET autoCollapseEmptySwimlanes=? WHERE id=?").run(enabled ? 1 : 0, id);
-    return this.getBoard(id)!;
-  }
+
   /** Build caches card worktrees of this board share with the main checkout; see shared/shared-caches.ts. */
   setSharedCaches(id: string, sharedCaches: unknown): RepoBoard {
     if (!this.getBoard(id)) throw new Error("Board not found");

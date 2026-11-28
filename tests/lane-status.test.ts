@@ -20,7 +20,7 @@ test("each lane keeps its label and a readable status dot in both palettes and w
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog" },
       "/api/boards/board/cards": statuses.map(status => ({ id: status, title: `${status} card`, body: "", repo: "/tmp/repo", source: "manual", status, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 })),
       "/api/boards/board/conflicts": [],
@@ -36,6 +36,7 @@ test("each lane keeps its label and a readable status dot in both palettes and w
     assert.equal(await page.getByRole("button", { name: /ready card/ }).isVisible(), true);
     assert.equal(await page.getByRole("button", { name: /archived card/ }).count(), 0, "Archive starts collapsed");
     await page.getByRole("button", { name: "Expand Archive lane" }).click();
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     let defaultColors: string[] = [];
     for (const theme of ["default", "compline", "compline-light", "hearth", "gruvbox-dark", "gruvbox-light", "nord"]) {
       await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);

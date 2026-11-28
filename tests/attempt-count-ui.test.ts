@@ -13,7 +13,7 @@ test("cards that needed rework show their attempt count in every lane and review
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts, reviewRounds, runAgent: "", reviewAgent: "" });
     const run = (attempt: number) => ({ id: `run-${attempt}`, attempt, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual", agent: "" });
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card("once", "ready", 1, 0), card("reworked", "done", 3, 2), card("old", "archived", 2, 1)],
       "/api/boards/board/conflicts": [],
@@ -33,6 +33,7 @@ test("cards that needed rework show their attempt count in every lane and review
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     const lane = (status: string) => page.locator(`section[data-status="${status}"]`);
     const done = lane("done").getByRole("button", { name: /reworked card/ });
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     await done.waitFor();
     assert.equal((await done.getByTestId("attempt-count").textContent())?.trim(), "3 attempts");
     assert.equal(await done.getByTestId("attempt-count").getAttribute("title"), "3 attempts · 2 review rounds (Request changes)");

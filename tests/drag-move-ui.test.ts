@@ -42,7 +42,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
         await route.fulfill({ json: {} }); return;
       }
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/boards/board/cards": cards,
         "/api/boards/board/conflicts": [],
@@ -52,6 +52,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
       await route.fulfill({ json: data[path] });
     });
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     const lane = (status: string) => page.locator(`section[data-status="${status}"]`);
     const tile = (name: string) => page.getByRole("button", { name: new RegExp(`${name} card`) });
     await tile("idea").waitFor();

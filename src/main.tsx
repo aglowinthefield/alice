@@ -2516,39 +2516,6 @@ export function App() {
                 </option>
               ))}
             </select>
-            <label className="ml-auto flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
-                disabled={!currentBoard || busy}
-                checked={currentBoard?.autoCollapseEmptySwimlanes ?? false}
-                onChange={(event) => {
-                  const enabled = event.target.checked;
-                  if (!boardId) return;
-                  void action(async () => {
-                    const updated = await api<Board>(
-                      `/boards/${boardId}/settings`,
-                      {
-                        method: "PATCH",
-                        body: JSON.stringify({
-                          autoCollapseEmptySwimlanes: enabled,
-                        }),
-                      },
-                    );
-                    setBoards((previous) =>
-                      previous.map((item) =>
-                        item.id === updated.id ? updated : item,
-                      ),
-                    );
-                    setManualCollapse((previous) => ({
-                      ...previous,
-                      [updated.id]: {},
-                    }));
-                  });
-                }}
-                className="accent-primary"
-              />{" "}
-              Collapse lanes with no active cards
-            </label>
           </div>
           {currentBoard?.autoPickupEnabled && (
             <span className="text-primary">
@@ -2808,15 +2775,16 @@ export function App() {
               const override = boardId
                 ? manualCollapse[boardId]?.[column.id]
                 : undefined;
-              // An empty lane is always collapsed and can't be expanded. Any
-              // other lane can be collapsed by hand; only idle lanes collapse
-              // automatically.
-              const collapsed =
-                empty ||
-                (override ??
-                  (idle &&
-                    (column.id === "archived" ||
-                      (currentBoard?.autoCollapseEmptySwimlanes ?? false))));
+              const droppable =
+                !!dragging?.targets.includes(column.status) &&
+                column.id === column.status;
+              // An empty lane is collapsed and can't be expanded, except that it
+              // opens as a drop zone while a card that can move there is held
+              // over it. A lane with only Done or archived cards starts
+              // collapsed, and any lane can be collapsed by hand.
+              const folded =
+                empty && !(droppable && dropLane === column.status);
+              const collapsed = folded || (!empty && (override ?? idle));
               const selecting =
                 selectingLane === column.id && laneCards.length > 0;
               const laneIds = laneCards.map((item) => item.id);
@@ -2826,9 +2794,6 @@ export function App() {
               const canSelect = laneCards.some(
                 (item) => dropTargets(item).length > 0,
               );
-              const droppable =
-                !!dragging?.targets.includes(column.status) &&
-                column.id === column.status;
               return (
                 <section
                   key={column.id}
@@ -2867,7 +2832,7 @@ export function App() {
                   }}
                   className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
-                  {empty ? (
+                  {folded ? (
                     <div className="flex min-h-48 w-full flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 px-2 py-3 text-sm text-muted-foreground">
                       <span
                         aria-hidden="true"
@@ -3326,7 +3291,7 @@ export function App() {
                         })}
                         {laneCards.length === 0 && (
                           <div className="rounded-xl border border-dashed border-border/60 px-4 py-10 text-center text-xs text-muted-foreground">
-                            No matching cards.
+                            {query.trim() ? "No matching cards." : "Drop here."}
                           </div>
                         )}
                       </div>

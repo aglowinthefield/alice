@@ -344,7 +344,7 @@ npm run alice -- pr CARD_ID [URL|off]
 - To fix a board's path, edit the board. Its cards move only if none has run yet, because attempts keep their worktrees in the original repository.
 - **Remove repository** hides a board without deleting anything, attached files included. Add the same repository again to restore it.
 - Alice never deletes cards, so a card's attached files stay in `<data dir>/attachments/<card>` until you delete the attachment or purge an archived card's attachments (below). At startup Alice removes files that no attachment points to, such as an upload cut off by a crash.
-- Any lane can be collapsed, even with active cards. Auto-collapse only applies to lanes without active cards, and a board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
+- A lane with no cards stays collapsed and can't be expanded. A lane holding only Done or archived cards starts collapsed, and any lane can be collapsed by hand, even with active cards. Manual choices last until you reload the page.
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
 - Each repository can have an optional `http` or `https` remote link, such as its GitHub page. Set it with the pencil button next to the repository (Edit repository). It appears below the board heading. The link itself is only a link; pushing is the separate opt-in setting below.

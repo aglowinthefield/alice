@@ -12,8 +12,8 @@ test("unattended review is configured per repository, not in global Settings", a
   try {
     const page = await browser.newPage();
     const boards = [
-      { id: "first", repo: "/tmp/first/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: true, autoCollapseEmptySwimlanes: false },
-      { id: "second", repo: "/tmp/second/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: false, autoCollapseEmptySwimlanes: false },
+      { id: "first", repo: "/tmp/first/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: true },
+      { id: "second", repo: "/tmp/second/app", icon: "sprinkle_donut", color: "violet", autoReviewEnabled: false },
     ];
     const patches: Record<string, unknown>[] = [];
     await page.route("**/api/**", async route => {

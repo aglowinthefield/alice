@@ -17,7 +17,7 @@ before(async () => {
 after(async () => { await browser?.close(); await server?.close(); });
 
 const lastVisit = "2026-03-01T09:00:00.000Z";
-const board = { autoCollapseEmptySwimlanes: false, autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
+const board = { autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
 const boards = [
   { ...board, id: "board-a", repo: "/code/alpha", cost24h: 1.25 },
   { ...board, id: "board-b", repo: "/code/beta", cost24h: 0.5 },
@@ -130,9 +130,11 @@ const polled = async (page: Page, requests: { method: string; path: string }[]) 
   }
 };
 const openToday = (page: Page, name: RegExp, lane = "Needs you") => section(page, lane).getByRole("button", { name }).click();
-const openBoard = async (page: Page, repo: string, title: string) => {
+const openBoard = async (page: Page, repo: string, title: string, lane?: string) => {
   await page.getByRole("button", { name: repo, exact: true }).click();
   await page.getByRole("button", { name: "Kanban" }).click();
+  // Lanes of only Done or archived cards start collapsed.
+  if (lane) await page.getByRole("button", { name: `Expand ${lane} lane` }).click();
   await page.locator("section[data-status]").getByText(title, { exact: true }).click();
 };
 const asStatus = (state: { cards: TestCard[] }, id: string, status: string) => {
@@ -179,7 +181,7 @@ test("opening a card that is already done or archived keeps it open", async () =
     card("old", "/code/alpha", "archived", "2026-03-01T09:00:00.000Z"),
   ] });
   try {
-    await openBoard(page, "alpha", "Card shipped");
+    await openBoard(page, "alpha", "Card shipped", "Done");
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("heading", { name: "Card shipped" }).waitFor();
     await polled(page, requests);

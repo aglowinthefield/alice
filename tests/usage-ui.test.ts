@@ -41,7 +41,7 @@ async function open(board: Record<string, unknown>, onPatch: (input: Record<stri
 }
 
 const baseBoard = { id: "board", repo, limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 1, autoPickupNextAt: null,
-  autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false };
+  autoPickupError: "", autoReviewEnabled: false };
 
 test("attempts show their cost, older attempts show a dash, and the card shows its total", async () => {
   const { page, close } = await open({ ...baseBoard, cost24h: 0.5, pickupCostBudget: null, autoPickupBudgetReached: false });

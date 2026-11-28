@@ -22,7 +22,7 @@ test("Cards in any lane can be multi-selected and moved with the dropdown, here 
         await route.fulfill({ json: cards.filter(item => ids.includes(item.id)) }); return;
       }
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/boards/board/cards": cards,
         "/api/boards/board/conflicts": [],
@@ -33,6 +33,8 @@ test("Cards in any lane can be multi-selected and moved with the dropdown, here 
     });
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
     const done = page.locator('section[data-status="done"]');
+    // A lane of only Done cards starts collapsed.
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     await done.getByRole("button", { name: /one card/ }).waitFor();
     assert.equal(await page.locator('section[data-status="ready"]').getByRole("button", { name: "Select in Ready" }).count(), 1, "every lane with movable cards offers selection");
     assert.equal(await page.locator('section[data-status="review"]').getByRole("button", { name: /^Select/ }).count(), 0, "lanes with no moves offer none");

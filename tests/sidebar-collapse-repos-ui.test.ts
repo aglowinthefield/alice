@@ -12,7 +12,7 @@ test("the sidebar Repositories section collapses and remembers it across reloads
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/cards": [],
         "/api/boards/board/cards": [],

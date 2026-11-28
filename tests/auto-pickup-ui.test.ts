@@ -13,7 +13,7 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
     const page = await browser.newPage();
     let board = { id: "board", repo: "/tmp/alice", autoPickupEnabled: true, pickupConcurrency: 2,
       limitsEnabled: true, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: "2026-10-26T07:04:01.000Z" as string | null,
-      autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false };
+      autoPickupError: "", autoReviewEnabled: false };
     let resets = 0, dialogs = 0;
     page.on("dialog", dialog => { dialogs++; void (dialogs === 1 ? dialog.dismiss() : dialog.accept()); });
     await page.route("**/api/**", async route => {
@@ -62,7 +62,7 @@ test("with limits off the start limit, budget and diff caps are hidden and never
     let board = { id: "board", repo: "/tmp/alice", autoPickupEnabled: true, pickupConcurrency: 2,
       limitsEnabled: false, pickupDailyLimit: 6, autoPickupStarts: 6, autoPickupNextAt: null as string | null, pickupCostBudget: 1, cost24h: 3,
       autoPickupBudgetReached: false, autoReviewMaxFiles: 40, autoReviewMaxPatchChars: 100000,
-      autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false };
+      autoPickupError: "", autoReviewEnabled: false };
     const patches: unknown[] = [];
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;

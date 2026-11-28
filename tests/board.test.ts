@@ -310,7 +310,7 @@ test("existing boards gain default appearance without losing settings", () => {
     legacy.prepare("INSERT INTO boards(id, repo, autoCollapseEmptySwimlanes) VALUES (?, ?, 1)").run("old", dir);
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes, board.getBoard("old")?.remoteUrl], ["alice_smile", "violet", true, ""]);
+    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.remoteUrl], ["alice_smile", "violet", ""]);
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -479,14 +479,11 @@ test("existing repository boards gain removal support on upgrade", () => {
     legacy.close();
     const reopened = new Board(path);
     assert.equal(reopened.getBoard(item.id)?.repo, repo);
-    assert.equal(reopened.getBoard(item.id)?.autoCollapseEmptySwimlanes, false);
     assert.equal(reopened.getBoard(item.id)?.pickupDailyLimit, 6);
     assert.equal(reopened.getBoard(item.id)?.autoPickupStarts, 0);
     assert.equal(reopened.getBoard(item.id)?.autoPickupNextAt, null);
-    assert.equal(reopened.setAutoCollapseEmptySwimlanes(item.id, true).autoCollapseEmptySwimlanes, true);
     reopened.close();
     const persisted = new Board(path);
-    assert.equal(persisted.listBoards()[0]?.autoCollapseEmptySwimlanes, true);
     persisted.archiveBoard(item.id);
     assert.deepEqual(persisted.listBoards(), []);
     persisted.close();

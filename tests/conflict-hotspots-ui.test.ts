@@ -24,7 +24,7 @@ test("files that keep conflicting get board notices with fixes; the rest expand,
         return route.fulfill({ json: { ok: true } });
       }
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false, conflictHotspots: hotspots }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo", conflictHotspots: hotspots }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme },
         "/api/boards/board/cards": [],
         "/api/boards/board/conflicts": [],

@@ -514,8 +514,7 @@ const server = createServer(async (req, res) => {
         if (Object.keys(input).some(key => key !== "autoReviewEnabled" && key !== "verificationCommand") || typeof input.autoReviewEnabled !== "boolean") throw new Error("Update autoReviewEnabled as a boolean, separately from other board settings");
         send(res, 200, board.setAutoReview(repoBoard.id, input.autoReviewEnabled)); return;
       }
-      if (typeof input.autoCollapseEmptySwimlanes !== "boolean") throw new Error("Auto collapse empty swimlanes must be a boolean");
-      send(res, 200, board.setAutoCollapseEmptySwimlanes(repoBoard.id, input.autoCollapseEmptySwimlanes)); return;
+      throw new Error(`Unknown board setting: ${Object.keys(input).join(", ") || "none given"}`);
     }
     // Done cards Alice merged into local main whose work is not on origin/main, offered as "Publish as PR".
     if (localMergesRoute && req.method === "GET") {

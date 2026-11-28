@@ -35,7 +35,7 @@ test("card details render description markdown without injecting HTML", async ()
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
       "/api/boards/board/cards": [{ id: "card", title: "Markdown card", body, repo: "/tmp/repo", source: "manual", status: "triage", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }],
     };

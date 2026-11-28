@@ -88,7 +88,7 @@ export function Today({
         className="mt-1 text-sm text-muted-foreground"
       >
         {finished.length} merged · {attention.length} need you ·{" "}
-        {formatCost(spent)} in the last 24h
+        {formatCost(spent)} in the last 24 hours
       </p>
       <Capture boards={boards} onCapture={onCapture} />
       {stale.length > 0 && (
@@ -110,9 +110,7 @@ export function Today({
       )}
       <Section title="Needs you">
         {attention.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            All caught up. Nothing needs you.
-          </p>
+          <p className="text-sm text-muted-foreground">Nothing needs you.</p>
         )}
         {reviews > 0 && (
           <Button className="mb-3" onClick={onReview}>
@@ -338,7 +336,7 @@ function Capture({
           ))}
         </select>
         <Button type="submit" disabled={!title.trim()}>
-          Add
+          Add card
         </Button>
       </div>
       <p role="status" className="mt-2 min-h-4 text-xs text-muted-foreground">

@@ -39,7 +39,7 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
     await page.getByText(/Auto pickup waiting/).waitFor({ state: "hidden" });
     assert.equal(resets, 1);
     await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByText("Auto pickup is set per repository.", { exact: false }).waitFor();
+    await page.getByText("Each repository has its own auto pickup setting.", { exact: false }).waitFor();
     assert.equal(await page.getByRole("combobox", { name: "Auto pickup daily start limit" }).count(), 0, "global Settings has no pickup controls");
     await page.goBack();
     await page.getByRole("button", { name: "Edit /tmp/alice" }).click();
@@ -76,7 +76,7 @@ test("with limits off the start limit, budget and diff caps are hidden and never
       await route.fulfill({ json: data });
     });
     await page.goto(`http://127.0.0.1:${address.port}/board/board`);
-    await page.getByText(/Last 24h:/).waitFor();
+    await page.getByText(/Last 24 hours:/).waitFor();
     assert.equal(await page.getByText(/Auto pickup waiting/).count(), 0, "no start-limit banner while limits are off");
     assert.equal(await page.getByText(/budget/).count(), 0, "the header shows spend without a budget");
     await page.getByRole("button", { name: "Edit /tmp/alice" }).click();

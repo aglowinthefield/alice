@@ -57,8 +57,12 @@ export function formatSize(bytes: number): string {
 /** Asks before an attachment is deleted; resolves true only when the user picks Delete. */
 export function confirmDeleteAttachment(item: Attachment): Promise<boolean> {
   return confirmAction(
-    `"${item.name}" will be permanently deleted. This cannot be undone.`,
-    { title: "Delete attachment?", confirmLabel: "Delete", destructive: true },
+    `Alice permanently deletes "${item.name}". You cannot undo this.`,
+    {
+      title: "Delete attachment?",
+      confirmLabel: "Delete attachment",
+      destructive: true,
+    },
   );
 }
 

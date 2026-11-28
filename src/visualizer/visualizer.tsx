@@ -176,7 +176,9 @@ export function Visualizer({
       />
       {layout.failed ? (
         <div>
-          {notice("The graph could not be drawn, so it is shown as a list.")}
+          {notice(
+            "Alice could not draw the graph, so it shows the cards as a list.",
+          )}
           <CardList cards={cards} onOpenCard={onOpenCard} />
         </div>
       ) : (

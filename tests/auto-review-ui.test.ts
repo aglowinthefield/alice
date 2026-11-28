@@ -34,18 +34,18 @@ test("unattended review is configured per repository, not in global Settings", a
     await page.getByRole("button", { name: "Settings" }).click();
     const settingsPage = page.locator("main:visible");
     await settingsPage.getByText("Confirm before starting a run").waitFor();
-    assert.equal(await settingsPage.getByText("Unattended review").count(), 0);
+    assert.equal(await settingsPage.getByText("Unattended review", { exact: true }).count(), 0);
     await page.goBack();
 
     // The edit pencil lives on the open board's heading.
     await page.getByRole("button", { name: "Kanban" }).click();
     await page.getByRole("button", { name: "Edit /tmp/first/app" }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByText("Unattended review").waitFor();
+    await dialog.getByText("Unattended review", { exact: true }).waitFor();
     assert.equal(await dialog.getByRole("textbox", { name: /verification command/i }).count(), 0, "no verification command to set");
     assert.equal(await dialog.getByRole("spinbutton", { name: /merge limit/i }).count(), 0, "nothing merges unattended, so there is no merge limit");
     await dialog.getByText("Nothing merges into main without you.").waitFor();
-    await dialog.getByRole("button", { name: "Disable auto-review" }).waitFor();
+    await dialog.getByRole("button", { name: "Turn off unattended review" }).waitFor();
     assert.equal(await dialog.getByRole("combobox", { name: "Repository root" }).evaluate(input => input === document.activeElement), false,
       "the repository path picker is not focused when editing a repository");
     await page.keyboard.press("Escape");
@@ -55,9 +55,9 @@ test("unattended review is configured per repository, not in global Settings", a
     await page.getByRole("button", { name: "Edit /tmp/second/app" }).click();
     const confirms: string[] = [];
     page.on("dialog", async confirm => { confirms.push(confirm.message()); await confirm.accept(); });
-    await dialog.getByRole("button", { name: "Enable auto-review" }).click();
-    await dialog.getByRole("button", { name: "Disable auto-review" }).waitFor();
-    assert.match(confirms[0] ?? "", /Enable agent review for \/tmp\/second\/app\?/);
+    await dialog.getByRole("button", { name: "Turn on unattended review" }).click();
+    await dialog.getByRole("button", { name: "Turn off unattended review" }).waitFor();
+    assert.match(confirms[0] ?? "", /Turn on unattended review for \/tmp\/second\/app\?/);
     assert.deepEqual(patches, [{ autoReviewEnabled: true }]);
   } finally { await browser.close(); await server.close(); }
 });

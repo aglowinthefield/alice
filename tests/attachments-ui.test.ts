@@ -165,8 +165,8 @@ test("deleting an attachment asks first: Cancel or Escape keeps it, Delete remov
 
     await remove.click();
     await confirm.waitFor();
-    assert.match(await confirm.textContent() ?? "", /"screen\.png" will be permanently deleted/);
-    assert.equal(await confirm.getByRole("button", { name: "Delete" }).count(), 1);
+    assert.match(await confirm.textContent() ?? "", /Alice permanently deletes "screen.png"/);
+    assert.equal(await confirm.getByRole("button", { name: "Delete attachment" }).count(), 1);
     await confirm.getByRole("button", { name: "Cancel" }).click();
     await confirm.waitFor({ state: "hidden" });
 
@@ -181,7 +181,7 @@ test("deleting an attachment asks first: Cancel or Escape keeps it, Delete remov
     assert.equal(await section.getByRole("img", { name: "screen.png" }).count(), 1);
 
     await remove.click();
-    await confirm.getByRole("button", { name: "Delete" }).click();
+    await confirm.getByRole("button", { name: "Delete attachment" }).click();
     await section.getByRole("img", { name: "screen.png" }).waitFor({ state: "detached" });
     assert.deepEqual(deleted, ["/api/boards/board/cards/card/attachments/a1"]);
     // The other attachment stays.
@@ -233,7 +233,7 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
 
     await purge.click();
     await confirm.waitFor();
-    assert.match(await confirm.textContent() ?? "", /All 2 attachments of "Old work" will be permanently deleted/);
+    assert.match(await confirm.textContent() ?? "", /Alice permanently deletes all 2 attachments of "Old work" from disk/);
     await confirm.getByRole("button", { name: "Cancel" }).click();
     await confirm.waitFor({ state: "hidden" });
 
@@ -246,7 +246,7 @@ test("purging an archived card's attachments asks first: Cancel or Escape sends 
     assert.deepEqual(purges, [], "Cancel and Escape send no purge request");
 
     await purge.click();
-    await confirm.getByRole("button", { name: "Delete" }).click();
+    await confirm.getByRole("button", { name: "Delete attachments" }).click();
     for (let i = 0; i < 50 && !purges.length; i++) await page.waitForTimeout(50);
     assert.deepEqual(purges, [{ cardIds: ["card"] }]);
     assert.equal(nativeDialogs, 0);

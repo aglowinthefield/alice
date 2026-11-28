@@ -103,8 +103,8 @@ export function SettingsPage({
                   <span>
                     Confirm before starting a run
                     <span className="mt-1 block text-xs text-muted-foreground">
-                      When off, Start Pi run launches immediately and may use
-                      paid model tokens.
+                      When this is off, Start Pi run starts the run immediately.
+                      Runs may use paid model tokens.
                     </span>
                   </span>
                 </label>
@@ -131,11 +131,12 @@ export function SettingsPage({
                     <span>
                       Send anonymous usage counts
                       <span className="mt-1 block text-xs text-muted-foreground">
-                        Counts of runs, merges, pull requests and errors, tagged
-                        with the Alice version, your OS and a random install ID,
-                        go to the endpoint this server was set up with. No code,
-                        prompts, card text, paths or hostnames. Every field is
-                        listed in docs/telemetry.md.
+                        Alice sends counts of runs, merges, pull requests and
+                        errors to the endpoint set on this server. Each count
+                        includes the Alice version, your operating system and a
+                        random install ID. Alice does not send code, prompts,
+                        card text, paths or hostnames. Every field is listed in
+                        docs/telemetry.md.
                       </span>
                     </span>
                   </label>
@@ -176,9 +177,10 @@ export function SettingsPage({
                     </select>
                   </label>
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Card runs and agent reviews across every board, since each
-                    ends with the repository&apos;s tests. Automatic work waits
-                    for a slot; a run you start yourself always starts.
+                    Card runs and agent reviews on all boards count toward this
+                    limit, because each one ends with the repository&apos;s
+                    tests. Automatic work waits for a free slot. A run you start
+                    yourself always starts.
                     {typeof settings?.activeAgents === "number" &&
                       ` ${settings.activeAgents} running now.`}
                   </p>
@@ -234,8 +236,8 @@ export function SettingsPage({
                   </p>
                 </fieldset>
                 <p className="mt-6 border-t border-border pt-5 text-xs text-muted-foreground">
-                  Auto pickup is set per repository. Use the edit button next to
-                  a repository to change it.
+                  Each repository has its own auto pickup setting. To change it,
+                  click the edit button next to the repository.
                 </p>
               </>
             )}
@@ -439,8 +441,8 @@ function DiscordWebhookField({
         }}
       />
       <span className="mt-1 block text-xs text-muted-foreground">
-        Alice posts to this channel when a run finishes. Leave empty to turn it
-        off (ALICE_DISCORD_WEBHOOK_URL is used if set).
+        Alice posts to this channel when a run finishes. If this is empty, Alice
+        uses ALICE_DISCORD_WEBHOOK_URL. If both are empty, Alice does not post.
       </span>
     </label>
   );
@@ -489,7 +491,7 @@ function PushNotificationsField({
         Notify this browser when a card needs you
         <span className="mt-1 block text-xs text-muted-foreground">
           {supported
-            ? "When a card becomes your turn in Review or fails, even with no Alice tab open, and once a day when cards have sat in Review too long. Clicking one opens the card, or Today for the daily list. Each browser turns this on separately."
+            ? "Alice notifies you when a card is your turn in Review or fails, even with no Alice tab open. Once a day, it also lists cards that stay in Review too long. Click a notification to open its card, or Today for the daily list. Turn this on in each browser."
             : "Notifications need Alice on HTTPS or localhost. See \u201cHTTPS on a tailnet\u201d in docs/reference.md."}
         </span>
       </span>

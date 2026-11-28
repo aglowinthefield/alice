@@ -96,7 +96,7 @@ export function ReadyCheckHost() {
           Edit {several ? "the first one" : "it"} now, or move{" "}
           {several ? "them" : "it"} to Ready anyway.
           {wide.length > 0 &&
-            ` Turn into a plan rewrites ${several ? (wide.length > 1 ? `the ${wide.length} wide cards` : "the wide card") : "it"} to ask for a breakdown instead of code; the run proposes small cards for you to review.`}
+            ` Turn into a plan rewrites ${several ? (wide.length > 1 ? `the ${wide.length} wide cards` : "the wide card") : "it"} to ask for a breakdown instead of code. The run proposes small cards for you to review.`}
         </DialogDescription>
         <div
           className="mt-4 max-h-[50vh] space-y-3 overflow-y-auto"

@@ -75,7 +75,7 @@ test("Today opens first and gathers what needs you across every repository", asy
     await eventually(() => titles(page, "Needs you"), ["Card review-old", "Card review-new", "Card broken"]);
     await eventually(() => titles(page, "In progress"), ["Card busy"]);
     await eventually(() => titles(page, "Finished since your last visit"), ["Card merged"]);
-    await page.getByRole("status", { name: "Since your last visit" }).filter({ hasText: /1 merged · 3 need you · \$1\.75 in the last 24 hours/ }).waitFor();
+    await page.getByRole("status", { name: "Since your last visit" }).filter({ hasText: /1 merged.*3 need you.*\$1\.75 last 24h/ }).waitFor();
     await section(page, "In progress").getByRole("button", { name: /Card busy/ }).click();
     await page.getByRole("dialog").getByText("Card busy").waitFor();
   } finally { await page.close(); }
@@ -132,7 +132,7 @@ const polled = async (page: Page, requests: { method: string; path: string }[]) 
 const openToday = (page: Page, name: RegExp, lane = "Needs you") => section(page, lane).getByRole("button", { name }).click();
 const openBoard = async (page: Page, repo: string, title: string, lane?: string) => {
   await page.getByRole("button", { name: repo, exact: true }).click();
-  await page.getByRole("button", { name: "Kanban" }).click();
+  await page.getByRole("link", { name: "Kanban" }).click();
   // Lanes of only Done or archived cards start collapsed.
   if (lane) await page.getByRole("button", { name: `Expand ${lane} lane` }).click();
   await page.locator("section[data-status]").getByText(title, { exact: true }).click();
@@ -194,11 +194,11 @@ test("sidebar switches between Today and a repository board, and the choice pers
   try {
     await page.getByRole("heading", { name: "Today" }).waitFor();
     await page.getByRole("button", { name: "beta", exact: true }).click();
-    await page.getByRole("button", { name: "Kanban" }).click();
+    await page.getByRole("link", { name: "Kanban" }).click();
     await page.getByRole("heading", { name: "beta" }).waitFor();
     await page.reload();
     await page.getByRole("heading", { name: "beta" }).waitFor();
-    await page.getByRole("button", { name: /^Today/ }).click();
+    await page.getByRole("link", { name: /^Today/ }).click();
     await page.getByRole("heading", { name: "Today" }).waitFor();
   } finally { await page.close(); }
 });
@@ -211,10 +211,10 @@ test("Review cards past their board's threshold are marked stale and listed in T
     { ...card("waiting", "/code/beta", "review", "2026-03-01T12:00:00.000Z"), reviewSince: daysAgo(6), reviewWait: "github" },
   ] });
   try {
-    await eventually(() => titles(page, "Stale in Review"), ["Card waiting", "Card old"]);
-    const stale = section(page, "Stale in Review");
+    await eventually(() => titles(page, "Stale in review"), ["Card waiting", "Card old"]);
+    const stale = section(page, "Stale in review");
     const old = stale.getByRole("listitem").filter({ hasText: "Card old" });
-    await old.getByText("alpha · 4 days in Review").waitFor();
+    await old.getByText("alpha · 4d in review").waitFor();
     const waiting = stale.getByRole("listitem").filter({ hasText: "Card waiting" });
     assert.equal(await waiting.getByRole("button", { name: "Run again on current main" }).isDisabled(), true, "GitHub still has it");
     await old.getByRole("button", { name: "Run again on current main" }).click();
@@ -228,7 +228,7 @@ test("Review cards past their board's threshold are marked stale and listed in T
     await page.getByRole("dialog").getByRole("heading", { name: "Card old" }).waitFor();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "alpha", exact: true }).click();
-    await page.getByRole("button", { name: "Kanban" }).click();
+    await page.getByRole("link", { name: "Kanban" }).click();
     const lane = page.locator("section[data-status]");
     await lane.getByText("Card fresh", { exact: true }).waitFor();
     assert.deepEqual(await lane.getByTestId("stale-badge").allInnerTexts(), ["Stale 4d"]);
@@ -243,9 +243,9 @@ test("an agent-approved card reads as approved, apart from a hand-off that needs
   try {
     await eventually(() => titles(page, "Needs you"), ["Card handed-off"]);
     await eventually(() => titles(page, "Agent approved"), ["Card approved"]);
-    assert.match(await page.getByRole("status", { name: "Since your last visit" }).innerText(), /1 need you/);
+    assert.match(await page.getByRole("status", { name: "Since your last visit" }).innerText(), /1 need you/i);
     await page.getByRole("button", { name: "alpha", exact: true }).click();
-    await page.getByRole("button", { name: "Kanban" }).click();
+    await page.getByRole("link", { name: "Kanban" }).click();
     const badge = (title: string) => page.locator("section[data-status]").getByRole("button", { name: new RegExp(title) }).getByTestId("activity-badge");
     await expectText(() => badge("Card approved").innerText(), "Agent approved");
     await expectText(() => badge("Card handed-off").innerText(), "Needs you");
@@ -267,7 +267,7 @@ test("Run again on current main asks first when run starts need confirming; canc
   });
   try {
     await page.locator("html[data-density=cozy]").waitFor({ state: "attached" });
-    const rerun = section(page, "Stale in Review").getByRole("button", { name: "Run again on current main" });
+    const rerun = section(page, "Stale in review").getByRole("button", { name: "Run again on current main" });
     const answer = (accept: boolean) => new Promise<string>(resolve => page.once("dialog", dialog => {
       resolve(dialog.message());
       void (accept ? dialog.accept() : dialog.dismiss());

@@ -55,7 +55,7 @@ test("repository icon and color picker updates navigation and heading after save
     await page.getByRole("button", { name: "Save repository" }).click();
     await page.waitForFunction(() => document.querySelector("header h1")?.textContent?.includes("renamed"));
     assert.deepEqual([board.repo, board.icon, board.color], ["/tmp/renamed", "alice_wry", "amber"]);
-    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    await page.evaluate(() => { document.documentElement.classList.remove("dark"); document.documentElement.dataset.theme = "light"; });
     assert.notEqual(await badges.last().evaluate(el => getComputedStyle(el.parentElement!).getPropertyValue("--repo-color").trim()), "#fbbf24");
     await page.reload();
     await page.getByRole("button", { name: "Edit /tmp/renamed" }).waitFor();

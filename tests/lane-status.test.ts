@@ -58,7 +58,8 @@ test("each lane keeps its label and a readable status dot in both palettes and w
         const b = luminance(surface);
         assert.ok((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5, `${theme} ${status}: ${dot} against ${surface}`);
       }
-      assert.equal(colors.size, statuses.length, `${theme} dots are distinct`);
+      // Statuses take the house tones, where Done shares Triage's neutral.
+      assert.equal(colors.size, statuses.length - 1, `${theme} dots are distinct apart from Done`);
       if (theme === "default") defaultColors = [...colors];
       else assert.notDeepEqual([...colors], defaultColors, "switching palettes changes status dots");
       await page.getByRole("button", { name: "Collapse Done lane" }).click();

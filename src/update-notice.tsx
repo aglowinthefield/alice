@@ -120,7 +120,7 @@ export function UpdateNotice({
         Alice's interface was updated.
         <Button
           size="sm"
-          variant="outline"
+          variant="secondary"
           data-testid="update-notice-reload"
           onClick={() => window.location.reload()}
         >
@@ -197,11 +197,11 @@ export function UpdateNotice({
               {installHint(updates!, status!.activeRuns)}
             </p>
             <div className="flex items-center gap-2">
-              <Button size="sm" onClick={install}>
+              <Button variant="main" size="sm" onClick={install}>
                 {installLabel(updates!)}
               </Button>
               {onOpenSettings && (
-                <Button size="sm" variant="ghost" onClick={onOpenSettings}>
+                <Button size="sm" variant="text" onClick={onOpenSettings}>
                   Open in settings
                 </Button>
               )}
@@ -312,7 +312,7 @@ export function UpdatesPanel() {
               testId="settings-changelog"
               className="mt-3 max-h-72"
             />
-            <Button className="mt-4" size="sm" onClick={install}>
+            <Button variant="main" className="mt-4" size="sm" onClick={install}>
               {installLabel(updates)}
             </Button>
             <p className="mt-2 text-xs text-muted-foreground">

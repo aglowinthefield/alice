@@ -18,7 +18,7 @@ async function openTab(context: BrowserContext, url: string): Promise<Page> {
 async function openRepo(page: Page, name: string) {
   const row = page.getByRole("button", { name, exact: true });
   if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
-  await row.locator("xpath=../..").getByRole("button", { name: "Kanban" }).click();
+  await row.locator("xpath=../..").getByRole("link", { name: "Kanban" }).click();
 }
 
 test("a new tab opens the repo last viewed in any tab", async () => {

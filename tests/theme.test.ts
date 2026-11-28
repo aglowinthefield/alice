@@ -33,7 +33,7 @@ test("cached theme colors the first paint while the database request is pending"
       theme: document.documentElement.dataset.theme,
       background: getComputedStyle(document.body).backgroundColor,
       rendered: document.getElementById("root")!.childElementCount,
-    })), { theme: "light", background: "rgb(245, 243, 238)", rendered: 0 });
+    })), { theme: "light", background: "rgb(248, 248, 247)", rendered: 0 });
     reply();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default");
     assert.equal(await page.evaluate(() => localStorage.getItem("alice-theme")), "default");
@@ -57,10 +57,10 @@ test("database theme still loads when browser storage rejects writes", async () 
   });
   try {
     await page.goto(new URL("/board/board", url).href);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     assert.equal(await page.getByRole("radio", { name: "Light", exact: true }).isChecked(), true);
-    assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(245, 243, 238)");
+    assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(248, 248, 247)");
   } finally { await page.close(); }
 });
 
@@ -117,10 +117,10 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     const dark = await palette();
-    assert.equal(dark.background, "rgb(26, 29, 33)");
+    assert.equal(dark.background, "rgb(18, 18, 20)");
     assert.equal(dark.add, "rgb(25, 53, 41)");
     assert.equal(dark.remove, "rgb(59, 37, 40)");
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("radio", { name: "Light", exact: true }).check();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
@@ -132,7 +132,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await diffRendered();
     const light = await palette();
-    assert.equal(light.background, "rgb(245, 243, 238)");
+    assert.equal(light.background, "rgb(248, 248, 247)");
     assert.equal(light.add, "rgb(225, 242, 230)");
     assert.equal(light.remove, "rgb(250, 230, 231)");
     assert.notEqual(light.code, dark.code, "syntax colors follow the light palette");
@@ -147,7 +147,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     assert.deepEqual(await palette(), light);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
     assert.equal(await page.locator('section[data-status="review"] .lane-status-dot').first().evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(56, 104, 74)");
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("group", { name: "Mode" }).getByRole("radio", { name: "Dark" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.theme === "default" && localStorage.getItem("alice-theme") === "default");
@@ -159,7 +159,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
     await diffRendered();
     assert.deepEqual(await palette(), dark);
     failPatch = true;
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     // click, not check: the rejected save reverts the radio, which check() reports as a failure when it lands first.
     await page.getByRole("radio", { name: "Light", exact: true }).click();

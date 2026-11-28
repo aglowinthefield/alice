@@ -38,7 +38,7 @@ test("Statistics charts the aggregated stats and refetches when the range or rep
   });
   try {
     await page.goto(url);
-    await page.getByRole("button", { name: "Statistics" }).click();
+    await page.getByRole("link", { name: "Statistics" }).click();
     await page.getByRole("heading", { name: "Statistics" }).waitFor();
     await page.getByText("$3.50").first().waitFor();
     assert.equal(await page.locator(".recharts-wrapper").count(), 6);

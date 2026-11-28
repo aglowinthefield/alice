@@ -1,0 +1,73 @@
+/* @house/tokens: vendored from https://aglowinthefield.github.io/house. Change it there, then re-run shadcn add. */
+/* Latin only: the full Hachi Maru Pop package is about 11 MB of Japanese subsets, which desktop installers would ship. */
+@import "@fontsource/rampart-one/latin-400.css";
+@import "@fontsource/hachi-maru-pop/latin-400.css";
+
+/* Light is paper and ink. Put .dark on <html> for the inverted print, following the system setting
+   (matchMedia("(prefers-color-scheme: dark)")) unless the user picked a mode. .dark also works on any subtree. */
+:root { color-scheme: light; }
+
+@theme {
+  --color-paper: #F8F8F7;
+  --color-raised: #FFFFFF;
+  --color-ink: #151417;
+  --color-ink-muted: #5D5966;
+  --color-ink-faint: #8E8A96;
+  --color-hairline: #C4C1C9;
+  --color-pen: #3049B8;
+  --color-pen-wash: #EBEDF6;
+
+  --color-status-neutral: #626B72;
+  --color-status-attention: #554B36;
+  --color-status-info: #45627C;
+  --color-status-success: #38684A;
+  --color-status-danger: #9D3038;
+  --color-status-warning: #926621;
+  --color-status-other: #5E5675;
+
+  --font-display: "Rampart One", ui-sans-serif, system-ui, sans-serif;
+  --font-pen: "Hachi Maru Pop", cursive;
+
+  --radius-house: 3px;
+  --shadow-pen: 2px 2px 0 var(--color-pen);
+  --shadow-ink: 2px 2px 0 var(--color-ink);
+  --shadow-float: 4px 4px 0 var(--color-ink);
+
+  --animate-fade-in: house-fade 160ms ease-out;
+  --animate-pop-in: house-pop 180ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+.dark {
+  color-scheme: dark;
+  --color-paper: #121214;
+  --color-raised: #1B1B1F;
+  --color-ink: #EEEDF0;
+  --color-ink-muted: #A6A3B0;
+  --color-ink-faint: #77737F;
+  --color-hairline: #3E3D44;
+  --color-pen: #8C9BEA;
+  --color-pen-wash: #1E2030;
+  --color-status-neutral: #8B919A;
+  --color-status-attention: #D4CCB4;
+  --color-status-info: #B4BCC4;
+  --color-status-success: #B8C4B8;
+  --color-status-danger: #CDACAC;
+  --color-status-warning: #C6AD89;
+  --color-status-other: #ABA5BD;
+}
+
+@keyframes house-fade { from { opacity: 0; } }
+@keyframes house-pop { from { opacity: 0; scale: 0.96; } }
+
+/* Interaction variants. data-force previews a state (the hub uses it); apps never set it. */
+@custom-variant hovered (&:hover, &[data-force~="hover"]);
+@custom-variant focused (&:focus-visible, &[data-force~="focus"]);
+@custom-variant pressed (&:active, &[data-force~="pressed"]);
+
+/* Small print: tracked monospace capitals for dates, tallies and IDs. */
+@utility small-print {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}

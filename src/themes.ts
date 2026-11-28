@@ -1,6 +1,7 @@
 // One list of themes for the server, the settings dialog and the review diff.
 // To add a theme: add an entry here and a `:root[data-theme="<name>"]` block in
-// src/theme-palettes.css (copy an existing one; every variable is required).
+// src/theme-palettes.css that sets the house colour roles (copy an existing one;
+// every variable is required). A dark theme also gets .dark (src/apply-theme.ts).
 // A "system" entry has no palette of its own: it names a light and a dark theme
 // and the page shows whichever matches the operating system's setting.
 export const themes = {

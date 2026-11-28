@@ -29,7 +29,7 @@ test("Settings is a page with category sidebar; Updates shows the version and pe
   });
   try {
     await page.goto(new URL("/today", url).href);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     assert.equal(new URL(page.url()).pathname, "/settings/general");
     assert.equal(await page.getByRole("dialog").count(), 0, "a page, not a popup");
     await page.getByRole("checkbox", { name: /Confirm before starting a run/ }).waitFor();

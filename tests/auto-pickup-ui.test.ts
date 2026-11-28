@@ -38,7 +38,7 @@ test("a capped board shows the reason, next slot, and a confirmed reset in the r
     await page.getByRole("button", { name: "Reset start limit" }).first().click();
     await page.getByText(/Auto pickup waiting/).waitFor({ state: "hidden" });
     assert.equal(resets, 1);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByText("Each repository has its own auto pickup setting.", { exact: false }).waitFor();
     assert.equal(await page.getByRole("combobox", { name: "Auto pickup daily start limit" }).count(), 0, "global Settings has no pickup controls");
     await page.goBack();

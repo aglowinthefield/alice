@@ -46,7 +46,7 @@ test("Settings switches between the preserved default and Compline after reload"
       }
     });
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     const dialog = page.locator("main:visible");
     assert.equal(await dialog.getByRole("combobox", { name: "Theme" }).inputValue(), "default");
@@ -57,11 +57,11 @@ test("Settings switches between the preserved default and Compline after reload"
     await page.waitForFunction(() => document.documentElement.dataset.theme === "compline");
     assert.notEqual(background, "rgb(27, 30, 34)");
     assert.equal(await page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(27, 30, 34)");
-    assert.equal(await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(34, 38, 43)");
-    assert.notEqual(defaultSidebar, "rgb(34, 38, 43)");
+    assert.equal(await page.locator("aside").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(27, 30, 34)");
+    assert.notEqual(defaultSidebar, "rgb(27, 30, 34)");
     const colors = await Promise.all([
-      "--foreground", "--background", "--muted-foreground", "--muted",
-      "--primary-foreground", "--primary", "--diff-add-foreground", "--diff-add",
+      "--color-ink", "--color-paper", "--color-ink-muted", "--color-paper",
+      "--color-pen", "--color-paper", "--diff-add-foreground", "--diff-add",
       "--diff-remove-foreground", "--diff-remove",
     ].map((name) => page.locator("html").evaluate((element, property) => getComputedStyle(element).getPropertyValue(property).trim(), name)));
     const luminance = (hex: string) => [0, 2, 4]
@@ -95,7 +95,7 @@ test("Settings switches between the preserved default and Compline after reload"
     await page.getByRole("dialog").getByText("Review card").first().waitFor();
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     assert.equal(await page.locator("main:visible").getByRole("combobox", { name: "Theme" }).inputValue(), "compline");
     assert.equal(await page.locator("main:visible").getByRole("radio", { name: "Dark" }).isChecked(), true);
@@ -136,7 +136,7 @@ test("Compline (match system) follows the system light/dark setting", async () =
     await page.waitForFunction(() => document.documentElement.dataset.theme === "compline");
     await page.reload();
     assert.equal(await page.locator("html").getAttribute("data-theme"), "compline");
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     assert.equal(await page.locator("main:visible").getByRole("radio", { name: "System" }).isChecked(), true);
     await page.close();

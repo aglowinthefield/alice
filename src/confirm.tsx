@@ -5,7 +5,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "./components/ui/dialog.js";
+} from "./dialog.js";
 
 export type ConfirmOptions = {
   /** Dialog heading; defaults to "Are you sure?". */
@@ -67,7 +67,7 @@ export function ConfirmHost() {
         </DialogDescription>
         <div className="mt-5 flex justify-end gap-2">
           <Button
-            variant="outline"
+            variant="secondary"
             autoFocus={!!ask?.destructive}
             onClick={() => answer(false)}
           >
@@ -75,7 +75,7 @@ export function ConfirmHost() {
           </Button>
           <Button
             autoFocus={!ask?.destructive}
-            variant={ask?.destructive ? "destructive" : "default"}
+            variant={ask?.destructive ? "main" : "main"}
             onClick={() => answer(true)}
           >
             {ask?.confirmLabel ?? "Continue"}

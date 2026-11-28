@@ -466,13 +466,3 @@ Tests use a fake offline `pi` and temporary Git repositories. They don't call a 
 From a clean checkout of `main`, run `npm run release -- 0.2.0`. It sets that version in `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, adds a `CHANGELOG.md` section from the merge commit subjects since the last `v*` tag, commits, and creates the tag `v0.2.0`. It doesn't push.
 
 Review the commit, then `git push origin main v0.2.0`. Pushing the tag runs `.github/workflows/release.yml`, which creates a GitHub release using that changelog section as its notes.
-
-## Colleagues prototype (fixture data)
-
-A clickable, fixture-backed prototype of persistent colleagues and group rooms, built from the draft spec in PR #13 for operator review. It is not the feature. It calls no Alice API, starts no agent, creates no card, writes no memory, and keeps all state in the browser tab (the Reset button restores the fixtures). It is a separate page that is not part of the production build or the board.
-
-```sh
-npm run prototype:colleagues
-```
-
-Open http://127.0.0.1:5180/prototype-colleagues.html. The code lives in `src/prototype/colleagues/`. Simulated rounds advance only when you click Advance fixture round. The Prototype assumptions page in the app lists the spec choices the prototype made to stay clickable.

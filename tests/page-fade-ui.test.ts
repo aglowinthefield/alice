@@ -16,7 +16,7 @@ before(async () => {
 after(async () => { await browser?.close(); await server?.close(); });
 
 const settings = { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" };
-const boards = ["a", "b"].map(id => ({ id, repo: `/tmp/${id}`, remoteUrl: `https://github.com/o/${id}.git`, autoCollapseEmptySwimlanes: false }));
+const boards = ["a", "b"].map(id => ({ id, repo: `/tmp/${id}`, remoteUrl: `https://github.com/o/${id}.git` }));
 const card = { id: "c1", title: "Open card", body: "", repo: "/tmp/a", source: "manual", status: "triage", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 };
 
 type Spy = { fades: number; opacities: string[]; pageAnimations: number };

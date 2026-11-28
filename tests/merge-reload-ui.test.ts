@@ -17,8 +17,8 @@ async function openCard(server: ViteDevServer, page: Page) {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
       "/api/boards": [
-        { id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false },
-        { id: "other", repo: "/tmp/other", autoCollapseEmptySwimlanes: false },
+        { id: "board", repo: "/tmp/repo" },
+        { id: "other", repo: "/tmp/other" },
       ],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "default" },
       "/api/boards/board/cards": boardCards,
@@ -35,6 +35,7 @@ async function openCard(server: ViteDevServer, page: Page) {
     await route.fulfill({ json: data[path] });
   });
   await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+  await page.getByRole("button", { name: "Expand Done lane" }).click();
   await page.locator("section[data-status]").getByText("Polish sidebar", { exact: true }).click();
   await page.getByRole("dialog").getByText("Polish sidebar").waitFor();
 }
@@ -56,6 +57,7 @@ test("a page reload reopens the card this tab had open", async () => {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.reload();
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     await page.locator("section[data-status]").getByText("Polish sidebar", { exact: true }).waitFor();
     assert.equal(await page.getByRole("dialog").count(), 0);
   } finally {

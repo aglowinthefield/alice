@@ -20,7 +20,7 @@ for (const integration of ["github-pr", "local"]) {
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration, autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration }],
         "/api/settings": { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/boards/board/cards": Object.entries(cards).map(([id, fields]) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual",
           createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 1, ...fields })),

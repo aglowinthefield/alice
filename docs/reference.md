@@ -252,7 +252,7 @@ Provider errors show only their HTTP status. Pi's stderr goes to the server cons
 
 Both features are off by default and set per repository in **Settings**. Both can start paid Pi runs, and both need the server to keep running.
 
-The board header shows **Last 24h**: the cost of attempts and agent reviews that are running or finished in the last 24 hours.
+The board header shows **Last 24 hours**: the cost of attempts and agent reviews that are running or finished in the last 24 hours.
 
 ### Automatic pickup
 
@@ -264,7 +264,7 @@ The server starts Ready cards for you, highest priority first, then oldest first
 - **Daily limit** (when limits are on): 1 to 99 automatic starts in any rolling 24 hours (default 6), or 0 for no limit (`--limit off` in the CLI). At the limit, pickup waits and the board shows when the next slot opens. **Reset start limit** starts a new window and may start runs immediately.
 - **Daily cost budget** (when limits are on): optional, off by default. When the board's last-24h cost reaches it, pickup waits and the board says why. Pickup resumes as older spend leaves the window, or when you raise or clear the budget. Running work isn't stopped, and manual starts still work. Cost comes from Pi's own pricing, so it's an estimate and can overshoot by whatever runs were already in progress.
 - **Failed runs:** a card whose automatic run fails waits in Failed, and pickup carries on with the other Ready cards. Pickup never restarts a failed card, except for the automatic retry of a provider error.
-- **Pauses:** pickup pauses on an interrupted card, a startup error, or an authentication or billing refusal from the provider (which would fail every card), and the board shows why. Turn it back on once you have dealt with it.
+- **Pauses:** pickup pauses on a startup error or an authentication or billing refusal from the provider (which would fail every card), and the board shows why. Turn it back on once you have dealt with it.
 - Turning pickup off stops new starts. Runs already in progress keep going.
 
 ### Unattended review
@@ -346,7 +346,7 @@ npm run alice -- pr CARD_ID [URL|off]
 - To fix a board's path, edit the board. Its cards move only if none has run yet, because attempts keep their worktrees in the original repository.
 - **Remove repository** hides a board without deleting anything, attached files included. Add the same repository again to restore it.
 - Alice never deletes cards, so a card's attached files stay in `<data dir>/attachments/<card>` until you delete the attachment or purge an archived card's attachments (below). At startup Alice removes files that no attachment points to, such as an upload cut off by a crash.
-- Any lane can be collapsed, even with active cards. Auto-collapse only applies to lanes without active cards, and a board's **Auto-collapse** setting persists. Manual choices last until you reload the page.
+- A lane with no cards stays collapsed and can't be expanded. A lane holding only Done or archived cards starts collapsed, and any lane can be collapsed by hand, even with active cards. Manual choices last until you reload the page.
 - Card descriptions support common Markdown: headings, emphasis, lists and task lists, quotes, code, and `http`, `https`, or `mailto` links. Card details render it, and board cards show a plain-text preview. Raw HTML appears as text and is never rendered.
 - In **Settings**, you can turn on a confirmation before each run and choose whether card details open as a popup or a side panel.
 - Each repository can have an optional `http` or `https` remote link, such as its GitHub page. Set it with the pencil button next to the repository (Edit repository). It appears below the board heading. The link itself is only a link; pushing is the separate opt-in setting below.
@@ -468,13 +468,3 @@ Tests use a fake offline `pi` and temporary Git repositories. They don't call a 
 From a clean checkout of `main`, run `npm run release -- 0.2.0`. It sets that version in `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, adds a `CHANGELOG.md` section from the merge commit subjects since the last `v*` tag, commits, and creates the tag `v0.2.0`. It doesn't push.
 
 Review the commit, then `git push origin main v0.2.0`. Pushing the tag runs `.github/workflows/release.yml`, which creates a GitHub release using that changelog section as its notes.
-
-## Colleagues prototype (fixture data)
-
-A clickable, fixture-backed prototype of persistent colleagues and group rooms, built from the draft spec in PR #13 for operator review. It is not the feature. It calls no Alice API, starts no agent, creates no card, writes no memory, and keeps all state in the browser tab (the Reset button restores the fixtures). It is a separate page that is not part of the production build or the board.
-
-```sh
-npm run prototype:colleagues
-```
-
-Open http://127.0.0.1:5180/prototype-colleagues.html. The code lives in `src/prototype/colleagues/`. Simulated rounds advance only when you click Advance fixture round. The Prototype assumptions page in the app lists the spec choices the prototype made to stay clickable.

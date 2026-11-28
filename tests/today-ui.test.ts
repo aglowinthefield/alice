@@ -17,7 +17,7 @@ before(async () => {
 after(async () => { await browser?.close(); await server?.close(); });
 
 const lastVisit = "2026-03-01T09:00:00.000Z";
-const board = { autoCollapseEmptySwimlanes: false, autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
+const board = { autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
 const boards = [
   { ...board, id: "board-a", repo: "/code/alpha", cost24h: 1.25 },
   { ...board, id: "board-b", repo: "/code/beta", cost24h: 0.5 },
@@ -80,7 +80,7 @@ test("Today opens first and gathers what needs you across every repository", asy
     await eventually(() => titles(page, "Needs you"), ["Card review-old", "Card review-new", "Card broken"]);
     await eventually(() => titles(page, "In progress"), ["Card busy"]);
     await eventually(() => titles(page, "Finished since your last visit"), ["Card merged"]);
-    await page.getByRole("status", { name: "Since your last visit" }).filter({ hasText: /1 merged · 3 need you · \$1\.75 in the last 24h/ }).waitFor();
+    await page.getByRole("status", { name: "Since your last visit" }).filter({ hasText: /1 merged · 3 need you · \$1\.75 in the last 24 hours/ }).waitFor();
     await section(page, "In progress").getByRole("button", { name: /Card busy/ }).click();
     await page.getByRole("dialog").getByText("Card busy").waitFor();
   } finally { await page.close(); }
@@ -89,7 +89,7 @@ test("Today opens first and gathers what needs you across every repository", asy
 test("quick capture adds a Ready card to the chosen repository, or a Triage card when ticked, and remembers the repository", async () => {
   const { page, requests, state } = await open({ cards: [] });
   try {
-    await page.getByText("All caught up").waitFor();
+    await page.getByText("Nothing needs you.").waitFor();
     await page.getByRole("combobox", { name: "Repository" }).selectOption({ label: "beta" });
     const input = page.getByRole("textbox", { name: "Capture a card" });
     await input.fill("Water the plants");
@@ -117,15 +117,15 @@ test("quick capture adds a Ready card to the chosen repository, or a Triage card
   } finally { await page.close(); }
 });
 
-test("quick capture wraps on a narrow screen instead of squeezing the title or clipping Add", async () => {
+test("quick capture wraps on a narrow screen instead of squeezing the title or clipping Add card", async () => {
   const { page } = await open({ cards: [], viewport: { width: 390, height: 800 }, boards: [{ ...boards[0], repo: "/code/unconscious-development" }, boards[1]] });
   try {
-    await page.getByText("All caught up").waitFor();
+    await page.getByText("Nothing needs you.").waitFor();
     const field = (await page.getByRole("textbox", { name: "Capture a card" }).boundingBox())!;
-    const add = (await page.getByRole("button", { name: "Add", exact: true }).boundingBox())!;
+    const add = (await page.getByRole("button", { name: "Add card", exact: true }).boundingBox())!;
     const select = (await page.getByRole("combobox", { name: "Repository" }).boundingBox())!;
     assert.ok(field.width >= 250, `the title field is ${field.width}px wide`);
-    assert.ok(add.x >= 0 && add.x + add.width <= 390, `Add spans ${add.x}–${add.x + add.width}px of a 390px screen`);
+    assert.ok(add.x >= 0 && add.x + add.width <= 390, `Add card spans ${add.x}–${add.x + add.width}px of a 390px screen`);
     assert.ok(select.x + select.width <= 390, "the repository picker fits");
   } finally { await page.close(); }
 });
@@ -135,13 +135,13 @@ test("quick capture creates one card however often it is submitted while the fir
   const { page, requests } = await open({ cards: [], holdCreate: new Promise<void>(resolve => { release = resolve; }) });
   const posts = () => Promise.resolve(requests.filter(item => item.method === "POST").length);
   try {
-    await page.getByText("All caught up").waitFor();
+    await page.getByText("Nothing needs you.").waitFor();
     const input = page.getByRole("textbox", { name: "Capture a card" });
     await input.fill("Only once");
     // Two submits in one task land before React re-renders, so only the guard can stop the second.
     await input.evaluate(element => { const form = element.closest("form")!; form.requestSubmit(); form.requestSubmit(); });
     await eventually(posts, 1);
-    assert.equal(await page.getByRole("button", { name: "Add", exact: true }).isDisabled(), true, "Add is disabled while the create is pending");
+    assert.equal(await page.getByRole("button", { name: "Add card", exact: true }).isDisabled(), true, "Add card is disabled while the create is pending");
     await input.press("Enter");
     release();
     await page.getByText(/Added to \w+ Ready/).waitFor();
@@ -181,9 +181,11 @@ const polled = async (page: Page, requests: { method: string; path: string }[]) 
   }
 };
 const openToday = (page: Page, name: RegExp, lane = "Needs you") => section(page, lane).getByRole("button", { name }).click();
-const openBoard = async (page: Page, repo: string, title: string) => {
+const openBoard = async (page: Page, repo: string, title: string, lane?: string) => {
   await page.getByRole("button", { name: repo, exact: true }).click();
   await page.getByRole("button", { name: "Kanban" }).click();
+  // Lanes of only Done or archived cards start collapsed.
+  if (lane) await page.getByRole("button", { name: `Expand ${lane} lane` }).click();
   await page.locator("section[data-status]").getByText(title, { exact: true }).click();
 };
 const asStatus = (state: { cards: TestCard[] }, id: string, status: string) => {
@@ -230,7 +232,7 @@ test("opening a card that is already done or archived keeps it open", async () =
     card("old", "/code/alpha", "archived", "2026-03-01T09:00:00.000Z"),
   ] });
   try {
-    await openBoard(page, "alpha", "Card shipped");
+    await openBoard(page, "alpha", "Card shipped", "Done");
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("heading", { name: "Card shipped" }).waitFor();
     await polled(page, requests);

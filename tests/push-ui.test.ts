@@ -28,7 +28,7 @@ test("Settings subscribes this browser to push notifications, and a clicked noti
       if (path === "/api/push/subscriptions") { requests.push({ method, body: route.request().postDataJSON() }); return route.fulfill({ json: { ok: true } }); }
       const data: Record<string, unknown> = {
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
         "/api/boards/board/cards": [{ id: "c1", title: "Waiting card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }],
         "/api/boards/board/conflicts": [],
         "/api/status": { draining: false, activeRuns: 0 },

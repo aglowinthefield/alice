@@ -26,8 +26,8 @@ test("search filters cards by title, body, and ID prefix and clears", async () =
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {
         "/api/boards": [
-          { id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false },
-          { id: "other", repo: "/tmp/other", autoCollapseEmptySwimlanes: false },
+          { id: "board", repo: "/tmp/repo" },
+          { id: "other", repo: "/tmp/other" },
         ],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/boards/board/cards": boardCards,
@@ -48,6 +48,7 @@ test("search filters cards by title, body, and ID prefix and clears", async () =
     const lanes = page.locator("section[data-status]");
     const shown = (title: string) => lanes.getByText(title, { exact: true });
     await shown("Fix login redirect").waitFor();
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
 
     const search = page.getByRole("searchbox", { name: "Search cards" });
     const hint = page.getByRole("status", { name: "Search results" });

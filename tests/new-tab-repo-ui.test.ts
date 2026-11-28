@@ -4,8 +4,8 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { createServer } from "vite";
 
 const boards = [
-  { id: "one", repo: "/tmp/one", autoCollapseEmptySwimlanes: false },
-  { id: "two", repo: "/tmp/two", autoCollapseEmptySwimlanes: false },
+  { id: "one", repo: "/tmp/one" },
+  { id: "two", repo: "/tmp/two" },
 ];
 
 async function openTab(context: BrowserContext, url: string): Promise<Page> {

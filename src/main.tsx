@@ -1,6 +1,14 @@
 import { BrandIcon } from "./brand-icon";
+import { WindowControls } from "./window-controls";
 import { sharedCaches } from "../shared/shared-caches.js";
-import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   Archive,
   CircleCheck,
@@ -174,7 +182,14 @@ function ServerHost() {
       .then((status) => setHost(status.hostname ?? ""))
       .catch(() => {});
   }, []);
-  return <span data-testid="server-host">{host || "Alice"}</span>;
+  return (
+    <span
+      data-testid="server-host"
+      className="truncate text-[length:var(--text-sidebar-meta)] text-muted-foreground"
+    >
+      {host ? `${host} · v0.1` : "v0.1"}
+    </span>
+  );
 }
 
 /** Count of cards created outside this UI that the operator has not seen yet. */
@@ -353,6 +368,26 @@ function ChatUnreadBadge({
   );
 }
 
+/** A repo's page link in the sidebar. The current page gets the rail's marker instead of a highlight. */
+const subnavItem = (current: boolean) =>
+  `mt-0.5 flex w-full items-center gap-2.5 rounded-md py-1.5 pl-3.5 pr-3 text-left text-[length:var(--text-sidebar)] ${current ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`;
+/** The accent mark on a repo's rail. After each render it moves to the link marked as the current page, so a page change slides it. */
+function SubnavMarker() {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const marker = ref.current,
+      rail = marker?.parentElement;
+    if (!marker || !rail) return;
+    const current = rail.querySelector<HTMLElement>('[aria-current="page"]');
+    marker.style.opacity = current ? "1" : "0";
+    if (!current) return;
+    const top =
+      current.getBoundingClientRect().top - rail.getBoundingClientRect().top;
+    marker.style.transform = `translateY(${top + 4}px)`;
+    marker.style.height = `${current.offsetHeight - 8}px`;
+  });
+  return <span ref={ref} aria-hidden="true" className="repo-subnav-marker" />;
+}
 /** Pull request screens and links need a GitHub remote for `gh`. */
 const supportsPullRequests = (board: { remoteUrl?: string }) =>
   hasGithubRemote(board);
@@ -660,7 +695,7 @@ export function App() {
     }, 150);
   };
   const [repoPath, setRepoPath] = useState("");
-  const [iconDraft, setIconDraft] = useState<RepoIcon>("sprinkle_donut");
+  const [iconDraft, setIconDraft] = useState<RepoIcon>("alice_smile");
   const [colorDraft, setColorDraft] = useState<RepoColor>("violet");
   const [repoCheck, setRepoCheck] = useState<{
     path: string;
@@ -702,15 +737,7 @@ export function App() {
       ? saved
       : "today";
   });
-  const [reposCollapsed, setReposCollapsed] = useState(
-    () => localStorage.getItem("alice-repos-collapsed") === "true",
-  );
-  const toggleRepos = () => {
-    const next = !reposCollapsed;
-    setReposCollapsed(next);
-    localStorage.setItem("alice-repos-collapsed", String(next));
-  };
-  // Repos start collapsed except the open one; the user's toggles persist.
+  // Repos start collapsed except the open one; the user's toggles persist. Opening one closes the rest.
   const [repoOpen, setRepoOpen] = useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem("alice-repo-open") ?? "{}");
@@ -720,7 +747,12 @@ export function App() {
   });
   const toggleRepoOpen = (id: string, open: boolean) =>
     setRepoOpen((previous) => {
-      const next = { ...previous, [id]: !open };
+      const next = open
+        ? { ...previous, [id]: false }
+        : {
+            ...Object.fromEntries(boards.map((board) => [board.id, false])),
+            [id]: true,
+          };
       localStorage.setItem("alice-repo-open", JSON.stringify(next));
       return next;
     });
@@ -837,6 +869,25 @@ export function App() {
   const [palette, setPalette] = useState<{ open: boolean; cardId?: string }>({
     open: false,
   });
+  // The Windows desktop app has no menu bar, so the page takes Ctrl+, for Settings the way the macOS menu does.
+  useEffect(() => {
+    if (document.documentElement.dataset.desktop !== "windows") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "," ||
+        !event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        location.pathname.startsWith("/settings")
+      )
+        return;
+      event.preventDefault();
+      history.pushState(null, "", "/settings/general");
+      dispatchEvent(new PopStateEvent("popstate"));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
@@ -1422,7 +1473,7 @@ export function App() {
     if (!target.autoPickupEnabled) return;
     if (
       !(await confirmAction(
-        `Reset the ${target.pickupDailyLimit}-start rolling limit for ${target.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs will remain in history.`,
+        `Reset the ${target.pickupDailyLimit}-start rolling limit for ${target.repo}? This may start Ready cards immediately and spend model tokens. Earlier runs stay in history.`,
       ))
     )
       return;
@@ -1796,7 +1847,7 @@ export function App() {
         id: "settings",
         label: "Open settings",
         icon: Settings2,
-        // The desktop app's menu has Cmd+, for this; the web app has no shortcut.
+        // The desktop app takes Cmd/Ctrl+, for this; the web app has no shortcut.
         keys: document.documentElement.dataset.desktop
           ? [modKey, ","]
           : undefined,
@@ -1835,7 +1886,7 @@ export function App() {
   })();
   if (!settings && !error) return null;
   return (
-    <div className="min-h-screen lg:flex">
+    <div className="min-h-[calc(100vh_-_var(--titlebar-h))] lg:flex">
       <UpdateNotice
         onOpenSettings={() => {
           setSettingsSection("updates");
@@ -1852,6 +1903,7 @@ export function App() {
         aria-hidden="true"
         className="desktop-titlebar"
       />
+      <WindowControls />
       <div ref={pageFadeVeil} aria-hidden="true" className="page-fade-veil" />
       <ConfirmHost />
       <ReadyCheckHost />
@@ -1868,7 +1920,7 @@ export function App() {
       <aside
         hidden={sidebarHidden}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
-        className="relative flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-0 lg:h-screen lg:w-[var(--sidebar-w)] lg:shrink-0 lg:border-r lg:border-b-0"
+        className="relative flex flex-col border-b border-border bg-sidebar lg:sticky lg:top-[var(--titlebar-h)] lg:h-[calc(100vh_-_var(--titlebar-h))] lg:w-[var(--sidebar-w)] lg:shrink-0 lg:border-r lg:border-b-0"
       >
         <div
           role="separator"
@@ -1883,8 +1935,11 @@ export function App() {
         />
         <div className="desktop-sidebar-head flex items-center gap-3 px-5 py-5">
           <BrandIcon />
-          <span className="text-[18px] font-semibold tracking-[-.04em]">
-            alice<span className="text-primary">.</span>
+          <span className="flex min-w-0 flex-col leading-tight">
+            <span className="text-[length:var(--text-sidebar)] font-medium">
+              Alice
+            </span>
+            <ServerHost />
           </span>
           <button
             aria-label="Hide sidebar"
@@ -1910,20 +1965,7 @@ export function App() {
               </span>
             )}
           </button>
-          <button
-            onClick={toggleRepos}
-            aria-expanded={!reposCollapsed}
-            aria-controls="sidebar-repositories"
-            className="mb-1 flex w-full items-center gap-1 rounded px-3 py-1 text-left text-[length:var(--text-sidebar)] text-muted-foreground/80 hover:text-foreground"
-          >
-            Repositories
-            {reposCollapsed ? (
-              <ChevronRight size={12} aria-hidden="true" className="ml-auto" />
-            ) : (
-              <ChevronDown size={12} aria-hidden="true" className="ml-auto" />
-            )}
-          </button>
-          <div id="sidebar-repositories" hidden={reposCollapsed}>
+          <div>
             {sortedBoards.map((item) => {
               const active = view === "board" && boardId === item.id;
               const pullsActive = view === "pulls" && boardId === item.id;
@@ -1971,7 +2013,6 @@ export function App() {
                       className="flex w-full min-w-0 items-start gap-2.5 px-3 pb-0 pt-1.5 text-left text-[length:var(--text-sidebar)] text-muted-foreground hover:text-foreground"
                       title={item.repo}
                     >
-                      <RepoBadge board={item} />
                       <span className="truncate text-[14px] font-medium leading-4 text-foreground">
                         {repoName(item.repo)}
                       </span>
@@ -1984,7 +2025,7 @@ export function App() {
                     </button>
                     <ul
                       aria-label="Card counts"
-                      className="-mt-4 flex h-4 items-center gap-3 pb-0 pl-13.5 pr-3"
+                      className="mt-1 flex h-4 items-center gap-3 pb-0 pl-3 pr-3"
                     >
                       {sidebarCounts.map((group) => {
                         const Icon = group.icon;
@@ -2022,52 +2063,51 @@ export function App() {
                       })}
                     </ul>
                   </div>
-                  {open && (
-                    <button
-                      onClick={() => openBoard(item.id)}
-                      aria-current={active ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${active ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <Kanban size={13} aria-hidden="true" /> Kanban
-                      {!!item.newCards && (
-                        <NewCardsBadge count={item.newCards} />
+                  <div className="repo-subnav ml-4" data-open={open}>
+                    <div>
+                      <SubnavMarker />
+                      <button
+                        onClick={() => openBoard(item.id)}
+                        aria-current={active ? "page" : undefined}
+                        className={subnavItem(active)}
+                      >
+                        <Kanban size={13} aria-hidden="true" /> Kanban
+                        {!!item.newCards && (
+                          <NewCardsBadge count={item.newCards} />
+                        )}
+                      </button>
+                      {supportsPullRequests(item) && (
+                        <button
+                          onClick={() => openPulls(item.id)}
+                          aria-current={pullsActive ? "page" : undefined}
+                          className={subnavItem(pullsActive)}
+                        >
+                          <GitPullRequest size={13} aria-hidden="true" /> Pull
+                          requests
+                        </button>
                       )}
-                    </button>
-                  )}
-                  {open && supportsPullRequests(item) && (
-                    <button
-                      onClick={() => openPulls(item.id)}
-                      aria-current={pullsActive ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${pullsActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <GitPullRequest size={13} aria-hidden="true" /> Pull
-                      requests
-                    </button>
-                  )}
-                  {open && (
-                    <button
-                      onClick={() => openVisualizer(item.id)}
-                      aria-current={visualizerActive ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${visualizerActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <Workflow size={13} aria-hidden="true" /> Visualizer
-                    </button>
-                  )}
-                  {open && (
-                    <button
-                      onClick={() => openChat(item.id)}
-                      aria-current={chatActive ? "page" : undefined}
-                      className={`ml-8 mt-0.5 flex w-[calc(100%-2rem)] items-center gap-2 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${chatActive ? "bg-accent/50" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-                    >
-                      <MessageSquare size={13} aria-hidden="true" /> Chat
-                      {!!item.chatUnread && (
-                        <ChatUnreadBadge
-                          count={item.chatUnread}
-                          className="ml-auto"
-                        />
-                      )}
-                    </button>
-                  )}
+                      <button
+                        onClick={() => openVisualizer(item.id)}
+                        aria-current={visualizerActive ? "page" : undefined}
+                        className={subnavItem(visualizerActive)}
+                      >
+                        <Workflow size={13} aria-hidden="true" /> Visualizer
+                      </button>
+                      <button
+                        onClick={() => openChat(item.id)}
+                        aria-current={chatActive ? "page" : undefined}
+                        className={subnavItem(chatActive)}
+                      >
+                        <MessageSquare size={13} aria-hidden="true" /> Chat
+                        {!!item.chatUnread && (
+                          <ChatUnreadBadge
+                            count={item.chatUnread}
+                            className="ml-auto"
+                          />
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               );
             })}
@@ -2123,12 +2163,6 @@ export function App() {
             <Settings2 size={16} aria-hidden="true" />
             <span>Settings</span>
           </button>
-        </div>
-        <div className="mt-auto hidden border-t border-border px-5 py-3 lg:block">
-          <div className="flex items-center gap-2 text-[length:var(--text-sidebar-meta)] text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-status-review" />{" "}
-            <ServerHost /> <span className="ml-auto font-mono">v0.1</span>
-          </div>
         </div>
       </aside>
       {view === "today" && (
@@ -2472,39 +2506,6 @@ export function App() {
                 </option>
               ))}
             </select>
-            <label className="ml-auto flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
-                disabled={!currentBoard || busy}
-                checked={currentBoard?.autoCollapseEmptySwimlanes ?? false}
-                onChange={(event) => {
-                  const enabled = event.target.checked;
-                  if (!boardId) return;
-                  void action(async () => {
-                    const updated = await api<Board>(
-                      `/boards/${boardId}/settings`,
-                      {
-                        method: "PATCH",
-                        body: JSON.stringify({
-                          autoCollapseEmptySwimlanes: enabled,
-                        }),
-                      },
-                    );
-                    setBoards((previous) =>
-                      previous.map((item) =>
-                        item.id === updated.id ? updated : item,
-                      ),
-                    );
-                    setManualCollapse((previous) => ({
-                      ...previous,
-                      [updated.id]: {},
-                    }));
-                  });
-                }}
-                className="accent-primary"
-              />{" "}
-              Auto-collapse lanes without active cards
-            </label>
           </div>
           {currentBoard?.autoPickupEnabled && (
             <span className="text-primary">
@@ -2520,7 +2521,7 @@ export function App() {
                   : ""
               }
             >
-              Last 24h: {formatCost(currentBoard.cost24h ?? 0)}
+              Last 24 hours: {formatCost(currentBoard.cost24h ?? 0)}
               {currentBoard.limitsEnabled &&
                 typeof currentBoard.pickupCostBudget === "number" &&
                 ` of ${formatCost(currentBoard.pickupCostBudget)} budget`}
@@ -2567,9 +2568,9 @@ export function App() {
                 {formatCost(currentBoard.pickupCostBudget)} in the last 24
                 hours).
               </strong>{" "}
-              Pickup resumes as older spend leaves the 24-hour window, or raise
-              the budget in this repository's settings. Manual starts still
-              work.
+              Auto pickup starts again when older spend leaves the 24-hour
+              window. To start sooner, raise the budget in this repository's
+              settings. Manual starts still work.
             </div>
           )}
         {currentBoard?.autoPickupError && (
@@ -2614,7 +2615,7 @@ export function App() {
                 <strong>
                   {currentBoard.integrationError
                     ? "GitHub sync stopped and auto pickup is waiting:"
-                    : "Can't reach GitHub right now; retrying every minute:"}
+                    : "Alice cannot reach GitHub and tries again every minute:"}
                 </strong>{" "}
                 {currentBoard.integrationError ||
                   currentBoard.integrationWarning}
@@ -2754,19 +2755,26 @@ export function App() {
                 : laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
-              const idle = cards
-                .filter((c) => laneOf(c, splitReview) === column.id)
-                .every((c) => c.status === "done" || c.status === "archived");
+              const wholeLane = cards.filter(
+                (c) => laneOf(c, splitReview) === column.id,
+              );
+              const empty = wholeLane.length === 0;
+              const idle = wholeLane.every(
+                (c) => c.status === "done" || c.status === "archived",
+              );
               const override = boardId
                 ? manualCollapse[boardId]?.[column.id]
                 : undefined;
-              // Any lane can be collapsed by hand; only idle lanes
-              // collapse automatically.
-              const collapsed =
-                override ??
-                (idle &&
-                  (column.id === "archived" ||
-                    (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
+              const droppable =
+                !!dragging?.targets.includes(column.status) &&
+                column.id === column.status;
+              // An empty lane is collapsed and can't be expanded, except that it
+              // opens as a drop zone while a card that can move there is held
+              // over it. A lane with only Done or archived cards starts
+              // collapsed, and any lane can be collapsed by hand.
+              const folded =
+                empty && !(droppable && dropLane === column.status);
+              const collapsed = folded || (!empty && (override ?? idle));
               const selecting =
                 selectingLane === column.id && laneCards.length > 0;
               const laneIds = laneCards.map((item) => item.id);
@@ -2776,9 +2784,6 @@ export function App() {
               const canSelect = laneCards.some(
                 (item) => dropTargets(item).length > 0,
               );
-              const droppable =
-                !!dragging?.targets.includes(column.status) &&
-                column.id === column.status;
               return (
                 <section
                   key={column.id}
@@ -2817,7 +2822,20 @@ export function App() {
                   }}
                   className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
-                  {collapsed ? (
+                  {folded ? (
+                    <div className="flex min-h-48 w-full flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 px-2 py-3 text-sm text-muted-foreground">
+                      <span
+                        aria-hidden="true"
+                        className="lane-status-dot mt-7 size-2.5 shrink-0 rounded-full"
+                      />
+                      <h2 className="[writing-mode:vertical-rl]">
+                        {column.label}
+                      </h2>
+                      <span className="rounded bg-secondary px-1 font-mono text-xs">
+                        0
+                      </span>
+                    </div>
+                  ) : collapsed ? (
                     <button
                       type="button"
                       aria-label={`Expand ${column.label} lane`}
@@ -3030,7 +3048,7 @@ export function App() {
                                   {!!item.autoRetries && (
                                     <span
                                       data-testid="auto-retry"
-                                      title="Automatic pickup retries a run that failed on a temporary provider or network error, at most 3 times"
+                                      title="Auto pickup retries a run that failed on a temporary provider or network error, at most 3 times"
                                       className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
                                     >
                                       <RotateCcw size={10} aria-hidden />
@@ -3113,7 +3131,7 @@ export function App() {
                                   className="flex items-center gap-1"
                                   title={
                                     item.turnsIncomplete
-                                      ? "Estimated from older transcripts; may be inaccurate. New turns are counted exactly."
+                                      ? "Estimated from older transcripts, so it can be wrong. Alice counts new turns exactly."
                                       : "Completed Pi turns across all attempts"
                                   }
                                 >
@@ -3263,9 +3281,7 @@ export function App() {
                         })}
                         {laneCards.length === 0 && (
                           <div className="rounded-xl border border-dashed border-border/60 px-4 py-10 text-center text-xs text-muted-foreground">
-                            {query.trim()
-                              ? "No matching cards."
-                              : "Nothing here yet."}
+                            {query.trim() ? "No matching cards." : "Drop here."}
                           </div>
                         )}
                       </div>
@@ -3367,7 +3383,7 @@ export function App() {
                 Choose an icon and color for this repository.
               </p>
               <div
-                className="mt-4 grid grid-cols-8 gap-2"
+                className="mt-4 grid grid-cols-9 gap-2"
                 role="group"
                 aria-label="Repository icon"
               >
@@ -3392,8 +3408,8 @@ export function App() {
                     >
                       <img
                         src={`/icons/${name}.png`}
-                        width={20}
-                        height={20}
+                        width={26}
+                        height={26}
                         alt=""
                         className="object-contain"
                       />
@@ -3517,13 +3533,14 @@ export function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Integration</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Local: Approve merges the card into local main. GitHub pull
-                requests: Approve pushes alice/&lt;card&gt; and opens a PR with
-                gh; the card is Done once the PR merges and the merge is on
-                origin/main. Local main is then only fast-forwarded to
-                origin/main. Needs gh signed in and a GitHub remote link. When a
-                GitHub remote is set, Alice picks GitHub pull requests if main
-                only accepts pull requests.
+                Local merge: Approve merges the card into local main. GitHub
+                pull requests: Approve pushes alice/&lt;card&gt; and opens a
+                pull request with gh. The card is Done when the pull request
+                merges and the merge is on origin/main. Alice then only
+                fast-forwards local main to origin/main. This mode needs gh
+                signed in and a GitHub remote link. If a GitHub remote is set
+                and main accepts only pull requests, Alice selects GitHub pull
+                requests.
               </p>
 
               <label className="mt-4 block text-xs">
@@ -3682,8 +3699,8 @@ export function App() {
                 <span>
                   Days in Review before a card is stale
                   <span className="block text-muted-foreground">
-                    Stale cards get a mark on the board and a daily push digest.
-                    0 turns this off.
+                    Alice marks stale cards on the board and sends a daily push
+                    digest. Enter 0 to turn this off.
                   </span>
                 </span>
               </label>
@@ -3760,13 +3777,14 @@ export function App() {
                   <span>
                     Open pull requests automatically
                     <span className="block text-muted-foreground">
-                      Pushes the card branch and opens its pull request when a
-                      run reaches Review, without waiting for Approve. Only runs
-                      that finish after you turn this on are pushed. With
-                      auto-review on, the agent reviewer goes first: its
-                      approval opens the pull request, a card it sends back
-                      reruns, and a card it hands to a person (or that is out of
-                      reruns) gets a draft pull request with its findings.
+                      When a run reaches Review, Alice pushes the card branch
+                      and opens its pull request without waiting for Approve.
+                      This applies only to runs that finish after you turn it
+                      on. If unattended review is on, the agent reviewer goes
+                      first. Its approval opens the pull request, and a card it
+                      sends back runs again. A card it hands to a person, or a
+                      card with no reruns left, gets a draft pull request with
+                      its findings.
                     </span>
                   </span>
                 </label>
@@ -3897,8 +3915,8 @@ export function App() {
                     {typeof pickupBoard.pickupCostBudget === "number"
                       ? ` of ${formatCost(pickupBoard.pickupCostBudget)}.`
                       : "."}{" "}
-                    Leave blank for no budget. At the budget, automatic pickup
-                    waits; running work and manual starts continue.
+                    Leave blank for no budget. When spend reaches the budget,
+                    auto pickup waits. Running work and manual starts continue.
                   </p>
                   {pickupBoard.autoPickupEnabled &&
                     pickupBoard.pickupDailyLimit > 0 &&
@@ -4012,12 +4030,12 @@ export function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Auto pickup</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Automatically start Ready cards in priority order, up to the
-                concurrency limit including manual runs. A failed card waits in
-                Failed; an interrupted run pauses pickup. Starting Pi may spend
-                model tokens. Turn on Limits above to cap daily starts and
-                spend. Turn off pickup to stop new starts; existing runs
-                continue.
+                Alice starts Ready cards in priority order, up to the concurrent
+                run limit. Manual runs count toward that limit. A failed card
+                waits in Failed, and an interrupted run pauses auto pickup. Each
+                run can spend model tokens. To cap daily starts and spend, turn
+                on Limits above. To stop new starts, turn off auto pickup. Runs
+                in progress continue.
               </p>
               <label className="mt-4 flex items-center gap-2 text-xs">
                 Concurrent runs{" "}
@@ -4059,7 +4077,7 @@ export function App() {
                   if (
                     enable &&
                     !(await confirmAction(
-                      `Enable automatic Pi pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${!pickupBoard.limitsEnabled ? "with limits off (no daily start limit or budget)" : pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
+                      `Turn on auto pickup for ${pickupBoard.repo}? Up to ${pickupBoard.pickupConcurrency} paid Pi runs can start without another click, ${!pickupBoard.limitsEnabled ? "with limits off (no daily start limit or budget)" : pickupBoard.pickupDailyLimit === 0 ? "with no daily start limit" : `up to ${pickupBoard.pickupDailyLimit} automatic starts per rolling 24 hours`}. Ready cards may start immediately.`,
                     ))
                   )
                     return;
@@ -4079,8 +4097,8 @@ export function App() {
                 }}
               >
                 {pickupBoard.autoPickupEnabled
-                  ? "Disable auto pickup"
-                  : "Enable auto pickup"}
+                  ? "Turn off auto pickup"
+                  : "Turn on auto pickup"}
               </Button>
               {pickupBoard.autoPickupError && (
                 <p role="alert" className="mt-2 text-xs text-destructive">
@@ -4093,15 +4111,15 @@ export function App() {
             <div className="mt-8 border-t border-border pt-5 text-sm">
               <div className="font-medium">Unattended review</div>
               <p className="mt-2 text-xs text-muted-foreground">
-                A Pi reviewer with full tools inspects new Review cards in their
-                worktrees and runs the repository's checks itself. It can send a
-                card back to its implementer. When it approves, a pull-request
-                board opens the pull request; on a local board the card waits
-                for your Approve. Nothing merges into main without you. With
-                automatic pull requests on, a card the reviewer hands to a
-                person still gets a draft pull request with its findings, and
-                the reviewer never blocks it. Auto-review alone does not start
-                Ready cards; enable Auto pickup above.
+                A Pi reviewer with full tools checks new Review cards in their
+                worktrees and runs the repository's checks. It can send a card
+                back to its implementer. When it approves, a pull request board
+                opens the pull request, and a local board waits for your
+                Approve. Nothing merges into main without you. With automatic
+                pull requests on, a card the reviewer hands to a person still
+                gets a draft pull request with its findings. Unattended review
+                does not start Ready cards. To start them, turn on Auto pickup
+                above.
               </p>
               <label className="mt-3 flex items-center gap-2 text-xs">
                 Agent reviews at the same time
@@ -4142,7 +4160,7 @@ export function App() {
                   if (
                     enable &&
                     !(await confirmAction(
-                      `Enable agent review for ${editingBoard.repo}? This may spend model tokens. Only new reviews after enabling are eligible.`,
+                      `Turn on unattended review for ${editingBoard.repo}? This may spend model tokens. It reviews only runs that finish after you turn it on.`,
                     ))
                   )
                     return;
@@ -4157,12 +4175,12 @@ export function App() {
                 }}
               >
                 {editingBoard.autoReviewEnabled
-                  ? "Disable auto-review"
-                  : "Enable auto-review"}
+                  ? "Turn off unattended review"
+                  : "Turn on unattended review"}
               </Button>
               {editingBoard.autoReviewEnabled && (
                 <p className="mt-2 text-xs text-primary">
-                  Enabled since{" "}
+                  On since{" "}
                   {editingBoard.autoReviewEnabledAt &&
                     date(editingBoard.autoReviewEnabledAt)}
                   .
@@ -4175,9 +4193,10 @@ export function App() {
               <div className="font-medium">Pi models</div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Overrides for this repository's Pi runs. Blank fields inherit
-                the global setting from Settings. Card retries sets a model for
-                a card's second and later attempts (after a failure, send-back
-                or CI fix); leave it blank to run every attempt on Card runs.
+                the global setting from Settings. Card retries sets the model
+                for a card's second and later attempts, after a failure,
+                send-back or CI fix. Leave it blank to use Card runs for every
+                attempt.
               </p>
               <AgentModelFields
                 key={`${editingBoard.id}-${JSON.stringify(editingBoard.agentModels)}`}
@@ -4550,7 +4569,7 @@ function ActivityBadge({
     return (
       <span
         data-testid="activity-badge"
-        title={`The run ${card.stuck}. Alice asked the agent to step back; check the attempt log, and stop the run if it keeps going in circles.`}
+        title={`The run ${card.stuck}. Alice told the agent to try a different approach. Check the attempt log, and stop the run if it repeats the same steps.`}
         className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
       >
         <Repeat size={10} aria-hidden />
@@ -4564,7 +4583,7 @@ function ActivityBadge({
   return (
     <span
       data-testid="activity-badge"
-      title="The agent has reported nothing for a while. A long command can be quiet; check the attempt log if it stays quiet."
+      title="The agent has not reported anything for a while. A long command can be quiet. If it stays quiet, check the attempt log."
       className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium text-status-interrupted"
     >
       <CirclePause size={10} aria-hidden />
@@ -4579,7 +4598,7 @@ function StaleBadge({ card }: { card: Card }) {
   return (
     <span
       data-testid="stale-badge"
-      title={`In Review for ${days} ${days === 1 ? "day" : "days"}, so main has likely moved on. Approve it, run it again on current main, or close it.`}
+      title={`In Review for ${days} ${days === 1 ? "day" : "days"}, so main has probably changed. Approve it, run it again on current main, or close it.`}
       className="flex items-center gap-1 rounded border border-status-interrupted/40 bg-status-interrupted/10 px-1.5 py-px text-[11px] leading-4 font-medium tabular-nums text-status-interrupted"
     >
       <CalendarClock size={10} aria-hidden />
@@ -4623,7 +4642,7 @@ const shortcutList: [string, string][] = [
   ["g l", "Go to Logs"],
   [`${modKey} K`, "Command palette"],
   [`${modKey} Enter`, "Create or save card in the form"],
-  ["?", "Show or hide this cheat sheet"],
+  ["?", "Show or hide keyboard shortcuts"],
 ];
 function CardForm({
   onSubmit,

@@ -15,7 +15,7 @@ test("lanes sort by priority, non-zero cards show their number, and details can 
     const cards = [card("newer-normal", 0), card("low", -10), card("high", 50), card("older-normal", 0), card("urgent", 100)];
     const patches: unknown[] = [];
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": cards,
       "/api/boards/board/conflicts": [],

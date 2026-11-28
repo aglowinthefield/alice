@@ -364,9 +364,9 @@ export function CardDetails({
           }
           className={
             expandedDetails
-              ? "left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none [--pop-x:0px] [--pop-y:6px]"
+              ? "left-0 top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none [--pop-x:0px] [--pop-y:6px]"
               : side
-                ? "right-0 left-auto top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right [--pop-x:32px] [--pop-y:0px]"
+                ? "right-0 left-auto top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right [--pop-x:32px] [--pop-y:0px]"
                 : "w-[min(94vw,750px)]"
           }
         >
@@ -420,7 +420,7 @@ export function CardDetails({
                 className="size-7 shrink-0"
                 disabled={busy}
                 aria-label="Edit title and description"
-                title="Edit title and description. Doesn't affect runs or reviews."
+                title="Edit title and description. Runs and reviews do not change."
                 onClick={() => onEdit(card)}
               >
                 <Pencil size={14} />
@@ -494,7 +494,7 @@ export function CardDetails({
                     title={
                       card.status === "running"
                         ? "Priority cannot change while a run is active"
-                        : "Higher priority Ready cards are picked up first (-100 to 100)"
+                        : "Auto pickup starts higher-priority Ready cards first (-100 to 100)"
                     }
                     onBlur={(event) => {
                       const priority = parsePriorityInput(event.target.value);
@@ -870,15 +870,15 @@ export function CardDetails({
                     <p className="mt-1 text-destructive">{runs[0].error}</p>
                     <p className="mt-2 text-xs text-muted-foreground">
                       Inspect the latest attempt and its worktree below before
-                      retrying. No changes were merged from this run.
+                      you retry. Alice merged no changes from this run.
                     </p>
                     {runs[0].failureKind === "invalid-history" && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <p className="text-xs text-muted-foreground">
                           The provider rejected this card&apos;s saved Pi
-                          session, so Run again would fail the same way.
-                          Recovering starts a fresh session in the same worktree
-                          and keeps its changes and the old session as evidence.
+                          session, so Run again fails the same way. Recovering
+                          starts a fresh session in the same worktree and keeps
+                          its changes and the old session as evidence.
                         </p>
                         <Button
                           variant="outline"
@@ -1322,8 +1322,8 @@ export function CardDetails({
             )}
             {changesRequested && (
               <span className="self-center text-xs text-muted-foreground">
-                Changes requested, but the new attempt didn't start. Run again;
-                Pi will receive your feedback.
+                Alice saved your requested changes, but the new attempt did not
+                start. Run again to send Pi your feedback.
               </span>
             )}
             {card?.status === "review" &&
@@ -1461,10 +1461,10 @@ export function CardDetails({
                 onClick={async () => {
                   if (
                     await confirmAction(
-                      `${card.attachmentCount === 1 ? "The attachment" : `All ${card.attachmentCount} attachments`} of "${card.title}" will be permanently deleted from disk. This cannot be undone, even if you restore the card.`,
+                      `Alice permanently deletes ${card.attachmentCount === 1 ? "the attachment" : `all ${card.attachmentCount} attachments`} of "${card.title}" from disk. You cannot undo this, even if you restore the card.`,
                       {
                         title: "Delete attachments?",
-                        confirmLabel: "Delete",
+                        confirmLabel: "Delete attachments",
                         destructive: true,
                       },
                     )
@@ -1691,7 +1691,7 @@ function LiveStatus({ run, turns }: { run: Run; turns: number }) {
         </span>
       </div>
       <p className="mt-1 leading-6 text-foreground/80">
-        {narration || "Starting up…"}
+        {narration || "Starting…"}
       </p>
     </section>
   );
@@ -1957,8 +1957,8 @@ function RunReport({
               </Button>
               {planFailed && (
                 <p className="mt-2 text-xs text-destructive">
-                  Could not create every card. Try again; cards already made are
-                  kept.
+                  Alice could not create every card. Try again to create the
+                  rest.
                 </p>
               )}
             </>

@@ -42,7 +42,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
         await route.fulfill({ json: {} }); return;
       }
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/boards/board/cards": cards,
         "/api/boards/board/conflicts": [],
@@ -52,6 +52,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
       await route.fulfill({ json: data[path] });
     });
     await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     const lane = (status: string) => page.locator(`section[data-status="${status}"]`);
     const tile = (name: string) => page.getByRole("button", { name: new RegExp(`${name} card`) });
     await tile("idea").waitFor();
@@ -64,7 +65,7 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
     // "idea" has no description, so the Ready check asks first. Closing the dialog moves nothing.
     const check = page.getByRole("dialog", { name: "This card may need another pass" });
     await tile("idea").dragTo(lane("ready"));
-    await check.getByText("The card has no description, so nothing says what done looks like").waitFor();
+    await check.getByText("The card has no description, so nothing describes the finished result").waitFor();
     await page.keyboard.press("Escape");
     await check.waitFor({ state: "hidden" });
     assert.deepEqual(requests, [], "closing the check leaves the card in Triage");
@@ -83,8 +84,8 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
     await lane("ready").getByRole("button", { name: /idea card/ }).waitFor();
     await tile("queued").dragTo(lane("running"));
     await lane("running").getByRole("button", { name: /queued card/ }).waitFor();
-    // Archive starts collapsed; its narrow button still takes the drop.
-    await tile("shipped").dragTo(page.getByRole("button", { name: "Expand Archive lane" }));
+    // The empty Archive lane is folded shut; its narrow column still takes the drop.
+    await tile("shipped").dragTo(page.locator('section[data-status="archived"]'));
     await page.waitForFunction(() => !document.querySelector('section[data-status="done"] button[draggable]'));
     assert.deepEqual(requests, [
       '/api/boards/board/cards/idea/status {"status":"ready"}',

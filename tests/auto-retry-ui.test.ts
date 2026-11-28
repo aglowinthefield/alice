@@ -13,7 +13,7 @@ test("a card waiting out an automatic retry shows the retry count and when it ru
     const card = (id: string, autoRetries: number, autoRetryAt: string | null) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual", status: "ready",
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", autoRetries, autoRetryAt });
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card("flaky", 1, at), card("steady", 0, null)],
       "/api/boards/board/conflicts": [],

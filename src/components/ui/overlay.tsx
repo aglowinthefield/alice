@@ -25,10 +25,10 @@ export function DialogPanel({ className, ...props }: React.ComponentProps<"div">
 export function DialogContent({ className, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-ink/15 data-[state=open]:animate-fade-in" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-ink/15 data-[state=open]:animate-fade-in motion-reduce:animate-none" />
       <DialogPrimitive.Content
         data-slot="dialog-content"
-        className={cn(floatClass, "fixed top-1/2 left-1/2 z-50 w-[min(420px,calc(100vw-2rem))] -translate-1/2 p-5 shadow-float focus:outline-none data-[state=open]:animate-pop-in", className)}
+        className={cn(floatClass, "fixed top-1/2 left-1/2 z-50 w-[min(420px,calc(100vw-2rem))] -translate-1/2 p-5 shadow-float focus:outline-none data-[state=open]:animate-pop-in motion-reduce:animate-none", className)}
         {...props}
       >
         {children}
@@ -59,7 +59,7 @@ export function TooltipContent({ className, sideOffset = 6, ...props }: React.Co
     <TooltipPrimitive.Content
       data-slot="tooltip"
       sideOffset={sideOffset}
-      className={cn("z-50 inline-flex items-center gap-2 rounded-house bg-ink px-2 py-1 text-xs text-paper data-[state=delayed-open]:animate-fade-in", className)}
+      className={cn("z-50 inline-flex items-center gap-2 rounded-house bg-ink px-2 py-1 text-xs text-paper data-[state=delayed-open]:animate-fade-in motion-reduce:animate-none", className)}
       {...props}
     />
   );

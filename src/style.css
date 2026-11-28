@@ -167,7 +167,8 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
   .card-activity[data-activity="waiting"] { animation: none; border-style: dashed; }
 }
 
-/* Dialogs fade and pop in with the house motion (src/styles/house.css), which has no reduced-motion stop of its own. */
+/* The house overlay's motion-reduce:animate-none loses to its data-[state=open]:animate-* classes, which also match an
+   attribute, so its dialogs and tooltips still animate under reduced motion. Delete this once house fixes it. */
 @media (prefers-reduced-motion: reduce) {
   [class*="animate-fade-in"], [class*="animate-pop-in"] { animation: none !important; }
 }

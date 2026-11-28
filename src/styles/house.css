@@ -1,6 +1,7 @@
 /* @house/tokens: vendored from https://aglowinthefield.github.io/house. Change it there, then re-run shadcn add. */
-@import "@fontsource/rampart-one";
-@import "@fontsource/hachi-maru-pop";
+/* Latin only: the full Hachi Maru Pop package is about 11 MB of Japanese subsets, which desktop installers would ship. */
+@import "@fontsource/rampart-one/latin-400.css";
+@import "@fontsource/hachi-maru-pop/latin-400.css";
 
 /* Light is paper and ink. Put .dark on <html> for the inverted print, following the system setting
    (matchMedia("(prefers-color-scheme: dark)")) unless the user picked a mode. .dark also works on any subtree. */

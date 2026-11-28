@@ -1946,13 +1946,17 @@ export function App() {
         </div>
         <div className="px-2 pt-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
           <SidebarItem
-            href={formatRoute({ view: "today", boardId: null, cardId: null })}
-            onClick={navClick(openToday)}
+            asChild
             active={view === "today"}
             count={needsYouCount > 0 ? needsYouCount : undefined}
             className="mx-1 mt-1.5 mb-4"
           >
-            {navLabel(Sun, "Today")}
+            <a
+              href={formatRoute({ view: "today", boardId: null, cardId: null })}
+              onClick={navClick(openToday)}
+            >
+              {navLabel(Sun, "Today")}
+            </a>
           </SidebarItem>
           <div>
             {sortedBoards.map((item) => {
@@ -2056,57 +2060,61 @@ export function App() {
                     <div>
                       {/* Room for the pen circle, which the subnav's clip would cut. */}
                       <div className="space-y-0.5 px-3 py-1.5">
-                        <SidebarItem
-                          href={formatRoute({
-                            view: "board",
-                            boardId: item.id,
-                            cardId: null,
-                          })}
-                          onClick={navClick(() => openBoard(item.id))}
-                          active={active}
-                        >
-                          {navLabel(Kanban, "Kanban", 13)}
-                          {!!item.newCards && (
-                            <NewCardsBadge count={item.newCards} />
-                          )}
-                        </SidebarItem>
-                        {supportsPullRequests(item) && (
-                          <SidebarItem
+                        <SidebarItem asChild active={active}>
+                          <a
                             href={formatRoute({
-                              view: "pulls",
+                              view: "board",
                               boardId: item.id,
                               cardId: null,
                             })}
-                            onClick={navClick(() => openPulls(item.id))}
-                            active={pullsActive}
+                            onClick={navClick(() => openBoard(item.id))}
                           >
-                            {navLabel(GitPullRequest, "Pull requests", 13)}
+                            {navLabel(Kanban, "Kanban", 13)}
+                            {!!item.newCards && (
+                              <NewCardsBadge count={item.newCards} />
+                            )}
+                          </a>
+                        </SidebarItem>
+                        {supportsPullRequests(item) && (
+                          <SidebarItem asChild active={pullsActive}>
+                            <a
+                              href={formatRoute({
+                                view: "pulls",
+                                boardId: item.id,
+                                cardId: null,
+                              })}
+                              onClick={navClick(() => openPulls(item.id))}
+                            >
+                              {navLabel(GitPullRequest, "Pull requests", 13)}
+                            </a>
                           </SidebarItem>
                         )}
-                        <SidebarItem
-                          href={formatRoute({
-                            view: "visualizer",
-                            boardId: item.id,
-                            cardId: null,
-                          })}
-                          onClick={navClick(() => openVisualizer(item.id))}
-                          active={visualizerActive}
-                        >
-                          {navLabel(Workflow, "Visualizer", 13)}
+                        <SidebarItem asChild active={visualizerActive}>
+                          <a
+                            href={formatRoute({
+                              view: "visualizer",
+                              boardId: item.id,
+                              cardId: null,
+                            })}
+                            onClick={navClick(() => openVisualizer(item.id))}
+                          >
+                            {navLabel(Workflow, "Visualizer", 13)}
+                          </a>
                         </SidebarItem>
-                        <SidebarItem
-                          href={formatRoute({
-                            view: "chat",
-                            boardId: item.id,
-                            cardId: null,
-                          })}
-                          onClick={navClick(() => openChat(item.id))}
-                          active={chatActive}
-                        >
-                          {navLabel(MessageSquare, "Chat", 13)}
-                          {!!item.chatUnread && (
-                            <ChatUnreadBadge count={item.chatUnread} />
-                          )}
+                        <SidebarItem asChild active={chatActive}>
+                          <a
+                            href={formatRoute({
+                              view: "chat",
+                              boardId: item.id,
+                              cardId: null,
+                            })}
+                            onClick={navClick(() => openChat(item.id))}
+                          >
+                            {navLabel(MessageSquare, "Chat", 13)}
+                            {!!item.chatUnread && (
+                              <ChatUnreadBadge count={item.chatUnread} />
+                            )}
+                          </a>
                         </SidebarItem>
                       </div>
                     </div>
@@ -2140,33 +2148,44 @@ export function App() {
             </Button>
           </div>
           <div className="mx-1 mt-4 mb-3 space-y-0.5">
-            <SidebarItem
-              href={formatRoute({ view: "stats", boardId: null, cardId: null })}
-              onClick={navClick(() => openPage("stats"))}
-              active={view === "stats"}
-            >
-              {navLabel(BarChart3, "Statistics")}
+            <SidebarItem asChild active={view === "stats"}>
+              <a
+                href={formatRoute({
+                  view: "stats",
+                  boardId: null,
+                  cardId: null,
+                })}
+                onClick={navClick(() => openPage("stats"))}
+              >
+                {navLabel(BarChart3, "Statistics")}
+              </a>
             </SidebarItem>
-            <SidebarItem
-              href={formatRoute({ view: "logs", boardId: null, cardId: null })}
-              onClick={navClick(() => openPage("logs"))}
-              active={view === "logs"}
-            >
-              {navLabel(ScrollText, "Logs")}
+            <SidebarItem asChild active={view === "logs"}>
+              <a
+                href={formatRoute({
+                  view: "logs",
+                  boardId: null,
+                  cardId: null,
+                })}
+                onClick={navClick(() => openPage("logs"))}
+              >
+                {navLabel(ScrollText, "Logs")}
+              </a>
             </SidebarItem>
-            <SidebarItem
-              href={formatRoute({
-                view: "settings",
-                boardId: null,
-                cardId: null,
-              })}
-              onClick={navClick(() => {
-                setError("");
-                openPage("settings");
-              })}
-              active={view === "settings"}
-            >
-              {navLabel(Settings2, "Settings")}
+            <SidebarItem asChild active={view === "settings"}>
+              <a
+                href={formatRoute({
+                  view: "settings",
+                  boardId: null,
+                  cardId: null,
+                })}
+                onClick={navClick(() => {
+                  setError("");
+                  openPage("settings");
+                })}
+              >
+                {navLabel(Settings2, "Settings")}
+              </a>
             </SidebarItem>
           </div>
         </div>

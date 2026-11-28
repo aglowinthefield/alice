@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { Slot } from "@radix-ui/react-slot";
+import { Slot, Slottable } from "@radix-ui/react-slot";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
 import { cn } from "@/lib/utils";
 import { PenMark } from "@/components/ui/pen-mark";
@@ -20,7 +20,8 @@ export function SidebarItem({ active = false, count, asChild = false, className,
       )}
       {...props}
     >
-      {children}
+      {/* With asChild, Slottable marks the child that becomes the root; the count and circle go inside it. */}
+      <Slottable>{children}</Slottable>
       {count != null && <span className="small-print text-[11px]">{count}</span>}
       {active && <PenMark mark="circle" className="pointer-events-none absolute -inset-x-3 -inset-y-1.5 h-[calc(100%+12px)] w-[calc(100%+24px)]" />}
     </Comp>

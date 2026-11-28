@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { command, killTree } from "./platform.js";
+import { killTree } from "./platform.js";
+import { spawnPi } from "./run-temp.js";
 import { settledReply } from "./agent.js";
 import type { Card, DiscussionMessage, Run } from "./board.js";
 
@@ -26,7 +27,7 @@ export function discussionPrompt(card: Card, run: Run | undefined, history: Disc
 /** Runs Pi once, in the card's worktree when it exists, and returns its reply text. Throws a short reason on failure. */
 export function discuss({ prompt, cwd, piBin, models }: { prompt: string; cwd: string; piBin: string; models: string[] }): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(...command(piBin, ["--print", "--mode", "json", "--no-session", ...models, "--", prompt]), { cwd: existsSync(cwd) ? cwd : process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnPi(randomUUID(), piBin, ["--print", "--mode", "json", "--no-session", ...models, "--", prompt], { cwd: existsSync(cwd) ? cwd : process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
     // A screenshot the agent reads back makes one event line several MB, so the cap matches the worker's.
     const chunks: Buffer[] = [];
     let stdoutBytes = 0, stderr = "", exceeded = false;

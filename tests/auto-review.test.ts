@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Board } from "../server/board.js";
 import { Integration } from "../server/integration.js";
 import { AutoReview, promptDiff, reviewerPrompt, reviewerVerdict } from "../server/auto-review.js";
@@ -43,6 +43,22 @@ function fixture(verdict = '{"verdict":"approve","reason":"Diff is small and cor
   }
   return { dir, repo, data, board, repoBoard, auto, reviewedCard, close: () => { board.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
+
+test("the agent reviewer's scratch lands in its own TMPDIR, removed when the review ends", async () => {
+  const item = fixture();
+  try {
+    const seen = join(item.dir, "seen");
+    writeFileSync(join(item.dir, "fake-pi"), `#!/bin/sh\nd=$(mktemp -d) && printf '%s' "$d" > "${seen}"\ncat <<'EVENTS'\n${settle('{"verdict":"needs_human","reason":"Look"}')}EVENTS\n`);
+    item.board.setAutoReview(item.repoBoard.id, true);
+    // A run is reviewed only if it finished after auto-review was enabled; backdating avoids a same-millisecond tie.
+    item.board.sqlite.prepare("UPDATE boards SET autoReviewEnabledAt='2000-01-01T00:00:00.000Z' WHERE id=?").run(item.repoBoard.id);
+    item.reviewedCard();
+    await item.auto.tick();
+    const scratch = readFileSync(seen, "utf8");
+    assert.match(dirname(scratch), /[\\/]alice-run-[^/\\]+$/);
+    assert.equal(existsSync(dirname(scratch)), false);
+  } finally { item.close(); }
+});
 
 test("a Review card is the agent's turn until its auto-review finishes, then yours", async () => {
   const item = fixture('{"verdict":"needs_human","reason":"No regression test"}');

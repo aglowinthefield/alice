@@ -164,7 +164,7 @@ export function Today({
 function Section({ title, children }: { title: string; children: ReactNode }) {
   const id = `today-${title.toLowerCase().replace(/\W+/g, "-")}`;
   return (
-    <section aria-labelledby={id} className="mt-10">
+    <section aria-labelledby={id} className="mt-8">
       <h2 id={id} className="mb-3 text-sm font-semibold text-muted-foreground">
         {title}
       </h2>
@@ -308,7 +308,7 @@ function Capture({
     setAdded(`Added to ${repoName(board.repo)} Triage`);
   };
   return (
-    <form onSubmit={submit} className="mt-8">
+    <form onSubmit={submit} className="relative mt-6">
       <div className="flex gap-2">
         <input
           aria-label="Capture a card"
@@ -339,7 +339,10 @@ function Capture({
           Add card
         </Button>
       </div>
-      <p role="status" className="mt-2 min-h-4 text-xs text-muted-foreground">
+      <p
+        role="status"
+        className="absolute left-0 top-full mt-1 text-xs text-muted-foreground"
+      >
         {added}
       </p>
     </form>

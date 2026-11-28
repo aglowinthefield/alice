@@ -385,7 +385,7 @@ export function createTui({ api, board, today = false, size = () => ({ columns: 
    */
   function laneLayout(columns) {
     const strip = 4, edge = 6, list = lanes().map(lane => ({ ...lane, count: cardsIn(lane.id).length }));
-    for (const lane of list) lane.collapsed = !lane.count && (state.board.autoCollapseEmptySwimlanes ?? true);
+    for (const lane of list) lane.collapsed = !lane.count;
     const open = list.filter(lane => !lane.collapsed);
     const min = Math.max(12, Math.min(30, columns - 2 * edge - 1)), max = 44;
     const room = from => columns - 1 - (from > 0 ? edge : 0) - edge;

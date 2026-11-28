@@ -20,7 +20,7 @@ async function openApp(status: Record<string, unknown>, onUpdate?: () => unknown
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "default" },
       "/api/boards/board/cards": [card("a1b2c3d4-0000", "Fix login redirect")],
       "/api/boards/board/conflicts": [],

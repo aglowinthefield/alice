@@ -45,8 +45,8 @@ export class AutoPickup {
     for (const repoBoard of this.board.listBoards().filter(item => item.autoPickupEnabled)) {
       const blocker = this.board.autoPickupBlocker(repoBoard);
       if (!blocker) continue;
-      console.log(`[pickup ${repoBoard.repo}] paused: ${blocker.reason}`);
-      this.board.pauseAutoPickup(repoBoard.id, blocker.reason);
+      console.log(`[pickup ${repoBoard.repo}] paused: ${blocker}`);
+      this.board.pauseAutoPickup(repoBoard.id, blocker);
     }
     // One candidate query per tick, after the pauses above, rather than one per board.
     const byBoard = new Map<string, ReturnType<Board["listAutoPickupCandidates"]>>();

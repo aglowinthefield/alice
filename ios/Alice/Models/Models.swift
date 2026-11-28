@@ -146,7 +146,6 @@ struct Board: Codable, Identifiable, Hashable {
     var integration: String?
     var integrationError: String?
     var integrationWarning: String?
-    var autoCollapseEmptySwimlanes: Bool?
     var autoReviewEnabled: Bool?
     var autoPickupEnabled: Bool?
     var pickupConcurrency: Int?

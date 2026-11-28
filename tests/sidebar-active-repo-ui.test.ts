@@ -14,7 +14,7 @@ test("clicking the already open repo in the sidebar does nothing", async () => {
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/boards/board/cards") cardLoads++;
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
         "/api/boards/board/cards": [{ id: "card", title: "Open card", body: "", repo: "/tmp/repo", source: "manual", status: "triage", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }],
         "/api/boards/board/conflicts": [],

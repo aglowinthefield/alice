@@ -425,13 +425,29 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
 @view-transition { navigation: none; }
 ::view-transition-group(*), ::view-transition-image-pair(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 
-/* The desktop app hides the native title bar on macOS and the page paints under the traffic lights. */
+/* The desktop app hides the native title bar on macOS and Windows, and this strip drags the window. On macOS the page
+   paints under the traffic lights. On Windows the strip is a title bar row of its own, --titlebar-h tall, with the
+   caption buttons from src/window-controls.tsx; full-height layouts subtract it. */
+:root { --titlebar-h: 0px; }
+:root[data-desktop="windows"] { --titlebar-h: 32px; }
+:root[data-desktop="windows"] body { padding-top: var(--titlebar-h); }
 .desktop-titlebar { display: none; }
-:root[data-desktop="macos"] .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }
+:root:is([data-desktop="macos"], [data-desktop="windows"]) .desktop-titlebar { display: block; position: fixed; inset: 0 0 auto 0; height: 28px; z-index: 40; }
+:root[data-desktop="windows"] .desktop-titlebar { height: var(--titlebar-h); background: var(--sidebar); border-bottom: 1px solid var(--border); }
 :root[data-desktop="macos"] .desktop-sidebar-head { padding-top: 2.5rem; }
 :root[data-desktop="macos"] .desktop-sidebar-toggle { top: 2.25rem; }
+:root[data-desktop="windows"] .desktop-sidebar-toggle { top: calc(var(--titlebar-h) + 0.75rem); }
 
 /* Chat and discussion entries fade in when they mount: opacity only, short, so nothing shifts or reflows. */
 @keyframes chat-entry-in { from { opacity: 0; } }
 .chat-entry { animation: chat-entry-in 200ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .chat-entry { animation: none; } }
+
+/* Sidebar: a repo's pages hang off a rail under its name. The list slides open and shut, and the accent marker
+   (SubnavMarker in src/main.tsx) slides to the current page. Closed, it is hidden, so its links leave the tab order. */
+.repo-subnav { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 120ms ease-out, visibility 0s 180ms; }
+.repo-subnav[data-open="true"] { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
+.repo-subnav > div { position: relative; min-height: 0; overflow: hidden; }
+.repo-subnav > div::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 1px; background: var(--border); }
+.repo-subnav-marker { position: absolute; top: 0; left: -0.5px; width: 2px; border-radius: 1px; background: var(--primary); transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), height 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .repo-subnav, .repo-subnav-marker { transition: none; } }

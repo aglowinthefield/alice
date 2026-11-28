@@ -15,7 +15,7 @@ test("github-pr Approve shows the drafted PR, flags a title the semantic check r
       const path = new URL(route.request().url()).pathname, method = route.request().method();
       if (method === "POST") sent.push({ path, body: route.request().postDataJSON() });
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration: "github-pr", remoteUrl: "https://github.com/acme/widgets", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration: "github-pr", remoteUrl: "https://github.com/acme/widgets" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
         "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "Card body", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
         "/api/boards/board/conflicts": [],
@@ -69,7 +69,7 @@ test("Approve and update PR pushes to the open PR without asking first", async (
       const path = new URL(route.request().url()).pathname, method = route.request().method();
       if (method === "POST") sent.push({ path, body: route.request().postDataJSON() });
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration: "github-pr", remoteUrl: "https://github.com/acme/widgets", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration: "github-pr", remoteUrl: "https://github.com/acme/widgets" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
         "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "Card body", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, prNumber: 39, prState: "OPEN", prUrl: "https://github.com/acme/widgets/pull/39" }],
         "/api/boards/board/conflicts": [],
@@ -113,7 +113,7 @@ test("the PR dialog shows the push's live hook output, then the refused push's e
         return route.fulfill({ status: 400, json: { error: "push failed: the repository's pre-push hook refused it.\n\nUnused exports (1)\ncountryCode  placeEvidence.ts:79:17" } });
       }
       const data: Record<string, unknown> = {
-        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration: "github-pr", remoteUrl: "https://github.com/acme/widgets", autoCollapseEmptySwimlanes: false }],
+        "/api/boards": [{ id: "board", repo: "/tmp/repo", integration: "github-pr", remoteUrl: "https://github.com/acme/widgets" }],
         "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
         "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "Card body", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
         "/api/boards/board/conflicts": [],

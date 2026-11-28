@@ -11,7 +11,7 @@ test("Close without merging offers one-click reasons, a note for Other, and clos
     const page = await browser.newPage();
     const card = { id: "card", title: "Backfill", body: "", repo: "/tmp/repo", source: "manual", status: "review", priority: 0, createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0, attempts: 2, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn: [], blocked: false };
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card],
       "/api/boards/board/conflicts": [],

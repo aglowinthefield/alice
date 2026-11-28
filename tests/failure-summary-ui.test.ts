@@ -12,7 +12,7 @@ test("a Failed card's tile shows why it failed", async () => {
     const card = (id: string, status: string, failureSummary: string | null) => ({ id, title: `${id} card`, body: "", repo: "/tmp/repo", source: "manual", status,
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", failureSummary });
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card("broken", "failed", "Timed out after 60 min"), card("fine", "ready", null)],
       "/api/boards/board/conflicts": [],

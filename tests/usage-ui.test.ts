@@ -41,7 +41,7 @@ async function open(board: Record<string, unknown>, onPatch: (input: Record<stri
 }
 
 const baseBoard = { id: "board", repo, limitsEnabled: true, autoPickupEnabled: true, pickupConcurrency: 2, pickupDailyLimit: 6, autoPickupStarts: 1, autoPickupNextAt: null,
-  autoPickupError: "", autoCollapseEmptySwimlanes: false, autoReviewEnabled: false };
+  autoPickupError: "", autoReviewEnabled: false };
 
 test("attempts show their cost, older attempts show a dash, and the card shows its total", async () => {
   const { page, close } = await open({ ...baseBoard, cost24h: 0.5, pickupCostBudget: null, autoPickupBudgetReached: false });
@@ -65,7 +65,7 @@ test("the board shows rolling spend, a reached budget explains the wait, and the
   }));
   page.on("dialog", dialog => { dialogs++; void dialog.accept(); });
   try {
-    await page.getByText("Last 24h: $1.20 of $1.00 budget").waitFor();
+    await page.getByText("Last 24 hours: $1.20 of $1.00 budget").waitFor();
     await page.getByText(/Auto pickup waiting: daily cost budget reached/).waitFor();
     await page.getByText(/Manual starts still work/).waitFor();
     await page.getByRole("button", { name: `Edit ${repo}` }).click();
@@ -82,7 +82,7 @@ test("the board shows rolling spend, a reached budget explains the wait, and the
     await page.getByRole("button", { name: "Save budget" }).click();
     await page.getByText(/\$1\.20 spent in the last 24 hours\. Leave blank/).waitFor();
     await page.keyboard.press("Escape");
-    await page.getByText("Last 24h: $1.20", { exact: true }).waitFor();
+    await page.getByText("Last 24 hours: $1.20", { exact: true }).waitFor();
     assert.equal(await page.getByText(/daily cost budget reached/).count(), 0);
   } finally { await close(); }
 });

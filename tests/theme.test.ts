@@ -86,7 +86,7 @@ test("theme picker changes board and reopened review, then loads the saved palet
       return;
     }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
       "/api/boards/board/cards/card/runs": [{ id: "run", attempt: 1, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual" }],

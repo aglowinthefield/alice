@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { repoIcons } from "./repo-appearance.js";
 
-// Alice is the default brand mark; the repo icons stay available as alternatives.
-const brandIcons: readonly string[] = ["alice", ...repoIcons];
+// Alice is the default brand mark; her other expressions are the alternatives. alice_smile is the same face as alice.
+const brandIcons: readonly string[] = [
+  "alice",
+  ...repoIcons.filter((name) => name !== "alice_smile"),
+];
 
 const storageKey = "alice-icon";
 
@@ -53,12 +56,13 @@ export function BrandIcon() {
         title="Change icon"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="grid size-9 place-items-center rounded-lg border border-primary/20 bg-primary/10 hover:bg-primary/20"
+        className="size-10 overflow-hidden rounded-lg border border-primary/20 bg-primary/10 hover:bg-primary/20"
       >
+        {/* Zoomed on her face so the expression reads at this size. */}
         <img
           src={`/icons/${icon}.png`}
           alt=""
-          className="size-6 object-contain"
+          className="size-full origin-[50%_62%] scale-[1.6] object-cover"
         />
       </button>
       {open && (
@@ -71,12 +75,12 @@ export function BrandIcon() {
                 aria-label={name.replace(/_/g, " ")}
                 title={name.replace(/_/g, " ")}
                 onClick={() => pick(name)}
-                className={`grid size-10 place-items-center rounded-md hover:bg-accent ${name === icon ? "bg-accent ring-1 ring-primary" : ""}`}
+                className={`size-10 overflow-hidden rounded-md hover:bg-accent ${name === icon ? "bg-accent ring-1 ring-primary" : ""}`}
               >
                 <img
                   src={`/icons/${name}.png`}
                   alt=""
-                  className="size-7 object-contain"
+                  className="size-full origin-[50%_62%] scale-[1.6] object-cover"
                 />
               </button>
             ))}

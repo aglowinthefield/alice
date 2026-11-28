@@ -13,7 +13,7 @@ test("card details split the cost by kind and the tile marks cards where rework 
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts, reviewRounds: 0, runAgent: "", reviewAgent: "", cost, reworkCost });
     const run = (attempt: number, kind: string, cost: number) => ({ id: `run-${attempt}`, attempt, kind, cost, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual", agent: "" });
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card("churned", "review", 2, 2.25, 1.5), card("cheap", "review", 2, 2, 0.5)],
       "/api/boards/board/conflicts": [],

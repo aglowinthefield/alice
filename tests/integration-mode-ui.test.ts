@@ -24,7 +24,7 @@ async function open(integration: "local" | "github-pr") {
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", icon: "sprinkle_donut", color: "violet", remoteUrl: "https://github.com/acme/widgets", integration, autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo", icon: "sprinkle_donut", color: "violet", remoteUrl: "https://github.com/acme/widgets", integration }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [
         card("review", "Review card", "review"),
@@ -52,6 +52,7 @@ test("local board: header names local main, Done cards say whether they reached 
   try {
     assert.match(await page.getByTestId("integration-mode").innerText(), /Local main/);
     assert.match((await page.getByRole("tooltip").textContent())!, /does not push/);
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     const badge = (title: string) => page.getByRole("button", { name: new RegExp(title) }).getByTestId("origin-main-badge");
     assert.equal(await badge("Pushed card").innerText(), "On origin/main");
     assert.equal(await badge("Local card").innerText(), "Merged locally, not pushed");

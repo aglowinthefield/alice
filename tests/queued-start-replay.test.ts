@@ -41,7 +41,7 @@ async function stop(child: ChildProcess) {
 
 /** Queues a start while draining, restarts on the same data dir, then runs `check`. Always cleans up. */
 async function withReplay(options: { commit: boolean }, check: (state: Replay) => Promise<void>) {
-  const home = mkdtempSync(join(tmpdir(), "bakery-replay-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-replay-"));
   const children: ChildProcess[] = [];
   try {
     const repo = join(home, "code", "alpha"), dataDir = join(home, "data"), fakePi = join(home, "pi-fake");
@@ -59,7 +59,7 @@ async function withReplay(options: { commit: boolean }, check: (state: Replay) =
     const launch = async () => {
       const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
         cwd: process.cwd(),
-        env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi },
+        env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port), ALICE_PI_BIN: fakePi },
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       });
       children.push(child);

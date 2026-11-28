@@ -13,7 +13,7 @@ test("a blocked Ready card shows a waiting badge, and details list, link, add an
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts: 0, reviewRounds: 0, runAgent: "", reviewAgent: "", dependsOn, blocked });
     const cards = [card("child", "ready", ["parent", "merged"], true), card("parent", "running"), card("merged", "done"), card("free", "ready")];
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": cards,
       "/api/boards/board/conflicts": [],

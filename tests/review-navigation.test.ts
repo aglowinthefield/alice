@@ -26,7 +26,7 @@ test("changed files open their own patches and focus the heading without changin
     // Keep the query: the open diff polls `/review?fingerprint` every 4s, which is not a reload of the review.
     requests.push(`${route.request().method()} ${path}${search}`);
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
       "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
@@ -91,7 +91,7 @@ test("the gutter + button comments on the hovered diff row and the layout choice
       return;
     }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "dark" },
       "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
@@ -139,7 +139,7 @@ test("the diff theme picker repaints the patch and the choice persists", async (
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "default" },
       "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
@@ -168,12 +168,12 @@ test("the diff theme picker repaints the patch and the choice persists", async (
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
     await page.locator('[data-line-type="change-addition"]').first().waitFor();
     const picker = page.getByRole("combobox", { name: "Diff theme" });
-    assert.equal(await picker.inputValue(), "bakery");
-    const bakery = await background();
+    assert.equal(await picker.inputValue(), "alice");
+    const alice = await background();
     await picker.selectOption({ label: "Solarized" });
-    // solarized-dark's editor background, since Default is a dark Bakery palette.
+    // solarized-dark's editor background, since Default is a dark Alice palette.
     await solarized();
-    assert.notEqual(bakery, "rgb(0, 43, 54)");
+    assert.notEqual(alice, "rgb(0, 43, 54)");
     await page.reload();
     // The reload reopens the card this tab had open.
     await page.getByRole("tab", { name: /^Reviews?\b/ }).click();
@@ -191,7 +191,7 @@ test("Run again is unavailable while agent review is running and returns when it
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/start")) { starts++; await route.fulfill({ status: 500, json: { error: "Unexpected start" } }); return; }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
@@ -237,7 +237,7 @@ test("a request failure remains visible after closing card details", async () =>
       return;
     }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "dark" },
       "/api/boards/board/cards": [{ id: "ready", title: "Ready card", body: "", repo: "/tmp/repo", source: "manual", status: "ready", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }],
       "/api/boards/board/conflicts": [],
@@ -273,7 +273,7 @@ test("the side panel switches cards without leaking the previous card's review o
       { id: "ready", title: "Ready card", status: "ready" },
     ].map(card => ({ ...card, body: "", repo: "/tmp/repo", source: "manual", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0 }));
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "dark" },
       "/api/boards/board/cards": cards,
       "/api/boards/board/conflicts": [],

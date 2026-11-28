@@ -13,7 +13,7 @@ test("card details split the cost by kind and the tile marks cards where rework 
       createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 0, turnsIncomplete: 0, attempts, reviewRounds: 0, runAgent: "", reviewAgent: "", cost, reworkCost });
     const run = (attempt: number, kind: string, cost: number) => ({ id: `run-${attempt}`, attempt, kind, cost, status: "review", output: "", error: null, worktree: null, startedAt: "2026-01-01", finishedAt: "2026-01-01", startedBy: "manual", agent: "" });
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": [card("churned", "review", 2, 2.25, 1.5), card("cheap", "review", 2, 2, 0.5)],
       "/api/boards/board/conflicts": [],
@@ -38,7 +38,7 @@ test("card details split the cost by kind and the tile marks cards where rework 
     const cheap = page.getByRole("button", { name: /cheap card/ });
     await cheap.waitFor();
     assert.equal(await cheap.getByTestId("rework-cost").count(), 0, "rework at a quarter of the cost shows no marker");
-    if (process.env.BAKERY_EVIDENCE_DIR) await page.locator('section[data-status="review"]').screenshot({ path: `${process.env.BAKERY_EVIDENCE_DIR}/rework-marker.png` });
+    if (process.env.ALICE_EVIDENCE_DIR) await page.locator('section[data-status="review"]').screenshot({ path: `${process.env.ALICE_EVIDENCE_DIR}/rework-marker.png` });
 
     await churned.click();
     await page.getByRole("tab", { name: /^Attempts/ }).click();
@@ -47,7 +47,7 @@ test("card details split the cost by kind and the tile marks cards where rework 
     assert.deepEqual(await split.getByRole("listitem").allTextContents(), ["First attempt: $0.75", "CI or hook fix: $1.50"]);
     assert.match((await page.getByText(/^Card total:/).textContent()) ?? "", /\$2\.25/);
     assert.deepEqual(await page.getByTestId("run-kind").allTextContents(), ["CI or hook fix"], "only runs after the first are labelled");
-    if (process.env.BAKERY_EVIDENCE_DIR) await page.getByRole("dialog").screenshot({ path: `${process.env.BAKERY_EVIDENCE_DIR}/cost-split.png` });
+    if (process.env.ALICE_EVIDENCE_DIR) await page.getByRole("dialog").screenshot({ path: `${process.env.ALICE_EVIDENCE_DIR}/cost-split.png` });
   } finally {
     await browser.close();
     await server.close();

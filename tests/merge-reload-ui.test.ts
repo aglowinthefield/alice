@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium, type Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 
-// Approving a card on Bakery's own board merges into the checkout the dev server
+// Approving a card on Alice's own board merges into the checkout the dev server
 // serves. The open card must survive the resulting hot update or page reload.
 
 const card = (id: string, status: string, title: string) => ({
@@ -17,8 +17,8 @@ async function openCard(server: ViteDevServer, page: Page) {
     const path = new URL(route.request().url()).pathname;
     const data: Record<string, unknown> = {
       "/api/boards": [
-        { id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false },
-        { id: "other", repo: "/tmp/other", autoCollapseEmptySwimlanes: false },
+        { id: "board", repo: "/tmp/repo" },
+        { id: "other", repo: "/tmp/other" },
       ],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "side", theme: "default" },
       "/api/boards/board/cards": boardCards,
@@ -35,6 +35,7 @@ async function openCard(server: ViteDevServer, page: Page) {
     await route.fulfill({ json: data[path] });
   });
   await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+  await page.getByRole("button", { name: "Expand Done lane" }).click();
   await page.locator("section[data-status]").getByText("Polish sidebar", { exact: true }).click();
   await page.getByRole("dialog").getByText("Polish sidebar").waitFor();
 }
@@ -47,7 +48,7 @@ test("a page reload reopens the card this tab had open", async () => {
     const page = await browser.newPage();
     await openCard(server, page);
     // Another tab picking a different repo must not move this tab on reload.
-    await page.evaluate(() => localStorage.setItem("bakery-board", "other"));
+    await page.evaluate(() => localStorage.setItem("alice-board", "other"));
     await page.reload();
     await page.getByRole("dialog").getByText("Polish sidebar").waitFor();
     assert.match((await page.locator("h1").first().textContent()) ?? "", /repo/);
@@ -56,6 +57,7 @@ test("a page reload reopens the card this tab had open", async () => {
     await page.keyboard.press("Escape");
     await page.getByRole("dialog").waitFor({ state: "detached" });
     await page.reload();
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     await page.locator("section[data-status]").getByText("Polish sidebar", { exact: true }).waitFor();
     assert.equal(await page.getByRole("dialog").count(), 0);
   } finally {

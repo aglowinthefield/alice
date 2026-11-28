@@ -14,7 +14,8 @@ import { api } from "./api.js";
 import { repoName } from "./repo-appearance.js";
 import { formatCost } from "./usage.js";
 import type { Board } from "./model.js";
-import type { GroupRow, Stats } from "../server/stats.js";
+import type { GroupRow, Stats } from "../shared/wire.js";
+import { closeReasonLabels } from "./close-card.js";
 import {
   Card,
   CardContent,
@@ -197,7 +198,7 @@ function Breakdown({
                 <th className="py-1 font-normal">Name</th>
                 <th className="py-1 text-right font-normal">Runs</th>
                 <th className="py-1 text-right font-normal">Failed</th>
-                <th className="py-1 text-right font-normal">Avg run</th>
+                <th className="py-1 text-right font-normal">Average run</th>
                 <th className="py-1 text-right font-normal">Tokens</th>
                 <th className="py-1 text-right font-normal">Spend</th>
               </tr>
@@ -225,6 +226,48 @@ function Breakdown({
             </tbody>
           </table>
         </>
+      )}
+    </Panel>
+  );
+}
+
+/** Why work was thrown away: closes without merging by the reason picked when closing. */
+function CloseReasons({ rows }: { rows: Stats["closeReasons"] }) {
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
+  return (
+    <Panel
+      title="Closed without merging"
+      description="Closes in the selected range, by the reason picked."
+    >
+      {total === 0 ? (
+        <div className="py-6 text-center text-sm text-muted-foreground">
+          No cards closed without merging in this range.
+        </div>
+      ) : (
+        <table className="w-full text-xs" data-testid="close-reasons">
+          <thead className="text-left text-muted-foreground">
+            <tr>
+              <th className="py-1 font-normal">Reason</th>
+              <th className="py-1 text-right font-normal">Cards</th>
+              <th className="py-1 text-right font-normal">Share</th>
+            </tr>
+          </thead>
+          <tbody className="font-mono tabular-nums">
+            {rows.map((row) => (
+              <tr key={row.reason} className="border-t border-border">
+                <td className="py-1.5 pr-2 font-sans">
+                  {closeReasonLabels[
+                    row.reason as keyof typeof closeReasonLabels
+                  ] ?? "Not given"}
+                </td>
+                <td className="py-1.5 text-right">{row.count}</td>
+                <td className="py-1.5 text-right">
+                  {percent(row.count / total)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </Panel>
   );
@@ -340,7 +383,7 @@ export function Statistics({ boards }: { boards: Board[] }) {
                 hint="Runs that did not fail"
               />
               <Tile
-                label="Avg run time"
+                label="Average run time"
                 value={minutes(summary.avgRunMinutes)}
               />
               <Tile
@@ -574,6 +617,7 @@ export function Statistics({ boards }: { boards: Board[] }) {
                 rows={stats.byRepo}
                 label={repoName}
               />
+              <CloseReasons rows={stats.closeReasons} />
             </div>
           </>
         )}

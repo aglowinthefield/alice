@@ -35,7 +35,7 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 export async function enablePush(): Promise<void> {
   if ((await Notification.requestPermission()) !== "granted")
     throw new Error(
-      "Notification permission was not granted. Allow notifications for Bakery in your browser.",
+      "Notification permission was not granted. Allow notifications for Alice in your browser.",
     );
   const { publicKey } = await api<{ publicKey: string }>("/push/key");
   const registration = await navigator.serviceWorker.register("/sw.js");
@@ -75,7 +75,7 @@ function pushServiceError(error: unknown): Error {
   if (!/push service/i.test(message))
     return error instanceof Error ? error : new Error(message);
   return new Error(
-    `This browser could not reach its push service (${message}). In Brave, turn on Settings → Privacy and security → Use Google services for push messaging, then try again. Chromium builds without Google services cannot receive push notifications; use Chrome, Edge, Firefox or Safari.`,
+    `This browser could not reach its push service (${message}). In Brave, turn on Settings → Privacy and security → Use Google services for push messaging. Then try again. Chromium builds without Google services cannot receive push notifications. Use Chrome, Edge, Firefox or Safari.`,
   );
 }
 

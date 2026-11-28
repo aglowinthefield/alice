@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import type { LogEntry } from "../server/logs.js";
+import type { LogEntry } from "../shared/wire.js";
 
 const levels = [
   { value: "debug", label: "Debug and up" },
@@ -80,15 +80,15 @@ export function Logs() {
   }, [shown.length]);
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-[calc(100vh_-_var(--titlebar-h))] flex-col">
       <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-6 lg:px-10">
         <div>
           <h1 className="text-[27px] font-semibold tracking-[-.05em]">Logs</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            This Bakery server's output
+            This Alice server's output
             {startedAt &&
               ` since it started ${new Date(startedAt).toLocaleString()}`}
-            . The last 2,000 lines are kept.
+            . Alice keeps the last 2,000 lines.
           </p>
         </div>
         <div className="flex items-center gap-2">

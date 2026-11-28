@@ -1,14 +1,30 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { request as httpRequest } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emptyAgentModels } from "../server/agent-models.js";
+import { emptyAgentModels } from "../shared/agent-models.js";
 
+/**
+ * Resolves once the server answers, and fails at once if it exits first. A cold `tsx` start on a busy CI runner
+ * (macOS, four test files at a time) can take more than 5 seconds, so the bound is a backstop well under the test
+ * timeout, not a speed requirement.
+ */
+async function serverStarted(url: string, child: ChildProcess, output: () => string): Promise<void> {
+  const backstop = Date.now() + 60_000;
+  while (true) {
+    try { await fetch(`${url}/api/boards`); return; }
+    catch {
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Server exited before it started: ${output()}`);
+      if (Date.now() > backstop) throw new Error(`Server did not start within 60 seconds: ${output()}`);
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+}
 async function freePort(): Promise<number> {
   const listener = createServer();
   await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
@@ -27,7 +43,7 @@ function prefs(data: Record<string, unknown>) {
 }
 
 test("repository boards expand home paths, inherit roots, and isolate cards", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-api-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-api-"));
   const alpha = join(home, "code", "alpha"), beta = join(home, "code", "beta"), gamma = join(home, "code", "gamma");
   mkdirSync(alpha, { recursive: true }); mkdirSync(beta); mkdirSync(gamma);
   mkdirSync(join(home, "code", "alpine"));
@@ -36,7 +52,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port) },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -47,14 +63,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     // /api/status reports package.json's version and the short Git commit the server started on.
     const status = (await request("/status")).data;
     assert.equal(status.version, JSON.parse(readFileSync("package.json", "utf8")).version);
@@ -64,7 +73,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     for (const [host, origin, expected] of [
       ["127.0.0.1:4317", "http://127.0.0.1:4317", 200],
       ["localhost:4317", "http://localhost:4317", 200],
-      ["bakery.localhost:49000", "http://bakery.localhost:49000", 200],
+      ["alice.localhost:49000", "http://alice.localhost:49000", 200],
       ["127.0.0.1:4317", "http://127.0.0.1:5173", 200],
       ["127.0.0.1:4317", "http://127.0.0.1:49000", 403],
       ["127.0.0.1:4317", "https://untrusted.example", 403],
@@ -87,19 +96,20 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
       if (expected === 403)
         assert.equal(JSON.parse(response.body).error, host.startsWith("untrusted.") ? "Local access only" : "Origin rejected");
     }
-    assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
+    // Windows has no POSIX mode bits; the data directory is private through the user profile's ACL.
+    if (process.platform !== "win32") assert.equal(statSync(join(home, "data")).mode & 0o777, 0o700);
     // The Logs view: the server's own output, including a debug line for each failed request.
     assert.equal((await request("/logs?after=x")).status, 400);
     const logs = (await request("/logs")).data as { startedAt: string; entries: { seq: number; level: string; message: string }[] };
-    assert.ok(logs.entries.some(entry => entry.level === "info" && entry.message === `Bakery listening on http://127.0.0.1:${port}`));
+    assert.ok(logs.entries.some(entry => entry.level === "info" && entry.message === `Alice listening on http://127.0.0.1:${port}`));
     assert.ok(logs.entries.some(entry => entry.level === "debug" && entry.message === "GET /api/logs?after=x -> 400: after must be a whole number"));
     assert.deepEqual((await request(`/logs?after=${logs.entries.at(-1)!.seq}`)).data.entries, []);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Fal")).data, ["~/code/alpha/", "~/code/alpine/"]);
-    assert.deepEqual((await request(`/path-suggestions?path=${encodeURIComponent(join(home, "code") + "/al")}`)).data, [alpha + "/", join(home, "code", "alpine") + "/"]);
+    assert.deepEqual((await request(`/path-suggestions?path=${encodeURIComponent(join(home, "code") + "/al")}`)).data, ["alpha", "alpine"].map(name => `${join(home, "code")}/${name}/`));
     assert.deepEqual((await request("/path-suggestions?path=~%2Fcode%2Falpha%2F")).data, ["~/code/alpha/subfolder/"]);
     assert.deepEqual((await request("/path-suggestions?path=code%2Fal")).data, []);
     assert.deepEqual((await request("/path-suggestions?path=~%2Fmissing%2Fa")).data, []);
-    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha")}`)).data.root, realpathSync(alpha));
+    assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha")}`)).data.root, realpathSync.native(alpha));
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpine")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code")}`)).status, 400);
     assert.equal((await request(`/repository-root?path=${encodeURIComponent("~/code/alpha/subfolder")}`)).status, 400);
@@ -125,9 +135,8 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request("/boards", "POST", { repo: "~/code/alpha" })).status, 201);
     const addedAt = new Date().toISOString();
     const first = (await request("/boards")).data[0];
-    assert.equal(first.repo, realpathSync(alpha));
-    assert.deepEqual([first.icon, first.color], ["sprinkle_donut", "violet"]);
-    assert.equal(first.autoCollapseEmptySwimlanes, false);
+    assert.equal(first.repo, realpathSync.native(alpha));
+    assert.deepEqual([first.icon, first.color], ["alice_smile", "violet"]);
     assert.equal(first.autoReviewEnabled, true, "a new board starts with auto-review on");
     assert.ok(first.autoReviewEnabledAt && first.autoReviewEnabledAt <= addedAt, "auto-review is on from when the board was added");
     assert.equal(first.autoPickupEnabled, false);
@@ -149,32 +158,30 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${second.id}/chats/${chat.id}`, "PATCH", { model: "has space", thinking: "low" })).status, 400);
     assert.equal((await request(`/boards/${second.id}/chats`)).data.find((item: { id: string }) => item.id === chat.id).thinking, "minimal");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "unknown", color: "coral" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "red; background:url(x)" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant" })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral", autoCollapseEmptySwimlanes: true })).status, 400);
-    const appearance = await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral" });
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "red; background:url(x)" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "coral", limitsEnabled: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { icon: "croissant", color: "coral" })).status, 400, "the bakery icons are retired");
+    const appearance = await request(`/boards/${first.id}/settings`, "PATCH", { icon: "alice_stern", color: "coral" });
     assert.equal(appearance.status, 200);
-    assert.deepEqual([appearance.data.icon, appearance.data.color], ["croissant", "coral"]);
+    assert.deepEqual([appearance.data.icon, appearance.data.color], ["alice_stern", "coral"]);
     assert.deepEqual([(await request("/boards")).data.find((item: { id: string }) => item.id === first.id).icon,
-      (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["croissant", "violet"]);
+      (await request("/boards")).data.find((item: { id: string }) => item.id === second.id).color], ["alice_stern", "violet"]);
     assert.equal(first.remoteUrl, "");
     for (const remoteUrl of ["javascript:alert(1)", "github.com/owner/repo", `https://example.com/${"x".repeat(500)}`, 42])
       assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl })).status, 400);
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "https://github.com/o/r", autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "https://github.com/o/r", limitsEnabled: true })).status, 400);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: " https://github.com/o/r " })).data.remoteUrl, "https://github.com/o/r");
     assert.deepEqual((await request("/boards")).data.map((item: { id: string; remoteUrl: string }) => [item.id, item.remoteUrl]).sort(),
       [[first.id, "https://github.com/o/r"], [second.id, ""]].sort());
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { remoteUrl: "" })).data.remoteUrl, "");
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: "yes" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: true })).status, 400, "the removed setting is refused");
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", {})).status, 400);
-    assert.equal((await request(`/boards/missing/settings`, "PATCH", { autoCollapseEmptySwimlanes: true })).status, 404);
-    const settings = await request(`/boards/${first.id}/settings`, "PATCH", { autoCollapseEmptySwimlanes: true });
-    assert.equal(settings.status, 200);
-    assert.equal(settings.data.autoCollapseEmptySwimlanes, true);
+    assert.equal((await request(`/boards/missing/settings`, "PATCH", { limitsEnabled: true })).status, 404);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: "yes" })).status, 400);
     const off = (await request(`/boards/${second.id}/settings`, "PATCH", { autoReviewEnabled: false })).data;
     assert.deepEqual([off.autoReviewEnabled, off.autoReviewEnabledAt], [false, null], "the per-board toggle still turns auto-review off");
-    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true, autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true, limitsEnabled: true })).status, 400);
     const auto = await request(`/boards/${first.id}/settings`, "PATCH", { autoReviewEnabled: true });
     assert.equal(auto.status, 200);
     assert.equal(auto.data.autoReviewEnabled, true);
@@ -206,10 +213,9 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/auto-pickup/reset-limit`, "POST")).status, 400);
     assert.equal((await request(`/boards/missing/auto-pickup/reset-limit`, "POST")).status, 404);
     assert.equal((await request(`/boards/${first.id}/settings`, "PATCH", { autoPickupEnabled: false, pickupConcurrency: 2 })).data.pickupDailyLimit, 99);
-    assert.equal((await request("/boards")).data.find((item: { id: string }) => item.id === second.id).autoCollapseEmptySwimlanes, false);
     execFileSync("git", ["-C", alpha, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "initial"]);
     const card = (await request(`/boards/${first.id}/cards`, "POST", { title: "Alpha", body: "No Pi" })).data;
-    assert.equal(card.repo, realpathSync(alpha));
+    assert.equal(card.repo, realpathSync.native(alpha));
     assert.equal(card.status, "triage");
     assert.equal(card.priority, 0, "new cards default to Normal");
     for (const priority of ["critical", "HIGH", 101, -101, 0.5, null])
@@ -230,6 +236,12 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Long", body: "", idempotencyKey: "k".repeat(201) })).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Blank", body: "", idempotencyKey: " " })).status, 400);
     assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Number", body: "", idempotencyKey: 7 })).status, 400);
+    assert.equal(card.source, "api", "a caller that names no source is recorded as api");
+    assert.equal(keyed.data.source, "api");
+    for (const source of ["Hermes", "", "a b", 7, "x".repeat(41)])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Bad", body: "", source })).data.error, /Source must be a lower-case name/);
+    for (const source of ["manual", "plan", "sentinel", "pr-comment"])
+      assert.match((await request(`/boards/${first.id}/cards`, "POST", { title: "Claimed", body: "", source })).data.error, /set by Alice itself/);
     assert.match((await request(`/boards/${first.id}/cards/${card.id}/start`, "POST")).data.error, /Move.*Ready/);
     assert.deepEqual((await request(`/boards/${first.id}/cards/${card.id}/runs`)).data, []);
     assert.deepEqual(await request(`/boards/${first.id}/cards/${card.id}/push-progress`), { status: 200, data: null }, "card details poll push progress");
@@ -265,21 +277,43 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
     assert.equal((await request(`/boards/${first.id}`, "PATCH", { repo: beta })).status, 400);
     const moved = await request(`/boards/${first.id}`, "PATCH", { repo: "~/code/gamma" });
-    assert.equal(moved.data.repo, realpathSync(gamma));
+    assert.equal(moved.data.repo, realpathSync.native(gamma));
     assert.equal(moved.status, 200);
-    assert.equal(moved.data.autoCollapseEmptySwimlanes, true);
-    assert.deepEqual([moved.data.icon, moved.data.color], ["croissant", "coral"]);
-    assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync(gamma));
+    assert.deepEqual([moved.data.icon, moved.data.color], ["alice_stern", "coral"]);
+    assert.equal((await request(`/boards/${first.id}/cards`)).data[0].repo, realpathSync.native(gamma));
     assert.equal((await request(`/boards/${first.id}`, "DELETE")).status, 200);
     assert.equal((await request(`/boards/${first.id}/cards`)).status, 404);
     assert.deepEqual(await everyTitle(), ["Beta keyed"]);
     assert.equal((await request("/boards")).data.length, 1);
     const restored = await request("/boards", "POST", { repo: gamma });
     assert.equal(restored.data.id, first.id);
-    assert.equal(restored.data.autoCollapseEmptySwimlanes, true);
     assert.equal(restored.data.autoReviewEnabled, false, "re-adding an existing board keeps its auto-review setting");
-    assert.deepEqual([restored.data.icon, restored.data.color], ["croissant", "coral"]);
+    assert.deepEqual([restored.data.icon, restored.data.color], ["alice_stern", "coral"]);
     assert.ok((await request(`/boards/${first.id}/cards`)).data.some((item: { id: string }) => item.id === card.id));
+    // Close without merging takes an optional reason from a fixed list, and a note only alongside one.
+    const dropped = (await request(`/boards/${first.id}/cards`, "POST", { title: "Dropped", body: "" })).data;
+    assert.match((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { reason: "boring" })).data.error, /reason must be one of duplicate, wrong-approach/);
+    assert.match((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { note: "why" })).data.error, /A note needs a reason/);
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { note: "x".repeat(501), reason: "other" })).status, 400);
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/close`, "POST", { reason: "superseded", note: "Replaced by the new importer" })).data.status, "done");
+    assert.equal((await request(`/boards/${first.id}/cards/${dropped.id}/history`)).data.at(-1).detail, "Reason: Superseded\nReplaced by the new importer");
+    assert.deepEqual((await request(`/stats?days=30`)).data.closeReasons, [{ reason: "superseded", count: 1 }]);
+    // A POST with no body and no Content-Type, as older clients send, still closes without a reason; a body must be JSON.
+    const bare = (await request(`/boards/${first.id}/cards`, "POST", { title: "Bare", body: "" })).data;
+    const raw = (body?: string, type?: string) => fetch(`${url}/api/boards/${first.id}/cards/${bare.id}/close`, { method: "POST", headers: type ? { "Content-Type": type } : undefined, body });
+    assert.equal((await raw("reason=duplicate", "text/plain")).status, 400);
+    assert.equal((await raw("{nope", "application/json")).status, 400);
+    assert.equal((await raw("[]", "application/json")).status, 400);
+    const closedBare = await raw();
+    assert.equal(closedBare.status, 200);
+    assert.equal((await closedBare.json()).status, "done");
+    assert.deepEqual((await request(`/stats?days=30`)).data.closeReasons, [{ reason: "superseded", count: 1 }, { reason: "", count: 1 }]);
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Typed", body: "", origin: "ui" })).data.source, "ui");
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Agent", body: "", source: "hermes" })).data.source, "hermes");
+    assert.equal((await request(`/boards/${first.id}/cards`, "POST", { title: "Follow-up", body: "", source: "follow-up", idempotencyKey: "follow-up:run:0" })).data.source, "follow-up");
+  } catch (error) {
+    // A reset connection says nothing about why the server went away, so keep what it printed and how it ended.
+    throw new Error(`${error instanceof Error ? error.stack : error}\nserver exit=${child.exitCode} signal=${child.signalCode} stderr: ${output}`, { cause: error });
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
@@ -290,7 +324,7 @@ test("repository boards expand home paths, inherit roots, and isolate cards", as
 });
 
 test("Pi model settings validate per phase and the model list comes from pi --list-models", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-api-models-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-api-models-"));
   const repo = join(home, "repo"), fakePi = join(home, "pi-fake"), calls = join(home, "calls.txt");
   execFileSync("git", ["init", "-q", repo]);
   writeFileSync(fakePi, `#!/bin/sh
@@ -302,7 +336,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -313,14 +347,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     writeFileSync(join(home, "fail"), "");
     const failed = await request("/models");
     assert.equal(failed.status, 200);
@@ -337,7 +364,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
     assert.deepEqual((await request("/settings", "PATCH", { agentModels: global })).data.agentModels, global);
     const board = (await request("/boards", "POST", { repo })).data;
     assert.deepEqual(board.agentModels, emptyAgentModels());
-    assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: {}, autoCollapseEmptySwimlanes: true })).status, 400);
+    assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: {}, limitsEnabled: true })).status, 400);
     assert.equal((await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { conflict: { model: "-x" } } })).status, 400);
     const updated = await request(`/boards/${board.id}/settings`, "PATCH", { agentModels: { conflict: { model: " openai-codex/gpt-5.5 ", thinking: "xhigh" } } });
     assert.equal(updated.status, 200);
@@ -359,7 +386,7 @@ printf '%s\\n' 'provider      model              context  max-out  thinking  ima
 });
 
 test("POST start while the server drains answers 202 queued and does not start a run", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-drain-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-drain-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -367,7 +394,7 @@ test("POST start while the server drains answers 202 queued and does not start a
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port) },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
@@ -378,14 +405,7 @@ test("POST start while the server drains answers 202 queued and does not start a
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Queued", body: "" })).data;
     assert.equal((await request(`/boards/${board.id}/cards/${card.id}/status`, "POST", { status: "ready" })).data.status, "ready");
@@ -408,7 +428,7 @@ test("POST start while the server drains answers 202 queued and does not start a
 });
 
 test("card lists report the live tool and turn of a running card, and null once it finishes", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-live-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-live-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -428,7 +448,7 @@ ${event({ type: "agent_settled", aborted: false })}
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -439,14 +459,7 @@ ${event({ type: "agent_settled", aborted: false })}
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Live", body: "" })).data;
     const lists = async () => [
@@ -480,7 +493,7 @@ ${event({ type: "agent_settled", aborted: false })}
 });
 
 test("requesting changes starts the next attempt at once and sends the comments to Pi", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-reqchanges-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-reqchanges-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -494,7 +507,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -505,14 +518,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const card = (await request(`/boards/${board.id}/cards`, "POST", { title: "Rework", body: "" })).data;
     const base = `/boards/${board.id}/cards/${card.id}`;
@@ -543,7 +549,7 @@ echo '${JSON.stringify({ type: "agent_settled", aborted: false })}'
 });
 
 test("requesting changes while the pushed PR waits on GitHub keeps the comments and starts nothing, even during a drain", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-reqwait-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-reqwait-"));
   const repo = join(home, "code", "alpha");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -554,10 +560,10 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
   const port = await freePort();
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: join(home, "data"), BAKERY_PORT: String(port), BAKERY_PI_BIN: fakePi, BAKERY_WT_BIN: join(home, "no-wt") },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, USERPROFILE: home, ALICE_DATA_DIR: join(home, "data"), ALICE_PORT: String(port), ALICE_PI_BIN: fakePi, ALICE_WT_BIN: join(home, "no-wt") },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
-  let output = "";
+  let output = "", db: DatabaseSync | undefined;
   child.stderr?.on("data", chunk => { output += chunk.toString(); });
   try {
     const url = `http://127.0.0.1:${port}`;
@@ -565,14 +571,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       const response = await fetch(`${url}/api${path}`, { method, headers: input ? { "Content-Type": "application/json" } : undefined, body: input ? JSON.stringify(input) : undefined });
       return { status: response.status, data: await response.json() };
     }
-    const deadline = Date.now() + 5000;
-    while (true) {
-      try { await fetch(`${url}/api/boards`); break; }
-      catch {
-        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`Server did not start: ${output}`);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    }
+    await serverStarted(url, child, () => output);
     const board = (await request("/boards", "POST", { repo })).data;
     const toReview = async (title: string) => {
       const card = (await request(`/boards/${board.id}/cards`, "POST", { title, body: "" })).data;
@@ -586,11 +585,11 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
       }
       return { card, base };
     };
-    const db = new DatabaseSync(join(home, "data", "bakery.sqlite"));
+    db = new DatabaseSync(join(home, "data", "alice.sqlite"));
     const first = await toReview("Waiting"), second = await toReview("Draining");
-    db.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
+    db!.prepare("UPDATE boards SET integration='github-pr' WHERE id=?").run(board.id);
     const requestWhileWaiting = async ({ card, base }: { card: { id: string }; base: string }) => {
-      db.prepare("UPDATE cards SET prState='MERGED' WHERE id=?").run(card.id);
+      db!.prepare("UPDATE cards SET prState='MERGED' WHERE id=?").run(card.id);
       const listed = async () => ((await request(`/boards/${board.id}/cards`)).data as { id: string; reviewWait: string; startQueued: boolean }[]).find(item => item.id === card.id)!;
       assert.equal((await listed()).reviewWait, "github");
       const fingerprint = (await request(`${base}/review?fingerprint=1`)).data.fingerprint;
@@ -609,6 +608,7 @@ test("requesting changes while the pushed PR waits on GitHub keeps the comments 
     await drained;
     await requestWhileWaiting(second);
   } finally {
+    db?.close(); // An open handle keeps board.sqlite locked on Windows.
     if (child.exitCode === null) {
       child.kill("SIGTERM");
       await new Promise(resolve => child.once("close", resolve));

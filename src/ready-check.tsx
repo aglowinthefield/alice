@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
-import { readyFlags, type ReadyFlag } from "./card-lint.js";
+import { planningCard, readyFlags, type ReadyFlag } from "./card-lint.js";
+import { api } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import {
   Dialog,
@@ -10,11 +11,27 @@ import {
 } from "./components/ui/dialog.js";
 import type { Card } from "./model.js";
 
-/** What the person chose: move anyway, edit the (first flagged) card, or close the dialog and move nothing. */
+/**
+ * What the person chose: move anyway, edit the (first flagged) card, turn the wide cards into planning cards and then
+ * move everything, or close the dialog and move nothing.
+ */
 export type ReadyChoice =
   | { choice: "ready" }
   | { choice: "edit"; card: Card }
+  | { choice: "plan"; cards: Card[] }
   | { choice: "cancel" };
+
+/**
+ * Rewrites each card to ask for a plan instead of code (see planningCard). Its run then ends with a alice-plan block,
+ * which Alice turns into small Triage cards. Call it before moving the cards to Ready.
+ */
+export async function turnIntoPlans(boardId: string, cards: Card[]) {
+  for (const card of cards)
+    await api(`/boards/${boardId}/cards/${card.id}`, {
+      method: "PATCH",
+      body: JSON.stringify(planningCard(card)),
+    });
+}
 
 type Flagged = { card: Card; flags: ReadyFlag[] };
 type Ask = {
@@ -59,6 +76,10 @@ export function ReadyCheckHost() {
     setOpen(false);
   };
   const several = (ask?.total ?? 0) > 1;
+  const wide =
+    ask?.flagged
+      .filter(({ flags }) => flags.some((flag) => flag.rule === "wide"))
+      .map(({ card }) => card) ?? [];
   return (
     <Dialog
       open={open}
@@ -74,6 +95,8 @@ export function ReadyCheckHost() {
           Reviewers often send cards like {several ? "these" : "this"} back.
           Edit {several ? "the first one" : "it"} now, or move{" "}
           {several ? "them" : "it"} to Ready anyway.
+          {wide.length > 0 &&
+            ` Turn into a plan rewrites ${several ? (wide.length > 1 ? `the ${wide.length} wide cards` : "the wide card") : "it"} to ask for a breakdown instead of code. The run proposes small cards for you to review.`}
         </DialogDescription>
         <div
           className="mt-4 max-h-[50vh] space-y-3 overflow-y-auto"
@@ -117,6 +140,14 @@ export function ReadyCheckHost() {
           >
             Edit
           </Button>
+          {wide.length > 0 && (
+            <Button
+              variant="outline"
+              onClick={() => answer({ choice: "plan", cards: wide })}
+            >
+              Turn into a plan
+            </Button>
+          )}
           <Button onClick={() => answer({ choice: "ready" })}>
             Ready anyway
           </Button>

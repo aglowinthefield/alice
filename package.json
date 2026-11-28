@@ -1,29 +1,27 @@
 {
-  "name": "bakery",
+  "name": "alice",
   "version": "0.1.0",
   "license": "FSL-1.1-ALv2",
   "private": true,
   "type": "module",
   "bin": {
-    "bakery-cli": "./scripts/bakery-cli.mjs",
-    "bakery": "./scripts/bakery-cli.mjs"
+    "alice": "./scripts/alice.mjs"
   },
   "scripts": {
-    "dev": "concurrently -k \"node scripts/dev-server.mjs\" \"BAKERY_VITE_PORT=15173 vite --host 127.0.0.1\"",
+    "dev": "concurrently -k \"node scripts/dev-server.mjs\" \"ALICE_VITE_PORT=15173 vite --host 127.0.0.1\"",
     "build": "npm run format:check && npm run lint && tsrs -b && vite build",
     "dev:ui": "vite --host 127.0.0.1",
-    "prototype:colleagues": "BAKERY_VITE_PORT=5180 vite --host 127.0.0.1",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "desktop:test": "cargo test --manifest-path src-tauri/Cargo.toml && node --test tests/desktop-ui.test.mjs",
     "start": "tsx server/index.ts",
     "test": "node --import tsx --import ./tests/setup.ts --test --test-concurrency=4 --test-force-exit --test-timeout=120000 tests/*.test.ts",
-    "bakery": "node scripts/bakery-cli.mjs",
+    "alice": "node scripts/alice.mjs",
     "release": "node scripts/release.mjs",
     "lint": "oxlint",
     "design:lint": "npx -y -p @google/design.md designmd lint DESIGN.md",
-    "format": "oxfmt src/entry.tsx src/main.tsx src/route.ts src/features.ts src/build-features.ts src/visualizer/visualizer.tsx src/chat.tsx src/sentinels.tsx src/chat-format.ts src/chat-sidebar.ts src/card-details.tsx src/discussion.tsx src/attachments.tsx src/card-lint.ts src/ready-check.tsx src/review.tsx src/settings.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/run-kinds.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/chrome.tsx src/visualizer/graph.ts src/visualizer/layout.ts src/visualizer/look.ts src/visualizer/scene.ts src/visualizer/shaders.ts src/visualizer/svg-graph.tsx src/prototype/colleagues/*.ts src/prototype/colleagues/*.tsx",
-    "format:check": "oxfmt --check src/entry.tsx src/main.tsx src/route.ts src/features.ts src/build-features.ts src/visualizer/visualizer.tsx src/chat.tsx src/sentinels.tsx src/chat-format.ts src/chat-sidebar.ts src/card-details.tsx src/discussion.tsx src/attachments.tsx src/card-lint.ts src/ready-check.tsx src/review.tsx src/settings.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/run-kinds.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/chrome.tsx src/visualizer/graph.ts src/visualizer/layout.ts src/visualizer/look.ts src/visualizer/scene.ts src/visualizer/shaders.ts src/visualizer/svg-graph.tsx src/prototype/colleagues/*.ts src/prototype/colleagues/*.tsx"
+    "format": "oxfmt src/entry.tsx src/main.tsx src/route.ts src/visualizer/visualizer.tsx src/chat.tsx src/conflict-hotspots.tsx src/gitattributes.ts src/chat-format.ts src/chat-sidebar.ts src/card-details.tsx src/discussion.tsx src/attachments.tsx src/card-lint.ts src/ready-check.tsx src/review.tsx src/settings.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/run-kinds.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/command-palette.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/chrome.tsx src/visualizer/graph.ts src/visualizer/layout.ts src/visualizer/look.ts src/visualizer/scene.ts src/visualizer/shaders.ts src/visualizer/svg-graph.tsx src/stale-review.ts shared/*.ts src/close-card.tsx src/window-controls.tsx",
+    "format:check": "oxfmt --check src/entry.tsx src/main.tsx src/route.ts src/visualizer/visualizer.tsx src/chat.tsx src/conflict-hotspots.tsx src/gitattributes.ts src/chat-format.ts src/chat-sidebar.ts src/card-details.tsx src/discussion.tsx src/attachments.tsx src/card-lint.ts src/ready-check.tsx src/review.tsx src/settings.tsx src/attempts.tsx src/api.ts src/model.ts src/markdown.ts src/markdown-view.tsx src/usage.ts src/run-kinds.ts src/today.tsx src/repo-badge.tsx src/local-merges.tsx src/pr-dialog.tsx src/pr-title.ts src/push-progress.tsx src/diff-themes.ts src/themes.ts src/statistics.tsx src/logs.tsx src/command-palette.tsx src/components/ui/chart.tsx src/components/ui/card.tsx src/visualizer/chrome.tsx src/visualizer/graph.ts src/visualizer/layout.ts src/visualizer/look.ts src/visualizer/scene.ts src/visualizer/shaders.ts src/visualizer/svg-graph.tsx src/stale-review.ts shared/*.ts src/close-card.tsx src/window-controls.tsx"
   },
   "dependencies": {
     "@pierre/diffs": "^1.6.2",

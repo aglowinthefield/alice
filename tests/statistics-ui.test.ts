@@ -16,11 +16,11 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await server?.close(); });
 
-const board = { autoCollapseEmptySwimlanes: false, autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
+const board = { autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
 const boards = [{ ...board, id: "board-a", repo: "/code/alpha" }, { ...board, id: "board-b", repo: "/code/beta" }];
 const now = Date.now();
 const run = (over: object) => ({ repo: "/code/alpha", cardId: "c", status: "review", startedBy: "manual", agent: "pi · sonnet", ciFix: 0, startedAt: new Date(now - 3_600_000).toISOString(), finishedAt: new Date(now - 3_000_000).toISOString(), cost: 1.5, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100, cacheTasks: 0, cacheHits: 0, cacheSavedMs: 0, ...over });
-const data = { runs: [run({}), run({ status: "failed", cost: 0.5 }), run({ repo: "/code/beta", agent: "pi · opus", startedBy: "auto" })], reviews: [], cards: [] };
+const data = { runs: [run({}), run({ status: "failed", cost: 0.5 }), run({ repo: "/code/beta", agent: "pi · opus", startedBy: "auto" })], reviews: [], cards: [], closes: [{ repo: "/code/alpha", at: new Date(now - 3_600_000).toISOString(), reason: "duplicate" }, { repo: "/code/alpha", at: new Date(now - 3_600_000).toISOString(), reason: "" }] };
 
 test("Statistics charts the aggregated stats and refetches when the range or repository changes", async () => {
   const page = await browser.newPage();
@@ -42,6 +42,8 @@ test("Statistics charts the aggregated stats and refetches when the range or rep
     await page.getByRole("heading", { name: "Statistics" }).waitFor();
     await page.getByText("$3.50").first().waitFor();
     assert.equal(await page.locator(".recharts-wrapper").count(), 6);
+    await page.getByTestId("close-reasons").getByText("Duplicate").waitFor();
+    assert.deepEqual(await page.getByTestId("close-reasons").locator("tbody tr").allInnerTexts(), ["Duplicate\t1\t50%", "Not given\t1\t50%"]);
     assert.deepEqual(queries, ["?days=30"]);
     await page.getByRole("combobox", { name: "Time range" }).selectOption("7");
     await page.getByRole("combobox", { name: "Repository" }).selectOption({ label: "beta" });

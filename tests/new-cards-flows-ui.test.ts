@@ -78,7 +78,6 @@ async function run(
           {
             id: "board",
             repo: "/tmp/repo",
-            autoCollapseEmptySwimlanes: false,
             newCards: options.count
               ? options.count(state)
               : state.acknowledged
@@ -119,17 +118,26 @@ test("a slow acknowledgment still highlights after a poll already reads zero new
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let requested = () => {};
+  const acknowledging = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
   await run(
     {
       seen: async () => {
+        requested();
         await held;
       },
       // The server clears the count as soon as the acknowledgment arrives, before its response reaches the screen.
       count: (state) => (state.seenCalls.length > 0 ? 0 : 1),
     },
     async (page) => {
-      await page.waitForFunction(() => true);
-      await page.waitForTimeout(2600); // at least one 2s poll lands with a zero count while the acknowledgment is held
+      await acknowledging;
+      // The badge showed the one new card, or the page would not have acknowledged it. Only a poll that reads zero
+      // while the acknowledgment is held hides it.
+      await page
+        .getByRole("status", { name: "1 new card" })
+        .waitFor({ state: "hidden" });
       release();
       await tile(page, "Made by the CLI")
         .locator("xpath=self::*[@data-new]")

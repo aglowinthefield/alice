@@ -12,6 +12,13 @@ async function board(page: Page, initial: ReturnType<typeof card>[]) {
   const requests: string[] = [];
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname, method = route.request().method();
+    if (method === "PATCH") {
+      const body = route.request().postDataJSON() ?? {};
+      requests.push(`PATCH ${path} ${JSON.stringify(body)}`);
+      const id = path.match(/\/cards\/(\w+)$/)?.[1];
+      cards = cards.map(item => item.id === id ? { ...item, title: body.title, body: body.body } : item);
+      await route.fulfill({ json: cards.find(item => item.id === id) ?? {} }); return;
+    }
     if (method === "POST") {
       const body = route.request().postDataJSON() ?? {};
       requests.push(`${path} ${JSON.stringify(body)}`);
@@ -20,7 +27,7 @@ async function board(page: Page, initial: ReturnType<typeof card>[]) {
       await route.fulfill({ json: cards.find(item => item.id === status?.[1]) ?? {} }); return;
     }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": cards,
       "/api/boards/board/conflicts": [],
@@ -69,8 +76,11 @@ test("Move to Ready in the card's details flags a physical-device ask and moves 
     const flags = check.getByTestId("ready-flags");
     assert.match(await flags.innerText(), /Needs a physical device, which the agent does not have\s+“Verify on a physical iPhone before review\.”/);
     assert.doesNotMatch(await flags.innerText(), /acceptance/i, "the card has acceptance criteria");
-    // Evidence for review: BAKERY_READY_CHECK_SHOT=path.png saves the dialog.
-    if (process.env.BAKERY_READY_CHECK_SHOT) await page.screenshot({ path: process.env.BAKERY_READY_CHECK_SHOT });
+    // Evidence for review: ALICE_READY_CHECK_SHOT=path.png saves the dialog.
+    if (process.env.ALICE_READY_CHECK_SHOT) {
+      await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== "running"));
+      await page.screenshot({ path: process.env.ALICE_READY_CHECK_SHOT });
+    }
     assert.equal(requests.length, 1, "nothing moves while the check is open");
     await check.getByRole("button", { name: "Ready anyway" }).click();
     await page.getByRole("button", { name: "Move to Ready" }).waitFor({ state: "detached" });
@@ -104,5 +114,40 @@ test("moving several Triage cards to Ready lists each flagged card once", async 
     await check.getByRole("button", { name: "Ready anyway" }).click();
     await page.locator('section[data-status="ready"]').getByRole("button", { name: /vague card/ }).waitFor();
     assert.equal(requests.length, 3);
+  } finally { await browser.close(); await server.close(); }
+});
+
+test("a wide card offers Turn into a plan, which rewrites it as a planning card and moves it to Ready", async () => {
+  const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await server.listen();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const routes = ["/settings", "/settings/profile", "/settings/billing", "/settings/team", "/settings/keys", "/boards/:id",
+      "/boards/:id/cards", "/statistics", "/logs", "/today"].map(route => `- \`${route}\``).join("\n");
+    const requests = await board(page, [card("routes", `Move these routes to the file router:\n${routes}\n\n## Acceptance\n- Each route renders.`)]);
+    await page.goto(new URL("/board/board", server.resolvedUrls!.local[0]).href);
+    const lane = (status: string) => page.locator(`section[data-status="${status}"]`);
+    await lane("triage").getByRole("button", { name: /routes card/ }).waitFor({ timeout: 30_000 });
+    await lane("triage").getByRole("button", { name: /routes card/ }).click();
+    await page.getByRole("button", { name: "Move to Ready" }).click();
+    const check = page.getByRole("dialog", { name: "This card may need another pass" });
+    await check.waitFor();
+    assert.match(await check.getByTestId("ready-flags").innerText(), /Looks too wide for one run \(10 routes\)/);
+    // Evidence for review: ALICE_WIDE_CHECK_SHOT=path.png saves the dialog.
+    if (process.env.ALICE_WIDE_CHECK_SHOT) {
+      await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== "running"));
+      await page.screenshot({ path: process.env.ALICE_WIDE_CHECK_SHOT });
+    }
+    assert.equal(requests.length, 0, "nothing changes while the check is open");
+    await check.getByRole("button", { name: "Turn into a plan" }).click();
+    await check.waitFor({ state: "hidden" });
+    await page.keyboard.press("Escape");
+    await lane("ready").getByRole("button", { name: /Plan: routes card/ }).waitFor();
+    assert.equal(requests.length, 2);
+    const patch = JSON.parse(requests[0].replace(/^PATCH \/api\/boards\/board\/cards\/routes /, ""));
+    assert.equal(patch.title, "Plan: routes card");
+    assert.match(patch.body, /^Plan this work; do not implement it\..*alice-plan block\.\n\n## The work to plan\n\nMove these routes/s);
+    assert.equal(requests[1], '/api/boards/board/cards/routes/status {"status":"ready"}');
   } finally { await browser.close(); await server.close(); }
 });

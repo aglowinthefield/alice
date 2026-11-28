@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { chromium, type Locator, type Page, type Route } from "playwright";
 import { createServer } from "vite";
 
-const boards = [{ id: "b1", repo: "/tmp/b1", remoteUrl: "", autoCollapseEmptySwimlanes: false }];
+const boards = [{ id: "b1", repo: "/tmp/b1", remoteUrl: "" }];
 const chat = { id: "c1", boardId: "b1", title: "What is blocked?", model: "openai/gpt-6.1-sol", thinking: "low", createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" };
 const messages = [
   { id: "m1", chatId: "c1", role: "user", body: "What is blocked?", parts: [], createdAt: "2025-01-01T00:00:00Z" },
   { id: "m2", chatId: "c1", role: "agent", body: "Card B waits on A.", createdAt: "2025-01-01T00:00:01Z",
     parts: [
-      { type: "tool", id: "t1", name: "bash", input: "bakery-cli cards", output: "A\nB", status: "done" },
+      { type: "tool", id: "t1", name: "bash", input: "alice cards", output: "A\nB", status: "done" },
       { type: "text", text: "Card B waits on A." },
     ] },
 ];
@@ -214,7 +214,8 @@ test("unread replies show per chat and as board totals, and looking at a chat cl
     assert.equal(await row.locator("[data-chat-unread]").count(), 0, "an open repository shows the total on its Chat entry only");
     await row.click();
     await row.locator("[data-chat-unread='1']").waitFor();
-    assert.equal(await sidebarChat.count(), 0, "a collapsed repository hides its Chat entry and shows the total on its row");
+    // The entry slides shut before it hides.
+    await sidebarChat.waitFor({ state: "hidden" });
   } finally {
     await browser.close();
     await server.close();
@@ -421,6 +422,15 @@ test("the chat model picker shows the chat's model and saves a switch", async ()
     await server.close();
   }
 });
+
+/**
+ * Waits for Inter to load and the render it causes to land. The chat list measures its labels in the font on screen,
+ * so a maximum read while the fallback still shows would change under the test once Inter swaps in.
+ */
+async function fontsLoaded(page: Page) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
 
 async function waitUntil(condition: () => boolean | Promise<boolean>, timeout = 10_000) {
   for (const started = Date.now(); !(await condition()); await new Promise(resolve => setTimeout(resolve, 25)))
@@ -702,6 +712,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     const width = async () => Math.round((await nav.boundingBox())!.width);
     const value = async (name: string) => Number(await divider.getAttribute(name));
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     const max = await value("aria-valuemax"), min = await value("aria-valuemin");
     assert.equal(min, 180);
@@ -742,6 +753,7 @@ test("the chat list resizes by its divider up to its longest label, keeps the wi
     const saved = await width();
     await page.reload();
     await nav.getByRole("button", { name: /^Why is card B/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => (await value("aria-valuemax")) > 180);
     assert.equal(await width(), saved, "the chosen width survives a reload");
 
@@ -778,10 +790,10 @@ test("shortening or deleting the longest label lowers the maximum and clamps a w
   try {
     const page = await (await browser.newContext({ viewport: { width: 1400, height: 800 } })).newPage();
     const list = [
-      { id: "c1", topic: "Short", unread: 0 },
+      { id: "c1", topic: "Hi", unread: 0 },
       { id: "c2", topic: "Why is card B still waiting on A", unread: 0 },
     ];
-    await page.addInitScript(() => localStorage.setItem("bakery-chat-sidebar-width", "900"));
+    await page.addInitScript(() => localStorage.setItem("alice-chat-sidebar-width", "900"));
     await unreadHarness(page, list);
     await page.goto(`${server.resolvedUrls!.local[0]}board/b1/chat`);
     const nav = page.getByRole("navigation", { name: "Chats" });
@@ -852,6 +864,7 @@ test("at the maximum a wide-glyph label with a badge fits with fractional widths
     const nav = page.getByRole("navigation", { name: "Chats" });
     const divider = page.getByRole("separator", { name: "Resize chat list" });
     await nav.getByRole("button", { name: /^WWWWWW/ }).waitFor();
+    await fontsLoaded(page);
     await waitUntil(async () => Number(await divider.getAttribute("aria-valuemax")) > 180);
     await divider.focus();
     await page.keyboard.press("End");

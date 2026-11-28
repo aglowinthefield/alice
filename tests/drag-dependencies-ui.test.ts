@@ -29,7 +29,7 @@ async function drag(initial: ReturnType<typeof card>[]) {
       await route.fulfill({ json: body.withDependencies ? cards.filter(c => ids.has(c.id)) : {} }); return;
     }
     const data: Record<string, unknown> = {
-      "/api/boards": [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }],
+      "/api/boards": [{ id: "board", repo: "/tmp/repo" }],
       "/api/settings": { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "default" },
       "/api/boards/board/cards": cards,
       "/api/boards/board/conflicts": [],
@@ -64,6 +64,7 @@ test("dragging a Triage card to Ready brings the Triage cards it waits on, neste
     for (const id of ["top", "mid", "leaf"]) await lane("ready").getByRole("button", { name: new RegExp(`${id} card`) }).waitFor();
     await page.getByRole("status", { name: "Move notice" }).getByText("Moved 3 cards to Ready: top card and the 2 cards it waits on").waitFor();
     assert.equal(await lane("triage").getByRole("button", { name: /unrelated card/ }).count(), 1);
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     assert.equal(await lane("done").getByRole("button", { name: /gone card/ }).count(), 1);
     assert.deepEqual(ui.requests, ['/api/boards/board/cards/top/status {"status":"ready","withDependencies":true}']);
   } finally { await ui.close(); }
@@ -76,6 +77,7 @@ test("a dependency that is already Done stays put and nothing extra moves", asyn
     await tile("top").dragTo(lane("ready"));
     await lane("ready").getByRole("button", { name: /top card/ }).waitFor();
     assert.equal(await page.getByRole("status", { name: "Move notice" }).count(), 0);
+    await page.getByRole("button", { name: "Expand Done lane" }).click();
     assert.equal(await lane("done").getByRole("button", { name: /old card/ }).count(), 1);
     assert.deepEqual(ui.requests, ['/api/boards/board/cards/top/status {"status":"ready"}']);
   } finally { await ui.close(); }

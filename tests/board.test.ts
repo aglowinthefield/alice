@@ -4,11 +4,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board, reportFromOutput } from "../server/board.js";
-import { emptyAgentModels, validateAgentModels } from "../server/agent-models.js";
+import { emptyAgentModels, validateAgentModels } from "../shared/agent-models.js";
 import { DatabaseSync } from "node:sqlite";
 
 test("manual cards persist and only one active attempt may be claimed", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Fix the feed", body: "Reproduce first", repo: dir });
@@ -27,7 +27,7 @@ test("manual cards persist and only one active attempt may be claimed", () => {
 });
 
 test("only Done cards on the same board archive, atomically, and restore to Done", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const [a, b, open] = ["A", "B", "Open"].map(title => board.createCard({ title, body: "", repo: dir }));
@@ -48,7 +48,7 @@ test("only Done cards on the same board archive, atomically, and restore to Done
 });
 
 test("existing Ready cards stay Ready when the database opens", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
     const card = first.createCard({ title: "Already approved", body: "", repo: dir });
@@ -64,7 +64,7 @@ test("existing Ready cards stay Ready when the database opens", () => {
 });
 
 test("an idempotency key returns the board's existing card, in any status", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const board = new Board(join(dir, "board.sqlite")), other = join(dir, "other");
     const first = board.createCard({ title: "Nightly", body: "", repo: dir, idempotencyKey: "nightly-1" });
@@ -87,7 +87,7 @@ test("an idempotency key returns the board's existing card, in any status", () =
 });
 
 test("older card tables gain a nullable idempotency key with a per-board unique index", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite");
     const legacy = new DatabaseSync(path);
@@ -105,8 +105,57 @@ test("older card tables gain a nullable idempotency key with a per-board unique 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a card records where it came from, and older cards get the source their key prefix names", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const board = new Board(path);
+    assert.equal(board.createCard({ title: "Typed", body: "", repo: dir, origin: "ui" }).source, "ui");
+    assert.equal(board.createCard({ title: "Script", body: "", repo: dir }).source, "api");
+    assert.equal(board.createCard({ title: "Agent", body: "", repo: dir, source: "hermes" }).source, "hermes");
+    assert.equal(board.createCard({ title: "Old Hermes", body: "", repo: dir, idempotencyKey: "hermes:t_new" }).source, "hermes", "a key prefix stands in for a missing source");
+    assert.equal(board.createCard({ title: "CLI", body: "", repo: dir, idempotencyKey: "plan:x:y", source: "cli" }).source, "cli", "an explicit source wins over the key");
+    const keys = ["hermes:t_1", "plan:card:a", "follow-up:run:0", "sentinel:4:abc:def", "request:issues/comments:9", "alice-local-1234", "nightly-1", null];
+    const ids = keys.map((key, index) => board.createCard({ title: `Legacy ${index}`, body: "", repo: dir, idempotencyKey: key }).id);
+    board.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("UPDATE cards SET source='manual'; PRAGMA user_version = 1");
+    raw.close();
+    const migrated = new Board(path);
+    assert.deepEqual(ids.map(id => migrated.getCard(id)!.source), ["hermes", "plan", "follow-up", "sentinel", "pr-comment", "manual", "manual", "manual"]);
+    migrated.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("job cards left by the removed sentinels are archived once, keeping their old status in history", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
+  try {
+    const path = join(dir, "board.sqlite");
+    const board = new Board(path);
+    const ids = ["sentinel:4:abc:def", "request:c1", null, "plan:x:y"].map(key => board.createCard({ title: String(key), body: "", repo: dir, idempotencyKey: key }).id);
+    const [fix, request, linked, plain] = ids;
+    board.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("ALTER TABLE cards ADD COLUMN sentinelId TEXT; PRAGMA user_version = 2");
+    raw.prepare("UPDATE cards SET status='review' WHERE id IN (?, ?)").run(fix, plain);
+    raw.prepare("UPDATE cards SET status='failed', sentinelId=NULL WHERE id=?").run(request);
+    raw.prepare("UPDATE cards SET status='done', sentinelId='sentinel-1' WHERE id=?").run(linked);
+    raw.close();
+    const migrated = new Board(path);
+    assert.deepEqual(ids.map(id => migrated.getCard(id)!.status), ["archived", "archived", "archived", "review"]);
+    assert.equal(migrated.listCardEvents(fix).at(-1)?.fromStatus, "review");
+    migrated.close();
+    const restore = new DatabaseSync(path);
+    restore.prepare("UPDATE cards SET status='review' WHERE id=?").run(fix);
+    restore.close();
+    const reopened = new Board(path);
+    assert.equal(reopened.getCard(fix)!.status, "review", "the migration runs once, so a card restored afterwards stays restored");
+    reopened.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("settings default to notifications off and persist across restarts", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
     assert.deepEqual(first.getSettings(), { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", density: "default", showCardModels: false, agentModels: emptyAgentModels(), discordWebhookUrl: "", telemetryEnabled: false, maxActiveAgents: 0 });
@@ -127,7 +176,7 @@ test("settings default to notifications off and persist across restarts", () => 
 });
 
 test("existing settings databases gain the Default theme without losing preferences", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-theme-migration-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-theme-migration-"));
   try {
     const path = join(dir, "board.sqlite");
     const legacy = new DatabaseSync(path);
@@ -141,7 +190,7 @@ test("existing settings databases gain the Default theme without losing preferen
 });
 
 test("a Compline database can save Light without losing its preferences", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-theme-upgrade-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-theme-upgrade-"));
   try {
     const path = join(dir, "board.sqlite");
     const old = new DatabaseSync(path);
@@ -158,7 +207,7 @@ test("a Compline database can save Light without losing its preferences", () => 
 });
 
 test("a database from before Hearth can save it without losing density or models", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-hearth-upgrade-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-hearth-upgrade-"));
   try {
     const path = join(dir, "board.sqlite");
     const old = new DatabaseSync(path);
@@ -175,7 +224,7 @@ test("a database from before Hearth can save it without losing density or models
 });
 
 test("an older Dark preference maps to the unchanged Default palette", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-dark-upgrade-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-dark-upgrade-"));
   try {
     const path = join(dir, "board.sqlite");
     const old = new DatabaseSync(path);
@@ -189,7 +238,7 @@ test("an older Dark preference maps to the unchanged Default palette", () => {
 });
 
 test("review comments remain on their original snapshot and feedback persists until a new reviewed run", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-feedback-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-feedback-"));
   try {
     const path = join(dir, "board.sqlite"), board = new Board(path);
     const card = board.createCard({ title: "Review", body: "", repo: dir });
@@ -229,7 +278,7 @@ test("review comments remain on their original snapshot and feedback persists un
 });
 
 test("repository boards retain cards and keep attempted work in its original repository", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
     const alpha = join(dir, "alpha"), beta = join(dir, "beta");
@@ -253,7 +302,7 @@ test("repository boards retain cards and keep attempted work in its original rep
 });
 
 test("existing boards gain default appearance without losing settings", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-appearance-upgrade-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-appearance-upgrade-"));
   const path = join(dir, "board.sqlite");
   try {
     const legacy = new DatabaseSync(path);
@@ -261,37 +310,53 @@ test("existing boards gain default appearance without losing settings", () => {
     legacy.prepare("INSERT INTO boards(id, repo, autoCollapseEmptySwimlanes) VALUES (?, ?, 1)").run("old", dir);
     legacy.close();
     const board = new Board(path);
-    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.autoCollapseEmptySwimlanes, board.getBoard("old")?.remoteUrl], ["sprinkle_donut", "violet", true, ""]);
+    assert.deepEqual([board.getBoard("old")?.icon, board.getBoard("old")?.color, board.getBoard("old")?.remoteUrl], ["alice_smile", "violet", ""]);
+    board.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("boards on a retired bakery icon move to an Alice expression once, and new boards start on one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-appearance-retired-"));
+  const path = join(dir, "board.sqlite");
+  try {
+    const legacy = new DatabaseSync(path);
+    legacy.exec("CREATE TABLE boards (id TEXT PRIMARY KEY, repo TEXT NOT NULL UNIQUE, archived INTEGER NOT NULL DEFAULT 0, icon TEXT NOT NULL DEFAULT 'sprinkle_donut')");
+    const add = legacy.prepare("INSERT INTO boards(id, repo, icon) VALUES (?, ?, ?)");
+    for (const [id, icon] of [["donut", "sprinkle_donut"], ["baguette", "baguette"], ["latte", "iced_latte"], ["odd", "pretzel"], ["kept", "alice_gasp"]]) add.run(id, join(dir, id), icon);
+    legacy.close();
+    const board = new Board(path);
+    assert.deepEqual(["donut", "baguette", "latte", "odd", "kept"].map(id => board.getBoard(id)?.icon), ["alice_smile", "alice_calm", "alice_stern", "alice_smile", "alice_gasp"]);
+    assert.equal(board.addRepo(join(dir, "new")).icon, "alice_smile", "the table's old default is not used");
     board.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("repository appearance is independent, survives restart, and stays with an archived board", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-appearance-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-appearance-"));
   const path = join(dir, "board.sqlite");
   try {
     const board = new Board(path);
     const first = board.addRepo(join(dir, "first"));
     const second = board.addRepo(join(dir, "second"));
-    assert.equal(first.icon, "sprinkle_donut");
+    assert.equal(first.icon, "alice_smile");
     assert.equal(first.color, "violet");
-    assert.deepEqual([second.icon, second.color], ["sprinkle_donut", "violet"]);
-    assert.deepEqual([board.setAppearance(first.id, "croissant", "coral").icon, board.getBoard(first.id)?.color], ["croissant", "coral"]);
-    assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["sprinkle_donut", "violet"]);
+    assert.deepEqual([second.icon, second.color], ["alice_smile", "violet"]);
+    assert.deepEqual([board.setAppearance(first.id, "alice_stern", "coral").icon, board.getBoard(first.id)?.color], ["alice_stern", "coral"]);
+    assert.deepEqual([board.getBoard(second.id)?.icon, board.getBoard(second.id)?.color], ["alice_smile", "violet"]);
     assert.equal(board.setRemoteUrl(first.id, "https://github.com/o/first").remoteUrl, "https://github.com/o/first");
     assert.throws(() => board.setRemoteUrl(first.id, "file:///etc/passwd"), /http/);
     assert.equal(board.getBoard(second.id)?.remoteUrl, "");
     board.archiveBoard(first.id);
     board.close();
     const reopened = new Board(path);
-    assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["croissant", "coral"]);
+    assert.deepEqual([reopened.addRepo(join(dir, "first")).icon, reopened.getBoard(first.id)?.color], ["alice_stern", "coral"]);
     assert.equal(reopened.getBoard(first.id)?.remoteUrl, "https://github.com/o/first");
     reopened.close();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("edit a board before attempts and remove it without deleting cards", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), oldRoot = join(dir, "wrong"), root = join(dir, "repo");
     const board = new Board(path);
@@ -317,7 +382,7 @@ test("edit a board before attempts and remove it without deleting cards", () => 
 });
 
 test("cannot remove a board while a run is active or interrupted", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), repo = join(dir, "repo");
     const board = new Board(path), item = board.addRepo(repo);
@@ -333,7 +398,7 @@ test("cannot remove a board while a run is active or interrupted", () => {
 });
 
 test("existing cards become repository boards without losing runs", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), repo = join(dir, "repo");
     const legacy = new DatabaseSync(path);
@@ -371,7 +436,7 @@ test("existing cards become repository boards without losing runs", () => {
 });
 
 test("older approval tables gain prepared merge columns without losing pending approvals", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), first = new Board(path);
     const closed = first.createCard({ title: "Collapse", body: "", repo: dir });
@@ -400,7 +465,7 @@ test("older approval tables gain prepared merge columns without losing pending a
 });
 
 test("existing repository boards gain removal support on upgrade", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite"), repo = join(dir, "repo");
     const first = new Board(path);
@@ -414,14 +479,11 @@ test("existing repository boards gain removal support on upgrade", () => {
     legacy.close();
     const reopened = new Board(path);
     assert.equal(reopened.getBoard(item.id)?.repo, repo);
-    assert.equal(reopened.getBoard(item.id)?.autoCollapseEmptySwimlanes, false);
     assert.equal(reopened.getBoard(item.id)?.pickupDailyLimit, 6);
     assert.equal(reopened.getBoard(item.id)?.autoPickupStarts, 0);
     assert.equal(reopened.getBoard(item.id)?.autoPickupNextAt, null);
-    assert.equal(reopened.setAutoCollapseEmptySwimlanes(item.id, true).autoCollapseEmptySwimlanes, true);
     reopened.close();
     const persisted = new Board(path);
-    assert.equal(persisted.listBoards()[0]?.autoCollapseEmptySwimlanes, true);
     persisted.archiveBoard(item.id);
     assert.deepEqual(persisted.listBoards(), []);
     persisted.close();
@@ -429,7 +491,7 @@ test("existing repository boards gain removal support on upgrade", () => {
 });
 
 test("restart preserves interrupted work as blocked rather than dispatching it again", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const path = join(dir, "board.sqlite");
     const first = new Board(path);
@@ -448,7 +510,7 @@ test("restart preserves interrupted work as blocked rather than dispatching it a
 });
 
 test("card counts are grouped by repository and status", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const other = join(dir, "other");
@@ -461,7 +523,7 @@ test("card counts are grouped by repository and status", () => {
 });
 
 test("older databases gain inheriting Pi model settings; repository overrides resolve before global defaults", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-models-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-models-"));
   const path = join(dir, "board.sqlite");
   try {
     const legacy = new DatabaseSync(path);
@@ -501,7 +563,7 @@ test("older transcripts yield the text after the last turn summary as the report
 });
 
 test("a Review card closes to Done without merging and Reopen brings it back", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-test-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Drop me", body: "", repo: dir });
@@ -518,7 +580,7 @@ test("a Review card closes to Done without merging and Reopen brings it back", (
 });
 
 test("a general review comment needs no line and alone is enough to request changes", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-general-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-general-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Review", body: "", repo: dir });
@@ -535,15 +597,15 @@ test("a general review comment needs no line and alone is enough to request chan
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("a card whose latest report ends with a bakery-plan block is plan-only", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-plan-"));
+test("a card whose latest report ends with a alice-plan block is plan-only", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alice-plan-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Plan it", body: "", repo: dir });
     assert.equal(board.getCard(card.id)!.planOnly, false);
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id);
-    board.recordReport(run.id, "Summary\n\n```bakery-plan\n[]\n```");
+    board.recordReport(run.id, "Summary\n\n```alice-plan\n[]\n```");
     board.finish(run.id, "review");
     assert.equal(board.getCard(card.id)!.planOnly, true);
     board.setStatus(card.id, "ready");
@@ -555,7 +617,7 @@ test("a card whose latest report ends with a bakery-plan block is plan-only", ()
 });
 
 test("creating cards from a plan records their ids and refuses a second set", () => {
-  const dir = mkdtempSync(join(tmpdir(), "bakery-plan-"));
+  const dir = mkdtempSync(join(tmpdir(), "alice-plan-"));
   try {
     const board = new Board(join(dir, "board.sqlite"));
     const card = board.createCard({ title: "Plan it", body: "", repo: dir });
@@ -563,13 +625,14 @@ test("creating cards from a plan records their ids and refuses a second set", ()
     board.setStatus(card.id, "ready");
     const run = board.claim(card.id);
     const plan = [{ id: "a", title: "First", body: "Do a" }, { id: "b", title: "Second", body: "Do b", dependsOn: ["a"] }];
-    board.recordReport(run.id, `Plan\n\n\`\`\`bakery-plan\n${JSON.stringify(plan)}\n\`\`\``);
+    board.recordReport(run.id, `Plan\n\n\`\`\`alice-plan\n${JSON.stringify(plan)}\n\`\`\``);
     board.finish(run.id, "review");
     assert.equal(board.getCard(card.id)!.createdCardIds, null);
     const done = board.createPlanCards(card.id);
     assert.equal(done.createdCardIds?.length, 2);
     const [first, second] = done.createdCardIds!.map(id => board.getCard(id)!);
     assert.equal(first.title, "First");
+    assert.deepEqual([first.source, second.source], ["plan", "plan"]);
     assert.deepEqual(second.dependsOn, [first.id]);
     assert.throws(() => board.createPlanCards(card.id), /already created/);
     board.close();
@@ -577,7 +640,7 @@ test("creating cards from a plan records their ids and refuses a second set", ()
 });
 
 test("the four old priority levels move to their numeric values once", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "bakery-priority-")), "board.db");
+  const path = join(mkdtempSync(join(tmpdir(), "alice-priority-")), "board.db");
   const repo = "/tmp/priority-repo";
   const first = new Board(path);
   const ids = [-1, 0, 1, 2].map(priority => first.createCard({ title: `p${priority}`, body: "", repo }).id);

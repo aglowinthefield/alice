@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { chromium } from "playwright";
 
 // The focus-ring check relies on Chromium's Tab order; Safari skips radios and buttons by default.
-process.env.BAKERY_TEST_BROWSER = "chromium";
+process.env.ALICE_TEST_BROWSER = "chromium";
 import { createServer } from "vite";
 
 test("Settings switches between the preserved default and Compline after reload", async () => {
@@ -26,7 +26,7 @@ test("Settings switches between the preserved default and Compline after reload"
         }
         await route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme } });
       } else if (path === "/api/boards") {
-        await route.fulfill({ json: [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }] });
+        await route.fulfill({ json: [{ id: "board", repo: "/tmp/repo" }] });
       } else if (path === "/api/boards/board/cards") {
         await route.fulfill({ json: [{ id: "card", title: "Review card", body: "", repo: "/tmp/repo", source: "manual", status: "review", createdAt: "2026-01-01", updatedAt: "2026-01-01", turns: 1, turnsIncomplete: 0 }] });
       } else if (path === "/api/boards/board/conflicts" || path.endsWith("/comments") || path.endsWith("/history") || path.endsWith("/auto-review") || path.endsWith("/runs")) {
@@ -123,7 +123,7 @@ test("Compline (match system) follows the system light/dark setting", async () =
       if (path === "/api/settings") {
         await route.fulfill({ json: { confirmRunStart: false, cardDetailsLayout: "dialog", theme: "compline-system" } });
       } else if (path === "/api/boards") {
-        await route.fulfill({ json: [{ id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false }] });
+        await route.fulfill({ json: [{ id: "board", repo: "/tmp/repo" }] });
       } else if (path === "/api/status") {
         await route.fulfill({ json: { draining: false, activeRuns: 0 } });
       } else {

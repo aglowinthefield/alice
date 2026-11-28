@@ -17,17 +17,14 @@ export const loopGuards = {
   reviewerSendBacks: 2,
   /** Refused commit or pre-push hooks sent back to the agent in a row. */
   hookSendBacks: 2,
-  /** Runs Bakery starts to fix a card's failing CI. */
+  /** Runs Alice starts to fix a card's failing CI. */
   ciFixRuns: 3,
-  /** Runs Bakery starts to repair a card's pull request conflicting with main. */
+  /** Runs Alice starts to repair a card's pull request conflicting with main. */
   conflictRepairs: 3,
-  /** Runs of one card Bakery pushes to open its pull request without Approve. */
+  /** Runs of one card Alice pushes to open its pull request without Approve. */
   autoPullRequestPushes: 3,
   /** Minutes before each automatic retry of a temporary provider failure; one entry per retry. */
   autoRetryDelaysMinutes: [1, 5, 15],
-  /** Sentinel attempts per pull request, and open sentinel cards per board. */
-  sentinelAttempts: 3,
-  openSentinelCards: 5,
   /** A run is stopped after this long. */
   runTimeoutMinutes: 60,
 } as const;
@@ -99,7 +96,7 @@ export function atReviewCapacity(board: LimitSettings, reviewing: number): boole
  */
 export function autoStartRefusal(board: LimitSettings, usage: { running: number; starts: number; cost24h: number; machine?: { setting: number; active: number } }): { kind: "machine" | "capacity" | "daily" | "budget"; reason: string } | null {
   if (usage.machine && atMachineCapacity(usage.machine.setting, usage.machine.active))
-    return { kind: "machine", reason: `Bakery is running ${usage.machine.active} agents, its limit across all boards` };
+    return { kind: "machine", reason: `Alice is running ${usage.machine.active} agents, its limit across all boards` };
   if (atRunCapacity(board, usage.running)) return { kind: "capacity", reason: `at its ${board.pickupConcurrency}-run concurrency limit` };
   if (dailyStartsReached(board, usage.starts)) return { kind: "daily", reason: `used its ${board.pickupDailyLimit} automatic starts for the last 24 hours` };
   if (budgetReached(board, usage.cost24h)) return { kind: "budget", reason: "reached its daily cost budget" };

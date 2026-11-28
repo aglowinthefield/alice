@@ -35,11 +35,10 @@ test("every repo in the sidebar shows one condensed row of backlog, in progress 
       const path = new URL(route.request().url()).pathname;
       const data: Record<string, unknown> = {
         "/api/boards": [
-          { id: "board", repo: "/tmp/repo", autoCollapseEmptySwimlanes: false },
+          { id: "board", repo: "/tmp/repo" },
           {
             id: "other",
             repo: "/tmp/other",
-            autoCollapseEmptySwimlanes: false,
             cardCounts: { running: 4, failed: 1 },
           },
         ],

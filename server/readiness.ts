@@ -5,7 +5,7 @@ import { loopGuards } from "./repo-limits.js";
 
 /**
  * How the repository's hooks went on the card's work when its run reached Review. "passed" names the commit whose
- * pre-push hook passed; Approve pushes exactly that commit without running the hook again. "unchecked" means Bakery
+ * pre-push hook passed; Approve pushes exactly that commit without running the hook again. "unchecked" means Alice
  * could not tell (no network, origin's branch moved), so Approve runs the hooks as before. A "failed" check names the
  * `hook` that refused: "commit" (pre-commit or commit-msg, nothing was committed) or "push". `sentBack` is set when
  * the refusal went back to the agent from here.
@@ -15,7 +15,7 @@ export type ReadinessProgress = { startedAt: number; steps: { at: number; text: 
 type Stored = { draft?: PullRequestDraft; hooks?: HookCheck };
 type Job = { runId: string; abort: AbortController; progress: ReadinessProgress; draft?: Promise<PullRequestDraft>; hooks?: Promise<void>; hookState?: HookCheck };
 
-/** Hook failures in a row sent back to the agent from Review before Bakery leaves the next one for a person. */
+/** Hook failures in a row sent back to the agent from Review before Alice leaves the next one for a person. */
 const maxHookSendBacks = loopGuards.hookSendBacks;
 /** Drafts written at once, so a restart with many cards in Review does not start dozens of Pi processes. */
 const draftConcurrency = 2;
@@ -64,7 +64,7 @@ export class Readiness {
   /** Which parts a card gets at Review: none off github-pr boards, and no hooks where something pushes on its own. */
   private wants(card: Card, run: Run): { draft: boolean; hooks: boolean } {
     const repoBoard = this.board.boardForRepo(card.repo);
-    if (!this.board.features.pullRequests || repoBoard?.integration !== "github-pr" || card.prOverrideUrl || run.ciFix || card.prPushedRunId === run.id || !run.worktree)
+    if (repoBoard?.integration !== "github-pr" || card.prOverrideUrl || run.ciFix || card.prPushedRunId === run.id || !run.worktree)
       return { draft: false, hooks: false };
     if (repoBoard.autoReviewEnabled || repoBoard.autoPullRequestEnabled) return { draft: false, hooks: false };
     // An open PR keeps its title and body, so Approve needs no draft for it.
@@ -143,8 +143,8 @@ export class Readiness {
       const message = error instanceof Error ? error.message : String(error);
       if (!(error instanceof PushHookError) && !(error instanceof CommitHookError)) {
         result = { state: "unchecked", candidate: null, detail: message };
-        // Only a failed commit is news: a worktree Bakery cannot inspect says so on Approve anyway.
-        if (/^diff failed|uncommitted changes after/.test(message)) this.board.noteCard(cardId, `Bakery could not get this card's commit ready to push at Review, so Approve runs the hooks itself: ${message.slice(0, 1500)}`);
+        // Only a failed commit is news: a worktree Alice cannot inspect says so on Approve anyway.
+        if (/^diff failed|uncommitted changes after/.test(message)) this.board.noteCard(cardId, `Alice could not get this card's commit ready to push at Review, so Approve runs the hooks itself: ${message.slice(0, 1500)}`);
       } else {
         const hook = error instanceof PushHookError ? "push" : "commit";
         const name = hook === "push" ? "The pre-push hook" : "The repository's commit hook";
@@ -152,7 +152,7 @@ export class Readiness {
         this.step(job, hook === "push" ? "The pre-push hook refused the commit" : "A commit hook refused the card's work, so nothing was committed");
         const streak = this.sendBackStreak(cardId, run.id);
         if (streak >= maxHookSendBacks) {
-          this.board.noteCard(cardId, `${name} refused this attempt at Review too. Bakery already sent it back ${streak} times in a row, so a person decides now; Approve shows the output.`);
+          this.board.noteCard(cardId, `${name} refused this attempt at Review too. Alice already sent it back ${streak} times in a row, so a person decides now; Approve shows the output.`);
         } else {
           result.sentBack = true;
           this.save(run, { hooks: result });
@@ -160,7 +160,7 @@ export class Readiness {
           try {
             if (!this.deps.sendBack(card, error)) this.board.noteCard(cardId, `${name} refused this attempt at Review. Its output goes to the agent once a run can start.`);
           } catch (sendError) {
-            this.board.noteCard(cardId, `${name} refused this attempt at Review, and Bakery could not send it back to the agent: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
+            this.board.noteCard(cardId, `${name} refused this attempt at Review, and Alice could not send it back to the agent: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
           }
           return;
         }

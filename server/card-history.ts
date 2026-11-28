@@ -1,4 +1,6 @@
-import type { AutoReviewJob, Card, CardEvent, CardStatus, Run } from "./board.js";
+import type { AutoReviewJob, Card, CardEvent, CardStatus, CloseReason, Run } from "./board.js";
+
+const closeReasonLabels: Record<CloseReason, string> = { duplicate: "Duplicate", "wrong-approach": "Wrong approach", "not-needed": "Not needed", superseded: "Superseded", other: "Other" };
 
 /** One line in a card's history, oldest first. `from`/`to` are set when the line is a status change. */
 export type CardHistoryEntry = { at: string; from: CardStatus | null; to: CardStatus | null; text: string; detail?: string };
@@ -10,7 +12,10 @@ export type CardHistoryEntry = { at: string; from: CardStatus | null; to: CardSt
  */
 export function cardHistory(card: Card, events: CardEvent[], runs: Run[], reviews: AutoReviewJob[]): CardHistoryEntry[] {
   const entries: CardHistoryEntry[] = [{ at: card.createdAt, from: null, to: null, text: "Card created" }];
-  for (const event of events) entries.push({ at: event.at, from: event.fromStatus, to: event.toStatus, text: event.reason || "Status changed" });
+  for (const event of events) {
+    const why = event.closeReason ? [`Reason: ${closeReasonLabels[event.closeReason]}`, event.closeNote].filter(Boolean).join("\n") : undefined;
+    entries.push({ at: event.at, from: event.fromStatus, to: event.toStatus, text: event.reason || "Status changed", ...(why ? { detail: why } : {}) });
+  }
   const recordedSince = events[0]?.at;
   for (const run of runs) {
     if (recordedSince && run.startedAt >= recordedSince) continue;
@@ -26,9 +31,9 @@ export function cardHistory(card: Card, events: CardEvent[], runs: Run[], review
     const attempt = attempts.get(review.runId), of = attempt ? ` of attempt ${attempt}` : "";
     if (review.state === "running") { entries.push({ at: review.startedAt, from: null, to: null, text: `Agent review${of} started`, detail: review.details || undefined }); continue; }
     const at = review.finishedAt ?? review.startedAt;
-    if (review.state === "merged") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery merged it`, detail: review.details || undefined }); continue; }
+    if (review.state === "merged") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Alice merged it`, detail: review.details || undefined }); continue; }
     if (review.state === "approved") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"}; merging is up to you`, detail: review.details || undefined }); continue; }
-    if (review.state === "pull_request") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Bakery opened its pull request`, detail: review.details || undefined }); continue; }
+    if (review.state === "pull_request") { entries.push({ at, from: null, to: null, text: `Agent reviewer approved attempt ${attempt ?? "?"} and Alice opened its pull request`, detail: review.details || undefined }); continue; }
     const sentBack = review.details.startsWith("Sent back to the implementer: ");
     entries.push({
       at, from: null, to: null,

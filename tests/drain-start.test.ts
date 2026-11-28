@@ -17,7 +17,7 @@ async function freePort(): Promise<number> {
 }
 
 test("POST /start during a drain answers 202 queued, starts no run, and persists the start", async () => {
-  const home = mkdtempSync(join(tmpdir(), "bakery-drain-"));
+  const home = mkdtempSync(join(tmpdir(), "alice-drain-"));
   const repo = join(home, "code", "alpha"), dataDir = join(home, "data");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -25,7 +25,7 @@ test("POST /start during a drain answers 202 queued, starts no run, and persists
   // An IPC channel lets the test play the dev supervisor and send the drain message.
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, BAKERY_HOST: "", BAKERY_ALLOWED_HOSTS: "", HOME: home, BAKERY_DATA_DIR: dataDir, BAKERY_PORT: String(port) },
+    env: { ...process.env, ALICE_HOST: "", ALICE_ALLOWED_HOSTS: "", HOME: home, ALICE_DATA_DIR: dataDir, ALICE_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
@@ -64,7 +64,7 @@ test("POST /start during a drain answers 202 queued, starts no run, and persists
     const exited = new Promise(resolve => child.once("exit", resolve));
     child.kill("SIGTERM");
     await exited;
-    const board = new Board(join(dataDir, "bakery.sqlite"));
+    const board = new Board(join(dataDir, "alice.sqlite"));
     try { assert.deepEqual(board.takeQueuedStarts(), [ready.id]); } finally { board.close(); }
   } finally {
     child.kill("SIGKILL");

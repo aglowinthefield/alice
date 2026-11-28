@@ -17,7 +17,7 @@ before(async () => {
 after(async () => { await browser?.close(); await server?.close(); });
 
 const lastVisit = "2026-03-01T09:00:00.000Z";
-const board = { autoCollapseEmptySwimlanes: false, autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
+const board = { autoPickupEnabled: false, autoReviewEnabled: false, icon: "rocket", color: "violet", cardCounts: {} };
 const boards = [
   { ...board, id: "board-a", repo: "/code/alpha", cost24h: 1.25 },
   { ...board, id: "board-b", repo: "/code/beta", cost24h: 0.5 },
@@ -25,16 +25,18 @@ const boards = [
 const card = (id: string, repo: string, status: string, updatedAt: string, extra: { reviewAction?: string } = {}) =>
   ({ id, title: `Card ${id}`, body: "", repo, status, source: "manual", priority: 0, createdAt: "2026-02-01T00:00:00.000Z", updatedAt, turns: 0, turnsIncomplete: 0, attempts: 1, reviewRounds: 0, runAgent: "", reviewAgent: "", ...extra });
 
-async function open(options: { cards: ReturnType<typeof card>[] }) {
+// Cards may carry more fields than `card` sets, such as reviewSince or reviewWait.
+type TestCard = ReturnType<typeof card> & Record<string, unknown>;
+async function open(options: { cards: TestCard[]; settings?: Record<string, unknown> }) {
   const page = await browser.newPage();
   const requests: { method: string; path: string; input: unknown }[] = [];
   const state = { cards: options.cards };
-  await page.addInitScript(visit => { if (!sessionStorage.getItem("seeded")) { localStorage.setItem("bakery-last-visit", visit); sessionStorage.setItem("seeded", "1"); } }, lastVisit);
+  await page.addInitScript(visit => { if (!sessionStorage.getItem("seeded")) { localStorage.setItem("alice-last-visit", visit); sessionStorage.setItem("seeded", "1"); } }, lastVisit);
   await page.route("**/api/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     requests.push({ method: request.method(), path, input: request.postDataJSON() });
     if (path === "/api/boards") return route.fulfill({ json: boards });
-    if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default" } });
+    if (path === "/api/settings") return route.fulfill({ json: { confirmRunStart: false, notifyOnReview: false, cardDetailsLayout: "dialog", theme: "default", ...options.settings } });
     if (path === "/api/cards") return route.fulfill({ json: state.cards });
     if (/^\/api\/boards\/board-[ab]\/cards$/.test(path) && request.method() === "POST")
       return route.fulfill({ status: 201, json: { ...card("new", "/code/beta", "triage", "2026-03-02T00:00:00.000Z"), ...request.postDataJSON() } });
@@ -73,7 +75,7 @@ test("Today opens first and gathers what needs you across every repository", asy
     await eventually(() => titles(page, "Needs you"), ["Card review-old", "Card review-new", "Card broken"]);
     await eventually(() => titles(page, "In progress"), ["Card busy"]);
     await eventually(() => titles(page, "Finished since your last visit"), ["Card merged"]);
-    await page.getByRole("status", { name: "Since your last visit" }).filter({ hasText: /1 merged · 3 need you · \$1\.75 in the last 24h/ }).waitFor();
+    await page.getByRole("status", { name: "Since your last visit" }).filter({ hasText: /1 merged · 3 need you · \$1\.75 in the last 24 hours/ }).waitFor();
     await section(page, "In progress").getByRole("button", { name: /Card busy/ }).click();
     await page.getByRole("dialog").getByText("Card busy").waitFor();
   } finally { await page.close(); }
@@ -82,7 +84,7 @@ test("Today opens first and gathers what needs you across every repository", asy
 test("quick capture adds a Triage card to the chosen repository and remembers it", async () => {
   const { page, requests } = await open({ cards: [] });
   try {
-    await page.getByText("All caught up").waitFor();
+    await page.getByText("Nothing needs you.").waitFor();
     await page.getByRole("combobox", { name: "Repository" }).selectOption({ label: "beta" });
     const input = page.getByRole("textbox", { name: "Capture a card" });
     await input.fill("Water the plants");
@@ -128,12 +130,14 @@ const polled = async (page: Page, requests: { method: string; path: string }[]) 
   }
 };
 const openToday = (page: Page, name: RegExp, lane = "Needs you") => section(page, lane).getByRole("button", { name }).click();
-const openBoard = async (page: Page, repo: string, title: string) => {
+const openBoard = async (page: Page, repo: string, title: string, lane?: string) => {
   await page.getByRole("button", { name: repo, exact: true }).click();
   await page.getByRole("button", { name: "Kanban" }).click();
+  // Lanes of only Done or archived cards start collapsed.
+  if (lane) await page.getByRole("button", { name: `Expand ${lane} lane` }).click();
   await page.locator("section[data-status]").getByText(title, { exact: true }).click();
 };
-const asStatus = (state: { cards: ReturnType<typeof card>[] }, id: string, status: string) => {
+const asStatus = (state: { cards: TestCard[] }, id: string, status: string) => {
   state.cards = state.cards.map(item => item.id === id ? { ...item, status } : item);
 };
 
@@ -177,7 +181,7 @@ test("opening a card that is already done or archived keeps it open", async () =
     card("old", "/code/alpha", "archived", "2026-03-01T09:00:00.000Z"),
   ] });
   try {
-    await openBoard(page, "alpha", "Card shipped");
+    await openBoard(page, "alpha", "Card shipped", "Done");
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("heading", { name: "Card shipped" }).waitFor();
     await polled(page, requests);
@@ -196,6 +200,38 @@ test("sidebar switches between Today and a repository board, and the choice pers
     await page.getByRole("heading", { name: "beta" }).waitFor();
     await page.getByRole("button", { name: /^Today/ }).click();
     await page.getByRole("heading", { name: "Today" }).waitFor();
+  } finally { await page.close(); }
+});
+
+test("Review cards past their board's threshold are marked stale and listed in Today with their actions", async () => {
+  const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60_000).toISOString();
+  const { page, requests } = await open({ cards: [
+    { ...card("old", "/code/alpha", "review", "2026-03-01T10:00:00.000Z"), reviewSince: daysAgo(4) },
+    { ...card("fresh", "/code/alpha", "review", "2026-03-01T11:00:00.000Z"), reviewSince: daysAgo(1) },
+    { ...card("waiting", "/code/beta", "review", "2026-03-01T12:00:00.000Z"), reviewSince: daysAgo(6), reviewWait: "github" },
+  ] });
+  try {
+    await eventually(() => titles(page, "Stale in Review"), ["Card waiting", "Card old"]);
+    const stale = section(page, "Stale in Review");
+    const old = stale.getByRole("listitem").filter({ hasText: "Card old" });
+    await old.getByText("alpha · 4 days in Review").waitFor();
+    const waiting = stale.getByRole("listitem").filter({ hasText: "Card waiting" });
+    assert.equal(await waiting.getByRole("button", { name: "Run again on current main" }).isDisabled(), true, "GitHub still has it");
+    await old.getByRole("button", { name: "Run again on current main" }).click();
+    await old.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Close without merging" }).click();
+    await eventually(() => Promise.resolve(requests.filter(item => item.method === "POST").map(item => [item.path, item.input])), [
+      ["/api/boards/board-a/cards/old/start", { currentMain: true }],
+      ["/api/boards/board-a/cards/old/close", {}],
+    ]);
+    await old.getByRole("button", { name: "Approve" }).click();
+    await page.getByRole("dialog").getByRole("heading", { name: "Card old" }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Kanban" }).click();
+    const lane = page.locator("section[data-status]");
+    await lane.getByText("Card fresh", { exact: true }).waitFor();
+    assert.deepEqual(await lane.getByTestId("stale-badge").allInnerTexts(), ["Stale 4d"]);
   } finally { await page.close(); }
 });
 
@@ -221,3 +257,31 @@ test("an agent-approved card reads as approved, apart from a hand-off that needs
   } finally { await page.close(); }
 });
 const expectText = (read: () => Promise<string>, expected: string) => eventually(() => read().then(text => text.trim()), expected);
+
+test("Run again on current main asks first when run starts need confirming; cancelling sends nothing", async () => {
+  const reviewSince = new Date(Date.now() - 5 * 24 * 60 * 60_000).toISOString();
+  const { page, requests } = await open({
+    cards: [{ ...card("old", "/code/alpha", "review", "2026-03-01T10:00:00.000Z"), reviewSince }],
+    // density is applied in the same callback that stores the settings, so it marks them as loaded.
+    settings: { confirmRunStart: true, density: "cozy" },
+  });
+  try {
+    await page.locator("html[data-density=cozy]").waitFor({ state: "attached" });
+    const rerun = section(page, "Stale in Review").getByRole("button", { name: "Run again on current main" });
+    const answer = (accept: boolean) => new Promise<string>(resolve => page.once("dialog", dialog => {
+      resolve(dialog.message());
+      void (accept ? dialog.accept() : dialog.dismiss());
+    }));
+    const dismissed = answer(false);
+    // A start that skips the question fails here at once, instead of waiting for a dialog that never opens.
+    const skipped = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/start")).then(() => "started without asking", () => "");
+    await rerun.click();
+    assert.match(await Promise.race([dismissed, skipped]), /Start Pi on "Card old" on current main\? This run may use paid model tokens/);
+    const accepted = answer(true);
+    await rerun.click();
+    await accepted;
+    const starts = () => Promise.resolve(requests.filter(item => item.method === "POST").map(item => [item.path, item.input]));
+    // Only the confirmed click reached the server; the cancelled one would have come first.
+    await eventually(starts, [["/api/boards/board-a/cards/old/start", { currentMain: true }]]);
+  } finally { await page.close(); }
+});

@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { checkBeforeReady } from "./ready-check.js";
+import { checkBeforeReady, turnIntoPlans } from "./ready-check.js";
 import {
   Check,
   Copy,
@@ -28,6 +28,7 @@ import { followUps } from "./follow-ups.js";
 import { parsePlan } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
 import { PullRequestDialog } from "./pr-dialog.js";
+import { CloseCardDialog } from "./close-card.js";
 import {
   PRIORITY_MAX,
   PRIORITY_MIN,
@@ -35,7 +36,7 @@ import {
   needsYourReview,
   reviewActionLabels,
   type AutoReviewJob,
-  type BakerySettings,
+  type AliceSettings,
   type Card,
   type MergeConflict,
   type ReviewComment,
@@ -61,7 +62,7 @@ type Props = {
   onOpenCard: (id: string) => void;
   /** Opens the repository's Pull requests page on this card's PR; absent when the remote has none. */
   onOpenPullRequest?: () => void;
-  settings: BakerySettings | null;
+  settings: AliceSettings | null;
   conflict: MergeConflict | undefined;
   onClose: () => void;
   onEdit: (card: Card) => void;
@@ -96,6 +97,7 @@ export function CardDetails({
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [autoJobs, setAutoJobs] = useState<AutoReviewJob[]>([]);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const [expandedDetails, setExpandedDetails] = useState(false);
   const [tab, setTab] = useState<
     "overview" | "reviews" | "attempts" | "discuss" | "details"
@@ -106,7 +108,7 @@ export function CardDetails({
     setReply("");
   }, [cardId]);
   const [sideWidth, setSideWidth] = useState(
-    () => Number(localStorage.getItem("bakery-side-width")) || 900,
+    () => Number(localStorage.getItem("alice-side-width")) || 900,
   );
   const [smallScreen, setSmallScreen] = useState(
     () => window.matchMedia("(max-width: 1023px)").matches,
@@ -362,9 +364,9 @@ export function CardDetails({
           }
           className={
             expandedDetails
-              ? "left-0 top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none [--pop-x:0px] [--pop-y:6px]"
+              ? "left-0 top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none [--pop-x:0px] [--pop-y:6px]"
               : side
-                ? "right-0 left-auto top-0 h-[100dvh] max-h-[100dvh] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right [--pop-x:32px] [--pop-y:0px]"
+                ? "right-0 left-auto top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right [--pop-x:32px] [--pop-y:0px]"
                 : "w-[min(94vw,750px)]"
           }
         >
@@ -385,7 +387,7 @@ export function CardDetails({
                     Math.max(520, window.innerWidth - event.clientX),
                   );
                   setSideWidth(width);
-                  localStorage.setItem("bakery-side-width", String(width));
+                  localStorage.setItem("alice-side-width", String(width));
                 }
               }}
               onKeyDown={(event) => {
@@ -400,7 +402,7 @@ export function CardDetails({
                       previous + (event.key === "ArrowLeft" ? 32 : -32),
                     ),
                   );
-                  localStorage.setItem("bakery-side-width", String(width));
+                  localStorage.setItem("alice-side-width", String(width));
                   return width;
                 });
               }}
@@ -418,7 +420,7 @@ export function CardDetails({
                 className="size-7 shrink-0"
                 disabled={busy}
                 aria-label="Edit title and description"
-                title="Edit title and description. Doesn't affect runs or reviews."
+                title="Edit title and description. Runs and reviews do not change."
                 onClick={() => onEdit(card)}
               >
                 <Pencil size={14} />
@@ -492,7 +494,7 @@ export function CardDetails({
                     title={
                       card.status === "running"
                         ? "Priority cannot change while a run is active"
-                        : "Higher priority Ready cards are picked up first (-100 to 100)"
+                        : "Auto pickup starts higher-priority Ready cards first (-100 to 100)"
                     }
                     onBlur={(event) => {
                       const priority = parsePriorityInput(event.target.value);
@@ -573,8 +575,8 @@ export function CardDetails({
             card.locallyMerged && (
               <div className="mt-4 rounded-md border border-border p-3 text-xs">
                 <p>
-                  Bakery merged this card into local main, not through a pull
-                  request. Publish as PR pushes the approved work to bakery/
+                  Alice merged this card into local main, not through a pull
+                  request. Publish as PR pushes the approved work to alice/
                   {card.id}, opens a pull request, and moves the card back to
                   Review until the PR merges.
                 </p>
@@ -735,6 +737,7 @@ export function CardDetails({
                             title,
                             body: `${body}\n\nFollow-up from card ${card.id}: ${card.title}`,
                             idempotencyKey: `follow-up:${runs[0].id}:${index}`,
+                            source: "follow-up",
                           }),
                         }).then(
                           () => true,
@@ -867,15 +870,15 @@ export function CardDetails({
                     <p className="mt-1 text-destructive">{runs[0].error}</p>
                     <p className="mt-2 text-xs text-muted-foreground">
                       Inspect the latest attempt and its worktree below before
-                      retrying. No changes were merged from this run.
+                      you retry. Alice merged no changes from this run.
                     </p>
                     {runs[0].failureKind === "invalid-history" && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <p className="text-xs text-muted-foreground">
                           The provider rejected this card&apos;s saved Pi
-                          session, so Run again would fail the same way.
-                          Recovering starts a fresh session in the same worktree
-                          and keeps its changes and the old session as evidence.
+                          session, so Run again fails the same way. Recovering
+                          starts a fresh session in the same worktree and keeps
+                          its changes and the old session as evidence.
                         </p>
                         <Button
                           variant="outline"
@@ -998,16 +1001,21 @@ export function CardDetails({
                     </Button>
                   </div>
                 )}
-                <CardHistory entries={history} />
-                {card?.sentinelId && (
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span>Found by a sentinel</span>
-                    <code className="select-all break-all font-mono text-foreground">
-                      {card.findingKey}
+                {card && (
+                  <div
+                    data-testid="card-source"
+                    className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+                  >
+                    <span>Source</span>
+                    <code className="font-mono text-foreground">
+                      {card.source}
                     </code>
-                    <span>run {card.sentinelRunId?.slice(0, 8)}</span>
+                    {card.source === "manual" && (
+                      <span>(made before Alice recorded sources)</span>
+                    )}
                   </div>
                 )}
+                <CardHistory entries={history} />
                 {card?.idempotencyKey && (
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>Idempotency key</span>
@@ -1026,13 +1034,16 @@ export function CardDetails({
                 onClick={async () => {
                   const check = await checkBeforeReady([card]);
                   if (check.choice === "edit") onEdit(card);
-                  if (check.choice !== "ready") return;
-                  await action(() =>
-                    api(`/boards/${boardId}/cards/${card.id}/status`, {
+                  if (check.choice !== "ready" && check.choice !== "plan")
+                    return;
+                  await action(async () => {
+                    if (check.choice === "plan")
+                      await turnIntoPlans(boardId, check.cards);
+                    return api(`/boards/${boardId}/cards/${card.id}/status`, {
                       method: "POST",
                       body: JSON.stringify({ status: "ready" }),
-                    }),
-                  );
+                    });
+                  });
                 }}
               >
                 Move to Ready
@@ -1060,7 +1071,9 @@ export function CardDetails({
                   className="rounded border border-status-interrupted/50 px-2 py-1 text-xs text-status-interrupted"
                   data-testid="start-queued-badge"
                 >
-                  Queued, starts after restart
+                  {card.startQueuedForSlot
+                    ? "Queued, starts when a run finishes"
+                    : "Queued, starts after restart"}
                 </span>
                 <Button
                   variant="outline"
@@ -1213,7 +1226,7 @@ export function CardDetails({
                   if (
                     integration !== "github-pr" &&
                     !(await confirmAction(
-                      `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Bakery checks Git conflicts and whitespace, but does not run tests or push.`,
+                      `Approve the reviewed diff and merge into local main for ${card.repo}? This commits unignored files. Git refuses to overwrite conflicting local changes. Alice checks Git conflicts and whitespace, but does not run tests or push.`,
                     ))
                   )
                     return;
@@ -1309,8 +1322,8 @@ export function CardDetails({
             )}
             {changesRequested && (
               <span className="self-center text-xs text-muted-foreground">
-                Changes requested, but the new attempt didn't start. Run again;
-                Pi will receive your feedback.
+                Alice saved your requested changes, but the new attempt did not
+                start. Run again to send Pi your feedback.
               </span>
             )}
             {card?.status === "review" &&
@@ -1385,26 +1398,29 @@ export function CardDetails({
               card?.status === "failed" ||
               card?.status === "triage" ||
               card?.status === "ready") && (
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={async () => {
-                  if (
-                    !(await confirmAction(
-                      "Close this card without merging? Its worktree and branch stay, and Reopen brings it back.",
-                    ))
-                  )
-                    return;
-                  void action(() =>
-                    api(`/boards/${boardId}/cards/${card.id}/close`, {
-                      method: "POST",
-                      body: "{}",
-                    }),
-                  );
-                }}
-              >
-                Close without merging
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setClosing(true)}
+                >
+                  Close without merging
+                </Button>
+                <CloseCardDialog
+                  open={closing}
+                  busy={busy}
+                  onOpenChange={setClosing}
+                  onClose={(choice) => {
+                    setClosing(false);
+                    void action(() =>
+                      api(`/boards/${boardId}/cards/${card.id}/close`, {
+                        method: "POST",
+                        body: JSON.stringify(choice),
+                      }),
+                    );
+                  }}
+                />
+              </>
             )}
             {card?.status === "done" && (
               <Button
@@ -1445,10 +1461,10 @@ export function CardDetails({
                 onClick={async () => {
                   if (
                     await confirmAction(
-                      `${card.attachmentCount === 1 ? "The attachment" : `All ${card.attachmentCount} attachments`} of "${card.title}" will be permanently deleted from disk. This cannot be undone, even if you restore the card.`,
+                      `Alice permanently deletes ${card.attachmentCount === 1 ? "the attachment" : `all ${card.attachmentCount} attachments`} of "${card.title}" from disk. You cannot undo this, even if you restore the card.`,
                       {
                         title: "Delete attachments?",
-                        confirmLabel: "Delete",
+                        confirmLabel: "Delete attachments",
                         destructive: true,
                       },
                     )
@@ -1581,7 +1597,7 @@ function PullRequestLink({
             #{card.prNumber}
           </a>
         ) : (
-          `none yet (looks for bakery/${card.id})`
+          `none yet (looks for alice/${card.id})`
         )}
         {onOpenPullRequest && (
           <>
@@ -1675,7 +1691,7 @@ function LiveStatus({ run, turns }: { run: Run; turns: number }) {
         </span>
       </div>
       <p className="mt-1 leading-6 text-foreground/80">
-        {narration || "Starting up…"}
+        {narration || "Starting…"}
       </p>
     </section>
   );
@@ -1766,7 +1782,7 @@ function Dependencies({
               className="flex items-center gap-2"
             >
               {link(item)}
-              <span className="font-mono text-[10px] uppercase">
+              <span className="font-mono text-[11px] uppercase">
                 {statusLabel(item.status)}
               </span>
               <Button
@@ -1941,8 +1957,8 @@ function RunReport({
               </Button>
               {planFailed && (
                 <p className="mt-2 text-xs text-destructive">
-                  Could not create every card. Try again; cards already made are
-                  kept.
+                  Alice could not create every card. Try again to create the
+                  rest.
                 </p>
               )}
             </>

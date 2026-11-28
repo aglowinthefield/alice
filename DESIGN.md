@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: Bakery
+name: Alice
 description: A dense, quiet board for running coding agents across repos, used all day on desktop, web and iOS.
 colors:
   primary: "#d4ccb4"
@@ -108,9 +108,9 @@ components:
     rounded: "{rounded.md}"
 ---
 
-# Bakery design
+# Alice design
 
-Bakery follows the `house-style` skill. This file records Bakery's values and the places it goes beyond or departs from that skill. Source of truth for the values is `src/style.css`; update both together.
+Alice follows the `house-style` skill. This file records Alice's values and the places it goes beyond or departs from that skill. Source of truth for the values is `src/style.css`; update both together.
 
 ## Overview
 
@@ -142,9 +142,17 @@ One radius, `--radius: 0.3rem`, with Tailwind's `rounded-sm` to `rounded-xl` der
 
 Built on Radix primitives and shadcn's new-york style with Lucide icons. Dialogs fade in over 160 ms and pop with a spring-like curve over 180 ms; view transitions are off.
 
+The sidebar opens with Alice's face, zoomed so her expression reads at 40px, beside "Alice" over the server's host name and version. There is no footer.
+
+In the sidebar, a repository's pages (Kanban, Pull requests, Visualizer, Chat) sit 16px in, on a 1px rail in the border colour. The current page has no highlight: a 2px accent stripe on the rail marks it and slides to the new page over 180 ms. The list slides open and shut over the same 180 ms.
+
+The Cmd+K (Ctrl+K) command palette is a dialog with the same motion, placed high on the screen like Spotlight. Its rows are 32px, show the command's own shortcut at the right, and cards appear only once something is typed. A command that needs a card acts on the focused or open card, or asks which card.
+
+The Windows desktop app has no native frame. A 32px title bar row in the sidebar colour holds the caption buttons, drawn with Segoe Fluent Icons glyphs at Windows' own 46 by 32px size. Close turns Windows' red, `#c42b1c`, on hover, the one colour outside the palette.
+
 ## Do's and Don'ts
 
-- Do keep live progress motion: the orbit on a card whose agent is working, the slow breathe on one waiting, the pulse on cards that move along during a drag. These are Bakery's spinner equivalents and stop under reduced motion.
+- Do keep live progress motion: the orbit on a card whose agent is working, the slow breathe on one waiting, the pulse on cards that move along during a drag. These are Alice's spinner equivalents and stop under reduced motion.
 - Don't add new looping motion beyond progress indicators.
 - Do keep the sidebar at its fixed sizes when changing density.
-- Don't use type below 11px. Existing 10px labels are being moved up.
+- Don't use type below 11px.

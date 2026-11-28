@@ -24,9 +24,9 @@ import { SvgGraph } from "./svg-graph.js";
 const refreshMs = 15_000;
 /** While an agent's live tool is shown, its elapsed time ticks every second. */
 const liveRefreshMs = 1_000;
-const glowKey = "bakery-visualizer-glow";
-const doneKey = "bakery-visualizer-done";
-const triageKey = "bakery-visualizer-triage";
+const glowKey = "alice-visualizer-glow";
+const doneKey = "alice-visualizer-done";
+const triageKey = "alice-visualizer-triage";
 const doneFilters: DoneFilter[] = ["all", "relevant", "hide"];
 const readDone = (): DoneFilter => {
   const saved = localStorage.getItem(doneKey);
@@ -176,12 +176,14 @@ export function Visualizer({
       />
       {layout.failed ? (
         <div>
-          {notice("The graph could not be drawn, so it is shown as a list.")}
+          {notice(
+            "Alice could not draw the graph, so it shows the cards as a list.",
+          )}
           <CardList cards={cards} onOpenCard={onOpenCard} />
         </div>
       ) : (
         <div
-          className="relative h-[calc(100vh-170px)] min-h-[360px] overflow-hidden"
+          className="relative h-[calc(100vh_-_170px_-_var(--titlebar-h))] min-h-[360px] overflow-hidden"
           aria-label="Card dependency graph"
         >
           {!nodes.length ? (

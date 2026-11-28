@@ -13,6 +13,7 @@ function fixture() {
   execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"]);
   writeFileSync(join(repo, "README.md"), "hi\n");
   const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
+  board.setAutoReview(repoBoard.id, false);
   const sent: { endpoint: string; notice: Notice }[] = [];
   let failWith: number | null = null;
   const send: Send = async (subscription, notice) => {

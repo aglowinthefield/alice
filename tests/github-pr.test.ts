@@ -106,6 +106,7 @@ function fixture(wtBin?: string, integration: "github-pr" | "default" = "github-
   process.env.FAKE_GH_DIR = ghDir;
   const board = new Board(join(dir, "board.sqlite"));
   const repoBoard = board.addRepo(repo);
+  board.setAutoReview(repoBoard.id, false);
   board.setRemoteUrl(repoBoard.id, "https://github.com/acme/widgets");
   if (integration === "github-pr") board.setIntegration(repoBoard.id, "github-pr");
   const github = new GitHub("gh");

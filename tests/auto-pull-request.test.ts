@@ -17,6 +17,7 @@ function fixture(mode: "github-pr" | "local" = "github-pr") {
   writeFileSync(join(repo, "README.md"), "original\n"); git(repo, "add", "README.md");
   git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial");
   const board = new Board(join(dir, "board.sqlite")), repoBoard = board.addRepo(repo);
+  board.setAutoReview(repoBoard.id, false);
   if (mode === "github-pr") { board.setRemoteUrl(repoBoard.id, "https://github.com/example/repo"); board.setIntegration(repoBoard.id, "github-pr"); }
   const opened: string[] = [];
   const open = async (card: Card) => {

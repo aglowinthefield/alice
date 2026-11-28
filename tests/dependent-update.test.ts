@@ -35,6 +35,7 @@ function fixture({ autoReview = false } = {}) {
   git(repo, ...commitArgs, "initial");
   const board = new Board(join(dir, "board.sqlite"));
   const repoBoard = board.addRepo(repo);
+  board.setAutoReview(repoBoard.id, false);
   if (autoReview) board.setAutoReview(repoBoard.id, true);
   const reviewed = (title: string) => {
     const card = board.createCard({ title, body: "", repo });

@@ -409,6 +409,8 @@ test("existing cards become repository boards without losing runs", () => {
     legacy.close();
     const board = new Board(path);
     assert.deepEqual(board.listRepos(), [repo]);
+    const migrated = board.boardForRepo(repo)!;
+    assert.deepEqual([migrated.autoReviewEnabled, migrated.autoReviewEnabledAt], [false, null], "a board backfilled from old cards keeps auto-review off");
     assert.equal(board.listCards(repo)[0]?.id, "old-card");
     assert.equal(board.listCards(repo)[0]?.priority, 0, "cards from before priorities migrate to Normal");
     assert.equal(board.listRuns("old-card")[0]?.sessionId, "old-session");

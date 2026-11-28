@@ -23,7 +23,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "./components/ui/dialog";
+} from "./dialog.js";
 import { followUps } from "./follow-ups.js";
 import { parsePlan } from "./plan.js";
 import { MergeConflictPanel, ReviewPanel } from "./review.js";
@@ -355,8 +355,6 @@ export function CardDetails({
         }}
       >
         <DialogContent
-          showOverlay={!side || expandedDetails || smallScreen}
-          overlayClassName={side ? "bg-black/25 backdrop-blur-none" : undefined}
           style={
             side && !expandedDetails
               ? ({ "--card-width": `${sideWidth}px` } as CSSProperties)
@@ -364,9 +362,9 @@ export function CardDetails({
           }
           className={
             expandedDetails
-              ? "left-0 top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none [--pop-x:0px] [--pop-y:6px]"
+              ? "left-0 top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-0 rounded-none"
               : side
-                ? "right-0 left-auto top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-x-0 translate-y-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right [--pop-x:32px] [--pop-y:0px]"
+                ? "right-0 left-auto top-[var(--titlebar-h)] h-[calc(100dvh_-_var(--titlebar-h))] max-h-[calc(100dvh_-_var(--titlebar-h))] w-screen translate-0 rounded-none lg:w-[min(var(--card-width),95vw)] origin-right"
                 : "w-[min(94vw,750px)]"
           }
         >
@@ -415,9 +413,9 @@ export function CardDetails({
             </DialogTitle>
             {card && card.status !== "running" && (
               <Button
-                variant="ghost"
-                size="icon"
-                className="size-7 shrink-0"
+                variant="text"
+                size="sm"
+                className="size-7 shrink-0 px-0"
                 disabled={busy}
                 aria-label="Edit title and description"
                 title="Edit title and description. Runs and reviews do not change."
@@ -469,7 +467,7 @@ export function CardDetails({
               </span>
               <Button
                 size="sm"
-                variant="ghost"
+                variant="text"
                 className="ml-auto"
                 onClick={queue.onNext}
               >
@@ -525,7 +523,7 @@ export function CardDetails({
               )}
               <Button
                 size="sm"
-                variant="ghost"
+                variant="text"
                 className="ml-auto"
                 onClick={() => setExpandedDetails((value) => !value)}
               >
@@ -583,7 +581,7 @@ export function CardDetails({
                 <Button
                   className="mt-2"
                   size="sm"
-                  variant="outline"
+                  variant="secondary"
                   disabled={busy}
                   onClick={() =>
                     action(async () => {
@@ -838,6 +836,7 @@ export function CardDetails({
                         />
                       </label>
                       <Button
+                        variant="main"
                         size="sm"
                         type="submit"
                         disabled={
@@ -881,7 +880,7 @@ export function CardDetails({
                           its changes and the old session as evidence.
                         </p>
                         <Button
-                          variant="outline"
+                          variant="secondary"
                           disabled={busy}
                           onClick={() =>
                             action(() =>
@@ -976,7 +975,7 @@ export function CardDetails({
                     </code>
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="text"
                       aria-label="Copy card ID"
                       onClick={() => {
                         void navigator.clipboard
@@ -1030,6 +1029,7 @@ export function CardDetails({
           <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-5">
             {card?.status === "triage" && (
               <Button
+                variant="main"
                 disabled={busy}
                 onClick={async () => {
                   const check = await checkBeforeReady([card]);
@@ -1051,7 +1051,7 @@ export function CardDetails({
             )}
             {card?.status === "ready" && runs.length === 0 && (
               <Button
-                variant="outline"
+                variant="secondary"
                 disabled={busy}
                 onClick={() =>
                   action(() =>
@@ -1076,7 +1076,7 @@ export function CardDetails({
                     : "Queued, starts after restart"}
                 </span>
                 <Button
-                  variant="outline"
+                  variant="secondary"
                   disabled={busy}
                   onClick={() =>
                     action(() =>
@@ -1096,7 +1096,7 @@ export function CardDetails({
                 <Button
                   // In review the next step is a decision. Rerunning is secondary unless changes were
                   // requested or a conflict needs Pi.
-                  variant={reviewDecisionPending ? "outline" : "default"}
+                  variant={reviewDecisionPending ? "secondary" : "main"}
                   className={reviewDecisionPending ? "order-last" : undefined}
                   disabled={
                     busy ||
@@ -1145,7 +1145,7 @@ export function CardDetails({
               )}
             {card?.status === "running" && runs[0] && (
               <Button
-                variant="destructive"
+                variant="main"
                 disabled={busy}
                 onClick={() =>
                   action(() =>
@@ -1160,7 +1160,7 @@ export function CardDetails({
             )}
             {card?.status === "review" && currentReview?.files.length === 0 && (
               <Button
-                variant="outline"
+                variant="secondary"
                 disabled={
                   busy ||
                   approvalPending ||
@@ -1191,7 +1191,7 @@ export function CardDetails({
             )}
             {card?.status === "review" && currentReview?.files.length !== 0 && (
               <Button
-                variant={reviewDecisionPending ? "default" : "outline"}
+                variant={reviewDecisionPending ? "main" : "secondary"}
                 disabled={
                   busy ||
                   !currentReview ||
@@ -1282,7 +1282,7 @@ export function CardDetails({
             )}
             {card?.status === "review" && !changesRequested && (
               <Button
-                variant="outline"
+                variant="secondary"
                 disabled={
                   busy ||
                   !currentReview ||
@@ -1341,7 +1341,7 @@ export function CardDetails({
               )}
             {card?.status === "review" && approvalPending && (
               <Button
-                variant="ghost"
+                variant="text"
                 disabled={busy}
                 onClick={async () => {
                   if (
@@ -1364,7 +1364,7 @@ export function CardDetails({
               ["triage", "ready"].includes(card.status) &&
               runs.length === 0 && (
                 <Button
-                  variant="outline"
+                  variant="secondary"
                   disabled={busy}
                   onClick={() =>
                     action(() =>
@@ -1380,7 +1380,7 @@ export function CardDetails({
               )}
             {(card?.status === "done" || card?.status === "failed") && (
               <Button
-                variant="outline"
+                variant="secondary"
                 disabled={busy}
                 onClick={() =>
                   action(() =>
@@ -1400,7 +1400,7 @@ export function CardDetails({
               card?.status === "ready") && (
               <>
                 <Button
-                  variant="outline"
+                  variant="secondary"
                   disabled={busy}
                   onClick={() => setClosing(true)}
                 >
@@ -1424,7 +1424,7 @@ export function CardDetails({
             )}
             {card?.status === "done" && (
               <Button
-                variant="outline"
+                variant="secondary"
                 disabled={busy}
                 onClick={() =>
                   action(() =>
@@ -1440,7 +1440,7 @@ export function CardDetails({
             )}
             {card?.status === "archived" && (
               <Button
-                variant="outline"
+                variant="secondary"
                 disabled={busy}
                 onClick={() =>
                   action(() =>
@@ -1456,7 +1456,7 @@ export function CardDetails({
             )}
             {card?.status === "archived" && (card.attachmentCount ?? 0) > 0 && (
               <Button
-                variant="outline"
+                variant="secondary"
                 disabled={busy}
                 onClick={async () => {
                   if (
@@ -1490,7 +1490,7 @@ export function CardDetails({
               <Button
                 className="mt-3"
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 disabled={busy}
                 onClick={async () => {
                   if (
@@ -1641,7 +1641,7 @@ function PullRequestLink({
         />
         <Button
           type="submit"
-          variant="outline"
+          variant="secondary"
           size="sm"
           disabled={busy || draft.trim() === (card.prOverrideUrl ?? "")}
         >
@@ -1787,7 +1787,7 @@ function Dependencies({
               </span>
               <Button
                 size="sm"
-                variant="ghost"
+                variant="text"
                 className="ml-auto"
                 aria-label={`Remove dependency on ${item.title}`}
                 disabled={busy}
@@ -1890,7 +1890,7 @@ function RunReport({
         </h3>
         <Button
           size="sm"
-          variant="ghost"
+          variant="text"
           aria-label="Copy report as markdown"
           onClick={() => {
             void navigator.clipboard
@@ -1942,7 +1942,7 @@ function RunReport({
               <Button
                 className="mt-3"
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 disabled={planMade || planCreated}
                 onClick={() =>
                   void onCreatePlan().then((ok) => {
@@ -1981,7 +1981,7 @@ function RunReport({
                   {onAddToScope && (
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant="secondary"
                       disabled={isInScope(item) || isAdded(index)}
                       onClick={() => void onAddToScope(scopeText(item))}
                     >
@@ -1991,7 +1991,7 @@ function RunReport({
                   {!isInScope(item) && (
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant="secondary"
                       disabled={isAdded(index)}
                       onClick={() =>
                         void onAddFollowUp(index, item.title, item.body).then(

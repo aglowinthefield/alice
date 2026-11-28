@@ -38,7 +38,7 @@ test("density picker rescales spacing and type, saves, and paints the cached den
   });
   try {
     await page.goto(url);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     const group = page.getByRole("group", { name: "Density" });
     assert.equal(await group.getByRole("radio", { name: "Default" }).isChecked(), true);
@@ -63,7 +63,7 @@ test("density picker rescales spacing and type, saves, and paints the cached den
     await heldRequest;
     release!();
 
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Appearance" }).click();
     await page.getByRole("group", { name: "Density" }).getByRole("radio", { name: "Default" }).check();
     await page.waitForFunction(() => document.documentElement.dataset.density === undefined && localStorage.getItem("alice-density") === "default");

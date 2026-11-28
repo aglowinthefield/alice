@@ -31,14 +31,14 @@ test("unattended review is configured per repository, not in global Settings", a
         : [] });
     });
     await page.goto(`http://127.0.0.1:${address.port}/board/first`);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     const settingsPage = page.locator("main:visible");
     await settingsPage.getByText("Confirm before starting a run").waitFor();
     assert.equal(await settingsPage.getByText("Unattended review", { exact: true }).count(), 0);
     await page.goBack();
 
     // The edit pencil lives on the open board's heading.
-    await page.getByRole("button", { name: "Kanban" }).click();
+    await page.getByRole("link", { name: "Kanban" }).click();
     await page.getByRole("button", { name: "Edit /tmp/first/app" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByText("Unattended review", { exact: true }).waitFor();
@@ -51,7 +51,7 @@ test("unattended review is configured per repository, not in global Settings", a
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "app", exact: true }).nth(1).click();
-    await page.getByRole("button", { name: "Kanban" }).last().click();
+    await page.getByRole("link", { name: "Kanban" }).last().click();
     await page.getByRole("button", { name: "Edit /tmp/second/app" }).click();
     const confirms: string[] = [];
     page.on("dialog", async confirm => { confirms.push(confirm.message()); await confirm.accept(); });

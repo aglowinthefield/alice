@@ -5,7 +5,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "./components/ui/dialog";
+} from "./dialog.js";
 
 /** Mirrors `closeReasons` in server/board.ts. */
 export const closeReasonLabels = {
@@ -66,7 +66,7 @@ export function CloseCardDialog({
           {reasons.map(([reason, label]) => (
             <Button
               key={reason}
-              variant="outline"
+              variant="secondary"
               size="sm"
               disabled={busy}
               aria-pressed={reason === "other" ? other : undefined}
@@ -100,21 +100,21 @@ export function CloseCardDialog({
               placeholder="What happened?"
               className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
             />
-            <Button type="submit" size="sm" disabled={busy}>
+            <Button variant="main" type="submit" size="sm" disabled={busy}>
               Close card
             </Button>
           </form>
         )}
         <div className="mt-5 flex justify-end gap-2">
           <Button
-            variant="outline"
+            variant="secondary"
             disabled={busy}
             onClick={() => finish(() => onOpenChange(false))}
           >
             Cancel
           </Button>
           <Button
-            variant="ghost"
+            variant="text"
             disabled={busy}
             onClick={() => finish(() => onClose({}))}
           >

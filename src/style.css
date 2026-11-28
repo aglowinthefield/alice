@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./styles/house.css";
 @import "./theme-palettes.css";
 @import "./fonts/inter.css";
 /* Density scales Tailwind's spacing unit and type scale together. Every p-*, gap-*, size-* and text-* utility reads these. */
@@ -17,273 +18,36 @@
   --text-sidebar-meta: 11px;
   --text-sidebar-heading: 11px;
 }
+/* Alice's older shadcn roles, drawn from the house roles so a palette only sets those. The primary colour is a neutral:
+   ink. Pen, the app's own voice, rings focus. Card statuses map onto the house tones; Triage and Done share neutral. */
 :root {
-  color-scheme: dark;
-  --background: #1a1d21;
-  --foreground: #f0efeb;
-  --card: #22262b;
-  --card-foreground: #f0efeb;
-  --popover: #282c34;
-  --popover-foreground: #f0efeb;
-  --primary: #d4ccb4;
-  --primary-foreground: #1a1d21;
-  --secondary: #282c34;
-  --secondary-foreground: #e0dcd4;
-  --muted: #282c34;
-  --muted-foreground: #8b919a;
-  --accent: #3d424a;
-  --accent-foreground: #f0efeb;
-  --destructive: #cdacac;
-  --border: #3d424a;
-  --ring: #b4bcc4;
-  --sidebar: #171a1e;
-  --code-background: #171a1e;
-  --selection: #676d77;
-  --status-triage: #8b919a;
-  --status-ready: #d4ccb4;
-  --status-running: #b4bcc4;
-  --status-review: #b8c4b8;
-  --status-failed: #cdacac;
-  --status-interrupted: #c6ad89;
-  --status-done: #9aa59d;
-  --status-archived: #aba5bd;
-  --diff-add: #193529;
-  --diff-add-foreground: #b6e5c5;
-  --diff-remove: #3b2528;
-  --diff-remove-foreground: #f0b5b5;
-  --syntax-keyword: #ff7b72;
-  --syntax-entity: #d2a8ff;
-  --syntax-constant: #79c0ff;
-  --syntax-string: #a5d6ff;
-  --syntax-variable: #ffa657;
-  --syntax-comment: #8b949e;
-  --syntax-tag: #7ee787;
-  --syntax-heading: #79c0ff;
-  --syntax-list: #f2cc60;
+  --background: var(--color-paper);
+  --foreground: var(--color-ink);
+  --card: var(--color-raised);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-raised);
+  --popover-foreground: var(--color-ink);
+  --primary: var(--color-ink);
+  --primary-foreground: var(--color-paper);
+  --secondary: color-mix(in oklab, var(--color-ink) 6%, var(--color-paper));
+  --secondary-foreground: var(--color-ink);
+  --muted: var(--secondary);
+  --muted-foreground: var(--color-ink-muted);
+  --accent: var(--color-pen-wash);
+  --accent-foreground: var(--color-ink);
+  --destructive: var(--color-status-danger);
+  --border: var(--color-hairline);
+  --ring: var(--color-pen);
+  --sidebar: var(--color-paper);
+  --status-triage: var(--color-status-neutral);
+  --status-ready: var(--color-status-attention);
+  --status-running: var(--color-status-info);
+  --status-review: var(--color-status-success);
+  --status-failed: var(--color-status-danger);
+  --status-interrupted: var(--color-status-warning);
+  --status-done: var(--color-status-neutral);
+  --status-archived: var(--color-status-other);
   --radius: 0.3rem;
-}
-:root[data-theme="light"] {
-  --repo-violet: #7c5cc4;
-  --repo-coral: #d2455f;
-  --repo-amber: #b7791f;
-  --repo-lime: #5f8a14;
-  --repo-mint: #1f9d6a;
-  --repo-teal: #0f8f86;
-  --repo-sky: #1479b5;
-  --repo-blue: #2f66c4;
-  --repo-pink: #c2377f;
-  --repo-slate: #5b6778;
-  color-scheme: light;
-  --background: #f5f3ee;
-  --foreground: #242a30;
-  --card: #ffffff;
-  --card-foreground: #242a30;
-  --popover: #ffffff;
-  --popover-foreground: #242a30;
-  --primary: #554b36;
-  --primary-foreground: #ffffff;
-  --secondary: #eae7e0;
-  --secondary-foreground: #30363c;
-  --muted: #eae7e0;
-  --muted-foreground: #555e66;
-  --accent: #ded9cf;
-  --accent-foreground: #242a30;
-  --destructive: #9d3038;
-  --border: #ccc8be;
-  --ring: #4b6277;
-  --sidebar: #eeebe4;
-  --code-background: #eeebe4;
-  --selection: #c8d6e0;
-  --status-triage: #626b72;
-  --status-ready: #554b36;
-  --status-running: #45627c;
-  --status-review: #38684a;
-  --status-failed: #9d3038;
-  --status-interrupted: #926621;
-  --status-done: #626b72;
-  --status-archived: #5e5675;
-  --diff-add: #e1f2e6;
-  --diff-add-foreground: #184a30;
-  --diff-remove: #fae6e7;
-  --diff-remove-foreground: #882b34;
-  --syntax-keyword: #ad2835;
-  --syntax-entity: #6934ae;
-  --syntax-constant: #0057b8;
-  --syntax-string: #193f74;
-  --syntax-variable: #a34b04;
-  --syntax-comment: #555e66;
-  --syntax-tag: #216e36;
-  --syntax-heading: #0057b8;
-  --syntax-list: #735c0f;
-}
-/* Compline palette by Joshua Blais: https://github.com/joshuablais/compline#palette
-   Body text sits near 12:1 against the background, secondary text near 7:1, and borders stay quiet at under 2:1. */
-:root[data-theme="compline"] {
-  color-scheme: dark;
-  /* Card badges use Tailwind amber, sky and emerald; Compline swaps in its own muted hues. */
-  --color-amber-500: #c9ad8a;
-  --color-sky-500: #80adcc;
-  --color-emerald-500: #85bea0;
-  --repo-violet: #b0a1cc;
-  --repo-coral: #e08f94;
-  --repo-amber: #dab66f;
-  --repo-lime: #adc483;
-  --repo-mint: #85bea0;
-  --repo-teal: #7ab1af;
-  --repo-sky: #80adcc;
-  --repo-blue: #91a7d0;
-  --repo-pink: #cf9bb7;
-  --repo-slate: #a1aab5;
-  --background: #1b1e22;
-  --foreground: #dfdcd5;
-  --card: #22262b;
-  --card-foreground: #dfdcd5;
-  --popover: #292d33;
-  --popover-foreground: #dfdcd5;
-  --primary: #cfc6ae;
-  --primary-foreground: #1b1e22;
-  --secondary: #292d33;
-  --secondary-foreground: #afc2b5;
-  --muted: #292d33;
-  --muted-foreground: #a6abb2;
-  --accent: #393e46;
-  --accent-foreground: #dfdcd5;
-  --destructive: #d5a7a7;
-  --border: #42474f;
-  --ring: #adb8c3;
-  --sidebar: #22262b;
-  --code-background: #181a1e;
-  --selection: #515761;
-  --diff-add: #24352b;
-  --diff-add-foreground: #afc2b5;
-  --diff-remove: #39292d;
-  --diff-remove-foreground: #d8acac;
-  --status-triage: #a6abb2;
-  --status-ready: #cfc6ae;
-  --status-running: #adb8c3;
-  --status-review: #afc2b5;
-  --status-failed: #d5a7a7;
-  --status-interrupted: #c9ad8a;
-  --status-done: #99a59c;
-  --status-archived: #ada6c4;
-  --syntax-keyword: #d5a7a7;
-  --syntax-entity: #cfc6ae;
-  --syntax-constant: #adb8c3;
-  --syntax-string: #afc2b5;
-  --syntax-variable: #c9ad8a;
-  --syntax-comment: #94999f;
-  --syntax-tag: #afc2b5;
-  --syntax-heading: #adb8c3;
-  --syntax-list: #cfc6ae;
-}
-/* Compline Light: the same muted hues on a warm off-white ground, with body text near 14:1 and secondary text near 7:1. */
-:root[data-theme="compline-light"] {
-  color-scheme: light;
-  --repo-violet: #6c5a94;
-  --repo-coral: #a8434a;
-  --repo-amber: #86611c;
-  --repo-lime: #5a7330;
-  --repo-mint: #2f7a5a;
-  --repo-teal: #2c7270;
-  --repo-sky: #386e92;
-  --repo-blue: #435f94;
-  --repo-pink: #944a6f;
-  --repo-slate: #555d68;
-  --background: #f3f1ec;
-  --foreground: #1f2328;
-  --card: #fbfaf7;
-  --card-foreground: #1f2328;
-  --popover: #fbfaf7;
-  --popover-foreground: #1f2328;
-  --primary: #4e4632;
-  --primary-foreground: #fbfaf7;
-  --secondary: #e6e3dc;
-  --secondary-foreground: #2f4c3b;
-  --muted: #e6e3dc;
-  --muted-foreground: #454b53;
-  --accent: #dad6cc;
-  --accent-foreground: #1f2328;
-  --destructive: #7a2f2f;
-  --border: #aeaaa0;
-  --ring: #3a4b5c;
-  --sidebar: #e9e6df;
-  --code-background: #ebe9e3;
-  --selection: #bccad4;
-  --diff-add: #d2e3d6;
-  --diff-add-foreground: #22402e;
-  --diff-remove: #f0d6d4;
-  --diff-remove-foreground: #6e2a2e;
-  --status-triage: #454b53;
-  --status-ready: #5a4f30;
-  --status-running: #3a4b5c;
-  --status-review: #2f4c3b;
-  --status-failed: #7a2f2f;
-  --status-interrupted: #6a4a1a;
-  --status-done: #4a564f;
-  --status-archived: #544a6b;
-  --syntax-keyword: #7a2f2f;
-  --syntax-entity: #5a4f30;
-  --syntax-constant: #3a4b5c;
-  --syntax-string: #2f4c3b;
-  --syntax-variable: #6a4a1a;
-  --syntax-comment: #52575e;
-  --syntax-tag: #2f4c3b;
-  --syntax-heading: #3a4b5c;
-  --syntax-list: #5a4f30;
-}
-/* Hearth: warm timber, plaster cream and oven fire, drawn from a pixel-art bakery. */
-:root[data-theme="hearth"] {
-  --repo-violet: #b79ac0;
-  --repo-coral: #e8806a;
-  --repo-amber: #e0a850;
-  --repo-lime: #a9b860;
-  --repo-mint: #86b88a;
-  --repo-teal: #6fa89e;
-  --repo-sky: #7ea6b8;
-  --repo-blue: #8a9fb8;
-  --repo-pink: #d98fa0;
-  --repo-slate: #a89c8a;
-  --background: #221812;
-  --foreground: #f1e4c8;
-  --card: #2f2118;
-  --card-foreground: #f1e4c8;
-  --popover: #38281c;
-  --popover-foreground: #f1e4c8;
-  --primary: #d9a04a;
-  --primary-foreground: #221812;
-  --secondary: #38281c;
-  --secondary-foreground: #e6d3ad;
-  --muted: #38281c;
-  --muted-foreground: #b09c7e;
-  --accent: #4a3424;
-  --accent-foreground: #f1e4c8;
-  --destructive: #e0644a;
-  --border: #5c3f28;
-  --ring: #e8b45e;
-  --sidebar: #1b130e;
-  --code-background: #1b130e;
-  --selection: #6b4a2e;
-  --diff-add: #26331a;
-  --diff-add-foreground: #c8dca0;
-  --diff-remove: #3e1f17;
-  --diff-remove-foreground: #f0b8a0;
-  --status-triage: #b09c7e;
-  --status-ready: #e8c27a;
-  --status-running: #ff7a3a;
-  --status-review: #9cb860;
-  --status-failed: #e8604a;
-  --status-interrupted: #d0905a;
-  --status-done: #a8a48e;
-  --status-archived: #b8a0ae;
-  --syntax-keyword: #e8704a;
-  --syntax-entity: #d9a04a;
-  --syntax-constant: #e8c27a;
-  --syntax-string: #a8c070;
-  --syntax-variable: #f0a060;
-  --syntax-comment: #8f7d64;
-  --syntax-tag: #a8c070;
-  --syntax-heading: #e8c27a;
-  --syntax-list: #d9a04a;
 }
 [data-status="triage"] { --lane-status-color: var(--status-triage); }
 [data-status="ready"] { --lane-status-color: var(--status-ready); }
@@ -403,20 +167,6 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
   .card-activity[data-activity="waiting"] { animation: none; border-style: dashed; }
 }
 
-/* Dialogs: a short fade, with the panel easing up and in from just under full size. Radix keeps the node mounted until the exit finishes.
-   Panels that are not centred (side pane, expanded) set --pop-x/--pop-y. The centring is Tailwind's `translate` (-50% -50%), the same property this animates, so the keyframe restates it; leaving it out makes the panel start from the bottom right. */
-@keyframes dialog-fade-in { from { opacity: 0; } }
-@keyframes dialog-fade-out { to { opacity: 0; } }
-@keyframes dialog-pop-in { from { opacity: 0; scale: 0.97; translate: var(--pop-x, -50%) var(--pop-y, calc(-50% + 6px)); } }
-@keyframes dialog-pop-out { to { opacity: 0; scale: 0.98; } }
-[data-dialog-overlay][data-state="open"] { animation: dialog-fade-in 160ms ease-out; }
-[data-dialog-overlay][data-state="closed"] { animation: dialog-fade-out 120ms ease-in forwards; }
-[data-dialog-content][data-state="open"] { animation: dialog-pop-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
-[data-dialog-content][data-state="closed"] { animation: dialog-pop-out 120ms ease-in forwards; }
-@media (prefers-reduced-motion: reduce) {
-  [data-dialog-overlay], [data-dialog-content] { animation-duration: 1ms !important; }
-}
-
 /* .page-fade marks each page's <main>. On a page change src/main.tsx lines the veil up with that page and fades it out over
    120 ms: opacity only, never on the page itself, so nothing is clipped, masked, moved or scaled. */
 .page-fade-veil { position: fixed; right: 0; bottom: 0; left: 0; top: 0; z-index: 30; background: var(--background); opacity: 0; pointer-events: none; }
@@ -443,11 +193,10 @@ select:not([multiple]) { appearance: none; padding-right: 1.75rem; background-re
 .chat-entry { animation: chat-entry-in 200ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .chat-entry { animation: none; } }
 
-/* Sidebar: a repo's pages hang off a rail under its name. The list slides open and shut, and the accent marker
-   (SubnavMarker in src/main.tsx) slides to the current page. Closed, it is hidden, so its links leave the tab order. */
+/* Sidebar: a repo's pages hang off a rail under its name, and the list slides open and shut. The current page carries
+   the house pen circle (SidebarItem). Closed, the list is hidden, so its links leave the tab order. */
 .repo-subnav { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 120ms ease-out, visibility 0s 180ms; }
 .repo-subnav[data-open="true"] { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
 .repo-subnav > div { position: relative; min-height: 0; overflow: hidden; }
 .repo-subnav > div::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 1px; background: var(--border); }
-.repo-subnav-marker { position: absolute; top: 0; left: -0.5px; width: 2px; border-radius: 1px; background: var(--primary); transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), height 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 120ms ease-out; }
-@media (prefers-reduced-motion: reduce) { .repo-subnav, .repo-subnav-marker { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .repo-subnav { transition: none; } }

@@ -8,7 +8,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "./components/ui/dialog.js";
+} from "./dialog.js";
 import type { Card } from "./model.js";
 
 /**
@@ -132,7 +132,7 @@ export function ReadyCheckHost() {
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <Button
-            variant="outline"
+            variant="secondary"
             autoFocus
             onClick={() =>
               ask && answer({ choice: "edit", card: ask.flagged[0].card })
@@ -142,13 +142,13 @@ export function ReadyCheckHost() {
           </Button>
           {wide.length > 0 && (
             <Button
-              variant="outline"
+              variant="secondary"
               onClick={() => answer({ choice: "plan", cards: wide })}
             >
               Turn into a plan
             </Button>
           )}
-          <Button onClick={() => answer({ choice: "ready" })}>
+          <Button variant="main" onClick={() => answer({ choice: "ready" })}>
             Ready anyway
           </Button>
         </div>

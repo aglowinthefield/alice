@@ -35,7 +35,7 @@ test("Logs shows the server's output, polls for new lines, and filters by level 
   });
   try {
     await page.goto(url);
-    await page.getByRole("button", { name: "Logs" }).click();
+    await page.getByRole("link", { name: "Logs" }).click();
     await page.getByRole("heading", { name: "Logs" }).waitFor();
     await page.getByText("Alice listening on http://127.0.0.1:4317").waitFor();
     await page.getByText("gh failed").waitFor();

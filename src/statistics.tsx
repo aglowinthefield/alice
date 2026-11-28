@@ -16,13 +16,8 @@ import { formatCost } from "./usage.js";
 import type { Board } from "./model.js";
 import type { GroupRow, Stats } from "../shared/wire.js";
 import { closeReasonLabels } from "./close-card.js";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "./components/ui/card";
+import { Card } from "./components/ui/card";
+import { cn } from "./lib/utils";
 import {
   ChartContainer,
   ChartLegend,
@@ -96,16 +91,10 @@ function Tile({
   hint?: string;
 }) {
   return (
-    <Card>
-      <CardHeader className="pb-0">
-        <CardDescription>{label}</CardDescription>
-      </CardHeader>
-      <CardContent className="pt-1">
-        <div className="text-2xl font-semibold tracking-tight">{value}</div>
-        {hint && (
-          <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
-        )}
-      </CardContent>
+    <Card className="px-5 py-4">
+      <div className="text-xs text-ink-muted">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tracking-tight">{value}</div>
+      {hint && <div className="mt-1 text-xs text-ink-muted">{hint}</div>}
     </Card>
   );
 }
@@ -122,12 +111,12 @@ function Panel({
   className?: string;
 }) {
   return (
-    <Card className={className}>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        {description && <CardDescription>{description}</CardDescription>}
-      </CardHeader>
-      <CardContent>{children}</CardContent>
+    <Card className={cn("p-5", className)}>
+      <h3 className="text-sm font-medium">{title}</h3>
+      {description && (
+        <p className="mt-1 text-xs text-ink-muted">{description}</p>
+      )}
+      <div className="mt-4">{children}</div>
     </Card>
   );
 }

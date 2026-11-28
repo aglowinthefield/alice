@@ -166,6 +166,7 @@ export function DiscussionPanel({
           disabled={uploading}
         />
         <Button
+          variant="main"
           type="submit"
           disabled={
             (!draft.trim() && !files.length) ||

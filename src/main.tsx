@@ -1,14 +1,7 @@
 import { BrandIcon } from "./brand-icon";
 import { WindowControls } from "./window-controls";
 import { sharedCaches } from "../shared/shared-caches.js";
-import {
-  Fragment,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Archive,
   CircleCheck,
@@ -57,13 +50,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
+import { SidebarItem } from "./components/ui/navigation";
 import { ConflictHotspots } from "./conflict-hotspots.js";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "./components/ui/dialog";
+} from "./dialog.js";
 import "highlight.js/styles/github-dark.css";
 import "./style.css";
 import { FilePicker, formatSize, uploadAttachment } from "./attachments.js";
@@ -368,26 +362,26 @@ function ChatUnreadBadge({
   );
 }
 
-/** A repo's page link in the sidebar. The current page gets the rail's marker instead of a highlight. */
-const subnavItem = (current: boolean) =>
-  `mt-0.5 flex w-full items-center gap-2.5 rounded-md py-1.5 pl-3.5 pr-3 text-left text-[length:var(--text-sidebar)] ${current ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`;
-/** The accent mark on a repo's rail. After each render it moves to the link marked as the current page, so a page change slides it. */
-function SubnavMarker() {
-  const ref = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
-    const marker = ref.current,
-      rail = marker?.parentElement;
-    if (!marker || !rail) return;
-    const current = rail.querySelector<HTMLElement>('[aria-current="page"]');
-    marker.style.opacity = current ? "1" : "0";
-    if (!current) return;
-    const top =
-      current.getBoundingClientRect().top - rail.getBoundingClientRect().top;
-    marker.style.transform = `translateY(${top + 4}px)`;
-    marker.style.height = `${current.offsetHeight - 8}px`;
-  });
-  return <span ref={ref} aria-hidden="true" className="repo-subnav-marker" />;
-}
+/** A sidebar link's click: a plain click changes page in place, a modified one opens a tab as links do. */
+const navClick = (go: () => void) => (event: React.MouseEvent) => {
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  )
+    return;
+  event.preventDefault();
+  go();
+};
+/** A sidebar link's icon and label; a badge after it sits at the right. */
+const navLabel = (Icon: LucideIcon, label: string, size = 16) => (
+  <span className="flex items-center gap-2.5">
+    <Icon size={size} aria-hidden="true" />
+    {label}
+  </span>
+);
 /** Pull request screens and links need a GitHub remote for `gh`. */
 const supportsPullRequests = (board: { remoteUrl?: string }) =>
   hasGithubRemote(board);
@@ -662,7 +656,7 @@ function AgentModelFields({
       )}
       <Button
         type="submit"
-        variant="outline"
+        variant="secondary"
         className="mt-3"
         disabled={disabled || !changed}
       >
@@ -1951,20 +1945,19 @@ export function App() {
           </button>
         </div>
         <div className="px-2 pt-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-          <button
-            onClick={openToday}
-            className={`mb-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "today" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
+          <SidebarItem
+            asChild
+            active={view === "today"}
+            count={needsYouCount > 0 ? needsYouCount : undefined}
+            className="mx-1 mt-1.5 mb-4"
           >
-            <Sun size={16} aria-hidden="true" />
-            <span className="text-[14px] font-medium text-foreground">
-              Today
-            </span>
-            {needsYouCount > 0 && (
-              <span className="ml-auto text-[length:var(--text-sidebar-meta)] tabular-nums text-muted-foreground">
-                {needsYouCount}
-              </span>
-            )}
-          </button>
+            <a
+              href={formatRoute({ view: "today", boardId: null, cardId: null })}
+              onClick={navClick(openToday)}
+            >
+              {navLabel(Sun, "Today")}
+            </a>
+          </SidebarItem>
           <div>
             {sortedBoards.map((item) => {
               const active = view === "board" && boardId === item.id;
@@ -2065,47 +2058,65 @@ export function App() {
                   </div>
                   <div className="repo-subnav ml-4" data-open={open}>
                     <div>
-                      <SubnavMarker />
-                      <button
-                        onClick={() => openBoard(item.id)}
-                        aria-current={active ? "page" : undefined}
-                        className={subnavItem(active)}
-                      >
-                        <Kanban size={13} aria-hidden="true" /> Kanban
-                        {!!item.newCards && (
-                          <NewCardsBadge count={item.newCards} />
+                      {/* Room for the pen circle, which the subnav's clip would cut. */}
+                      <div className="space-y-0.5 px-3 py-1.5">
+                        <SidebarItem asChild active={active}>
+                          <a
+                            href={formatRoute({
+                              view: "board",
+                              boardId: item.id,
+                              cardId: null,
+                            })}
+                            onClick={navClick(() => openBoard(item.id))}
+                          >
+                            {navLabel(Kanban, "Kanban", 13)}
+                            {!!item.newCards && (
+                              <NewCardsBadge count={item.newCards} />
+                            )}
+                          </a>
+                        </SidebarItem>
+                        {supportsPullRequests(item) && (
+                          <SidebarItem asChild active={pullsActive}>
+                            <a
+                              href={formatRoute({
+                                view: "pulls",
+                                boardId: item.id,
+                                cardId: null,
+                              })}
+                              onClick={navClick(() => openPulls(item.id))}
+                            >
+                              {navLabel(GitPullRequest, "Pull requests", 13)}
+                            </a>
+                          </SidebarItem>
                         )}
-                      </button>
-                      {supportsPullRequests(item) && (
-                        <button
-                          onClick={() => openPulls(item.id)}
-                          aria-current={pullsActive ? "page" : undefined}
-                          className={subnavItem(pullsActive)}
-                        >
-                          <GitPullRequest size={13} aria-hidden="true" /> Pull
-                          requests
-                        </button>
-                      )}
-                      <button
-                        onClick={() => openVisualizer(item.id)}
-                        aria-current={visualizerActive ? "page" : undefined}
-                        className={subnavItem(visualizerActive)}
-                      >
-                        <Workflow size={13} aria-hidden="true" /> Visualizer
-                      </button>
-                      <button
-                        onClick={() => openChat(item.id)}
-                        aria-current={chatActive ? "page" : undefined}
-                        className={subnavItem(chatActive)}
-                      >
-                        <MessageSquare size={13} aria-hidden="true" /> Chat
-                        {!!item.chatUnread && (
-                          <ChatUnreadBadge
-                            count={item.chatUnread}
-                            className="ml-auto"
-                          />
-                        )}
-                      </button>
+                        <SidebarItem asChild active={visualizerActive}>
+                          <a
+                            href={formatRoute({
+                              view: "visualizer",
+                              boardId: item.id,
+                              cardId: null,
+                            })}
+                            onClick={navClick(() => openVisualizer(item.id))}
+                          >
+                            {navLabel(Workflow, "Visualizer", 13)}
+                          </a>
+                        </SidebarItem>
+                        <SidebarItem asChild active={chatActive}>
+                          <a
+                            href={formatRoute({
+                              view: "chat",
+                              boardId: item.id,
+                              cardId: null,
+                            })}
+                            onClick={navClick(() => openChat(item.id))}
+                          >
+                            {navLabel(MessageSquare, "Chat", 13)}
+                            {!!item.chatUnread && (
+                              <ChatUnreadBadge count={item.chatUnread} />
+                            )}
+                          </a>
+                        </SidebarItem>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2126,7 +2137,7 @@ export function App() {
               />
             )}
             <Button
-              variant="ghost"
+              variant="text"
               className="mt-1 w-full justify-start text-[length:var(--text-sidebar)] font-normal text-muted-foreground hover:text-foreground"
               onClick={() => {
                 setError("");
@@ -2136,33 +2147,47 @@ export function App() {
               <Plus size={15} /> Add repository
             </Button>
           </div>
-          <button
-            onClick={() => openPage("stats")}
-            aria-current={view === "stats" ? "page" : undefined}
-            className={`mt-4 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "stats" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-          >
-            <BarChart3 size={16} aria-hidden="true" />
-            <span>Statistics</span>
-          </button>
-          <button
-            onClick={() => openPage("logs")}
-            aria-current={view === "logs" ? "page" : undefined}
-            className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "logs" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-          >
-            <ScrollText size={16} aria-hidden="true" />
-            <span>Logs</span>
-          </button>
-          <button
-            onClick={() => {
-              setError("");
-              openPage("settings");
-            }}
-            aria-current={view === "settings" ? "page" : undefined}
-            className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[length:var(--text-sidebar)] ${view === "settings" ? "bg-accent/50 text-foreground" : "text-muted-foreground hover:bg-accent/30 hover:text-foreground"}`}
-          >
-            <Settings2 size={16} aria-hidden="true" />
-            <span>Settings</span>
-          </button>
+          <div className="mx-1 mt-4 mb-3 space-y-0.5">
+            <SidebarItem asChild active={view === "stats"}>
+              <a
+                href={formatRoute({
+                  view: "stats",
+                  boardId: null,
+                  cardId: null,
+                })}
+                onClick={navClick(() => openPage("stats"))}
+              >
+                {navLabel(BarChart3, "Statistics")}
+              </a>
+            </SidebarItem>
+            <SidebarItem asChild active={view === "logs"}>
+              <a
+                href={formatRoute({
+                  view: "logs",
+                  boardId: null,
+                  cardId: null,
+                })}
+                onClick={navClick(() => openPage("logs"))}
+              >
+                {navLabel(ScrollText, "Logs")}
+              </a>
+            </SidebarItem>
+            <SidebarItem asChild active={view === "settings"}>
+              <a
+                href={formatRoute({
+                  view: "settings",
+                  boardId: null,
+                  cardId: null,
+                })}
+                onClick={navClick(() => {
+                  setError("");
+                  openPage("settings");
+                })}
+              >
+                {navLabel(Settings2, "Settings")}
+              </a>
+            </SidebarItem>
+          </div>
         </div>
       </aside>
       {view === "today" && (
@@ -2453,7 +2478,11 @@ export function App() {
                 </span>
               )}
             </div>
-            <Button disabled={!boardId} onClick={() => setCreating(true)}>
+            <Button
+              variant="main"
+              disabled={!boardId}
+              onClick={() => setCreating(true)}
+            >
               <Plus size={16} /> New card
             </Button>
           </div>
@@ -2581,7 +2610,7 @@ export function App() {
             <span>Auto pickup paused: {currentBoard.autoPickupError}.</span>
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               disabled={busy}
               onClick={() => {
                 const target = currentBoard;
@@ -2625,7 +2654,7 @@ export function App() {
               </span>
               <Button
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 disabled={busy}
                 onClick={() => {
                   const target = currentBoard;
@@ -2673,7 +2702,7 @@ export function App() {
               conflicts. The card worktrees are still available.
             </span>
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={() => setSelected(mergeConflicts[0].cardId)}
             >
@@ -2971,13 +3000,14 @@ export function App() {
                           <div className="ml-auto flex gap-1">
                             <Button
                               size="sm"
-                              variant="ghost"
+                              variant="text"
                               disabled={busy}
                               onClick={stopSelecting}
                             >
                               Cancel
                             </Button>
                             <Button
+                              variant="main"
                               size="sm"
                               disabled={
                                 busy ||
@@ -3368,6 +3398,7 @@ export function App() {
           >
             <RepositoryPathInput value={repoPath} onChange={setRepoPath} />
             <Button
+              variant="main"
               disabled={
                 busy || repoCheck?.path !== repoPath || !!repoCheck.error
               }
@@ -3444,6 +3475,7 @@ export function App() {
                 )}
               </div>
               <Button
+                variant="main"
                 className="mt-5"
                 disabled={
                   busy ||
@@ -3516,7 +3548,7 @@ export function App() {
                 />
                 <Button
                   type="submit"
-                  variant="outline"
+                  variant="secondary"
                   disabled={
                     busy ||
                     remoteUrlDraft.trim() === (editingBoard.remoteUrl ?? "")
@@ -3584,7 +3616,7 @@ export function App() {
                 (editingBoard.integration ?? "local") === "local" && (
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="secondary"
                     className="mt-2"
                     disabled={busy}
                     onClick={() =>
@@ -3806,7 +3838,7 @@ export function App() {
               </p>
               <Button
                 className="mt-3"
-                variant={pickupBoard.limitsEnabled ? "outline" : "default"}
+                variant={pickupBoard.limitsEnabled ? "secondary" : "main"}
                 disabled={busy}
                 onClick={() =>
                   void action(async () => {
@@ -3898,7 +3930,7 @@ export function App() {
                     </label>
                     <Button
                       type="submit"
-                      variant="outline"
+                      variant="secondary"
                       size="sm"
                       disabled={
                         busy ||
@@ -3924,7 +3956,7 @@ export function App() {
                       pickupBoard.pickupDailyLimit && (
                       <Button
                         className="mt-2"
-                        variant="outline"
+                        variant="secondary"
                         disabled={busy}
                         onClick={() => resetPickupLimit(pickupBoard)}
                       >
@@ -4070,7 +4102,7 @@ export function App() {
               </label>
               <Button
                 className="mt-3"
-                variant={pickupBoard.autoPickupEnabled ? "outline" : "default"}
+                variant={pickupBoard.autoPickupEnabled ? "secondary" : "main"}
                 disabled={busy}
                 onClick={async () => {
                   const enable = !pickupBoard.autoPickupEnabled;
@@ -4153,7 +4185,7 @@ export function App() {
               </label>
               <Button
                 className="mt-3"
-                variant={editingBoard.autoReviewEnabled ? "outline" : "default"}
+                variant={editingBoard.autoReviewEnabled ? "secondary" : "main"}
                 disabled={busy}
                 onClick={async () => {
                   const enable = !editingBoard.autoReviewEnabled;
@@ -4232,7 +4264,7 @@ export function App() {
                 the repository again to restore them.
               </p>
               <Button
-                variant="destructive"
+                variant="main"
                 className="mt-4"
                 disabled={busy}
                 onClick={() => removeBoard(editingBoard)}
@@ -4349,11 +4381,7 @@ export function App() {
         groups={paletteGroups}
       />
       <Dialog open={showShortcuts} onOpenChange={setShowShortcuts}>
-        <DialogContent
-          className="bg-card/80 backdrop-blur-md"
-          overlayClassName="bg-black/40"
-          aria-label="Keyboard shortcuts"
-        >
+        <DialogContent aria-label="Keyboard shortcuts">
           <DialogTitle className="text-lg font-semibold tracking-tight">
             Keyboard shortcuts
           </DialogTitle>
@@ -4783,7 +4811,7 @@ function CardForm({
         </>
       )}
       <div className="flex justify-end">
-        <Button disabled={busy || submitting} type="submit">
+        <Button variant="main" disabled={busy || submitting} type="submit">
           {initial ? "Save changes" : "Create card"} <Plus size={15} />
         </Button>
       </div>

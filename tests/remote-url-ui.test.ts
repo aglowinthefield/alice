@@ -32,7 +32,7 @@ test("remote repository link is saved in repository settings and listed below th
     await page.locator("header h1").filter({ hasText: "example" }).waitFor();
     const link = page.locator("header").getByRole("link", { name: "Remote repository" });
     assert.equal(await link.count(), 0);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("link", { name: "Settings" }).click();
     await page.getByRole("heading", { name: "Settings" }).waitFor();
     assert.equal(await page.getByRole("textbox", { name: "Remote repository link" }).count(), 0, "not in global settings");
     await page.goBack();

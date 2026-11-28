@@ -16,7 +16,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "./components/ui/dialog.js";
+} from "./dialog.js";
 import type { Attachment } from "./model.js";
 
 const attachmentsUrl = (boardId: string, cardId: string) =>
@@ -117,7 +117,6 @@ export function AttachmentLightbox({
             step(1);
           }
         }}
-        overlayClassName="bg-black/85"
         className="flex h-[92vh] w-[min(96vw,1400px)] flex-col gap-3 overflow-hidden p-4"
       >
         {item && (

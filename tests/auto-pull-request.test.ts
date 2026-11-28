@@ -60,6 +60,36 @@ test("automatic pull requests are off by default and open only runs that finish 
   } finally { item.close(); }
 });
 
+test("running a card again after its pull request closed waits for Approve, whoever opened the closed one", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-01-01T00:00:00Z") });
+  const item = fixture();
+  try {
+    // The external card's run finished before the opt-in, so only its rerun could be opened automatically.
+    const external = item.reviewedCard();
+    item.board.setAutoPullRequest(item.repoBoard.id, true);
+    item.board.recordPullRequest(external.id, { number: 9, url: "https://github.com/example/repo/pull/9", state: "OPEN" });
+    t.mock.timers.tick(1000);
+    const card = item.reviewedCard();
+    await item.auto.tick();
+    assert.deepEqual(item.opened, [card.id], "the first PR opens automatically");
+    for (const [id, number] of [[card.id, 7], [external.id, 9]] as const) {
+      item.board.recordPullRequest(id, { number, url: `https://github.com/example/repo/pull/${number}`, state: "CLOSED" });
+      item.board.closePullRequestUnmerged(id, `Pull request #${number} was closed without merging.`);
+    }
+    t.mock.timers.tick(1000);
+    for (const id of [card.id, external.id]) {
+      const run = item.board.claim(id);
+      item.board.attach(run.id, process.pid, "/tmp/none");
+      item.board.finish(run.id, "review");
+    }
+    assert.equal(item.board.getCard(card.id)!.prClosedNumber, 7);
+    assert.equal(item.board.getCard(external.id)!.prPushedRunId, null, "Bakery never pushed the external PR");
+    await item.auto.tick();
+    assert.deepEqual(item.opened, [card.id], "neither replacement opens before Approve");
+    for (const id of [card.id, external.id]) assert.equal(item.board.getCard(id)!.status, "review");
+  } finally { item.close(); }
+});
+
 test("a failed automatic push is recorded for a person and not retried for the same run", async () => {
   const item = fixture();
   try {

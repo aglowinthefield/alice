@@ -57,6 +57,7 @@ export type ReviewAction =
  * The pull request linked to a card on a github-pr board. `prOverrideUrl` replaces the branch lookup.
  * `prPushedRunId` is the run whose work Approve last pushed to the PR; a newer run needs Approve again.
  * `prCiPending` is set while Alice holds a CI failure to send back to Pi (waiting for the other checks to settle).
+ * `prClosedNumber` is the closed PR the card ran again past; sync ignores it, so Approve opens a new one.
  */
 export type CardPullRequest = {
   prOverrideUrl: string | null;
@@ -72,6 +73,7 @@ export type CardPullRequest = {
   conflictRepairs: number;
   conflictRepairKey: string | null;
   prCommentsSeen: string | null;
+  prClosedNumber: number | null;
 };
 
 /**

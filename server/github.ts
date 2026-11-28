@@ -361,7 +361,11 @@ function prRepo(card: Card, repo: string): string {
   return (card.prOverrideUrl && parsePullRequestUrl(card.prOverrideUrl)?.repo) || repo;
 }
 
-/** The PR linked to a card: its override URL if set, else the newest PR from its branch. */
+/**
+ * The PR linked to a card: its override URL if set, else the newest PR from its branch, unless that is the closed PR
+ * the card ran again past (`prClosedNumber`), whose replacement Approve opens. Once that PR is reopened it is the card's
+ * PR again, and closing it again counts.
+ */
 export async function linkedPullRequest(github: GitHub, repo: string, card: Card, recent?: PullRequest[]): Promise<PullRequest | undefined> {
   if (card.prOverrideUrl) {
     const link = parsePullRequestUrl(card.prOverrideUrl);
@@ -369,13 +373,10 @@ export async function linkedPullRequest(github: GitHub, repo: string, card: Card
     return recent?.find(pr => pr.number === link.number) ?? github.view(link.repo, link.number);
   }
   const branches = cardBranches(card.id);
-  const known = recent?.find(pr => branches.includes(pr.headRefName));
-  if (known || (recent && !card.prNumber)) return known;
-  for (const branch of branches) {
-    const found = await github.findByBranch(repo, branch);
-    if (found) return found;
-  }
-  return undefined;
+  let pr = recent?.find(item => branches.includes(item.headRefName));
+  if (!pr && !(recent && !card.prNumber))
+    for (const branch of branches) if ((pr = await github.findByBranch(repo, branch))) break;
+  return pr?.state === "CLOSED" && pr.number === card.prClosedNumber && pr.number !== card.prNumber ? undefined : pr;
 }
 
 /**

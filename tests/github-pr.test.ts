@@ -685,6 +685,80 @@ test("github-pr: a PR closed without merging sends the card to Needs you with th
   } finally { f.cleanup(); }
 });
 
+test("github-pr: running a card again after its PR closed waits for Approve, which opens a new PR", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    f.setPrs([{ ...pr, state: "CLOSED" }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(card.id)?.status, "failed");
+
+    const run = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running");
+    assert.equal(f.board.getRun(run.id)?.status, "review", f.board.getRun(run.id)?.error ?? "");
+    new Integration(f.board, f.data).recordChangedFiles(f.board.getCard(card.id)!);
+    await f.sync.syncBoard(f.repoBoard.id);
+    const rerun = f.board.getCard(card.id)!;
+    assert.equal(rerun.status, "review", rerun.prError ?? "");
+    assert.equal(rerun.prClosedNumber, 100);
+    assert.equal(rerun.prNumber, null);
+    assert.equal(rerun.reviewWait, null, "the person's turn");
+    assert.equal(rerun.reviewAction, "pr_ready");
+
+    await approve(f, card.id);
+    assert.equal(f.prs().length, 2, "a new PR");
+    const approved = f.board.getCard(card.id)!;
+    assert.equal(approved.prNumber, 101);
+    assert.equal(approved.prState, "OPEN");
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(card.id)?.status, "review", "the new open PR keeps the card in Review");
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a closed PR reopened after the card ran again is its PR again, and closing it again sends the card to Needs you", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    await approve(f, card.id);
+    const [pr] = f.prs();
+    f.setPrs([{ ...pr, state: "CLOSED" }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    const run = new Worker(f.board, f.data, f.fakePi).start(f.board.getCard(card.id)!);
+    await waitFor(() => f.board.getRun(run.id)?.status !== "running");
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(card.id)?.status, "review");
+
+    f.setPrs([{ ...pr, state: "OPEN" }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    assert.equal(f.board.getCard(card.id)?.prState, "OPEN", "the reopened PR is linked again");
+    await approve(f, card.id);
+    assert.equal(f.prs().length, 1, "Approve pushes to the reopened PR");
+    assert.equal(f.board.getCard(card.id)?.prPushedRunId, run.id);
+
+    f.setPrs(f.prs().map(item => ({ ...item, state: "CLOSED" })));
+    await f.sync.syncBoard(f.repoBoard.id);
+    const current = f.board.getCard(card.id)!;
+    assert.equal(current.status, "failed");
+    assert.match(current.prError ?? "", /#100 was closed without merging/);
+  } finally { f.cleanup(); }
+});
+
+test("github-pr: a PR opened outside Bakery and closed before the first sync still sends the card to Needs you", async () => {
+  const f = fixture();
+  try {
+    const card = await reviewedCard(f);
+    assert.equal(card.prNumber, null);
+    f.setPrs([{ number: 200, url: "https://github.com/acme/widgets/pull/200", state: "CLOSED", mergedAt: null, mergeCommit: null, headRefName: `alice/${card.id}`, headRefOid: "", statusCheckRollup: [] }]);
+    await f.sync.syncBoard(f.repoBoard.id);
+    const current = f.board.getCard(card.id)!;
+    assert.equal(current.status, "failed");
+    assert.equal(current.prNumber, 200);
+    assert.match(current.prError ?? "", /#200 was closed without merging/);
+  } finally { f.cleanup(); }
+});
+
 test("github-pr: gh errors from creating the PR reach the card verbatim, and the agent never pushed", async () => {
   const f = fixture();
   try {

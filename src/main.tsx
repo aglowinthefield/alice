@@ -738,7 +738,7 @@ export function App() {
     setReposCollapsed(next);
     localStorage.setItem("alice-repos-collapsed", String(next));
   };
-  // Repos start collapsed except the open one; the user's toggles persist.
+  // Repos start collapsed except the open one; the user's toggles persist. Opening one closes the rest.
   const [repoOpen, setRepoOpen] = useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem("alice-repo-open") ?? "{}");
@@ -748,7 +748,12 @@ export function App() {
   });
   const toggleRepoOpen = (id: string, open: boolean) =>
     setRepoOpen((previous) => {
-      const next = { ...previous, [id]: !open };
+      const next = open
+        ? { ...previous, [id]: false }
+        : {
+            ...Object.fromEntries(boards.map((board) => [board.id, false])),
+            [id]: true,
+          };
       localStorage.setItem("alice-repo-open", JSON.stringify(next));
       return next;
     });

@@ -2798,19 +2798,25 @@ export function App() {
                 : laneCards.find(needsYourReview)?.id;
               // Collapse state follows the whole lane so typing a search
               // doesn't fold or unfold lanes.
-              const idle = cards
-                .filter((c) => laneOf(c, splitReview) === column.id)
-                .every((c) => c.status === "done" || c.status === "archived");
+              const wholeLane = cards.filter(
+                (c) => laneOf(c, splitReview) === column.id,
+              );
+              const empty = wholeLane.length === 0;
+              const idle = wholeLane.every(
+                (c) => c.status === "done" || c.status === "archived",
+              );
               const override = boardId
                 ? manualCollapse[boardId]?.[column.id]
                 : undefined;
-              // Any lane can be collapsed by hand; only idle lanes
-              // collapse automatically.
+              // An empty lane is always collapsed and can't be expanded. Any
+              // other lane can be collapsed by hand; only idle lanes collapse
+              // automatically.
               const collapsed =
-                override ??
-                (idle &&
-                  (column.id === "archived" ||
-                    (currentBoard?.autoCollapseEmptySwimlanes ?? false)));
+                empty ||
+                (override ??
+                  (idle &&
+                    (column.id === "archived" ||
+                      (currentBoard?.autoCollapseEmptySwimlanes ?? false))));
               const selecting =
                 selectingLane === column.id && laneCards.length > 0;
               const laneIds = laneCards.map((item) => item.id);
@@ -2861,7 +2867,20 @@ export function App() {
                   }}
                   className={`${collapsed ? "flex w-12" : "w-[280px]"} lane-drop shrink-0 rounded-xl transition-opacity`}
                 >
-                  {collapsed ? (
+                  {empty ? (
+                    <div className="flex min-h-48 w-full flex-col items-center gap-3 rounded-xl border border-dashed border-border/60 px-2 py-3 text-sm text-muted-foreground">
+                      <span
+                        aria-hidden="true"
+                        className="lane-status-dot mt-7 size-2.5 shrink-0 rounded-full"
+                      />
+                      <h2 className="[writing-mode:vertical-rl]">
+                        {column.label}
+                      </h2>
+                      <span className="rounded bg-secondary px-1 font-mono text-xs">
+                        0
+                      </span>
+                    </div>
+                  ) : collapsed ? (
                     <button
                       type="button"
                       aria-label={`Expand ${column.label} lane`}
@@ -3307,9 +3326,7 @@ export function App() {
                         })}
                         {laneCards.length === 0 && (
                           <div className="rounded-xl border border-dashed border-border/60 px-4 py-10 text-center text-xs text-muted-foreground">
-                            {query.trim()
-                              ? "No matching cards."
-                              : "Nothing here yet."}
+                            No matching cards.
                           </div>
                         )}
                       </div>

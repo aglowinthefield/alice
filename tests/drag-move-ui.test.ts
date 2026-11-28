@@ -83,8 +83,8 @@ test("dragging a card onto a valid lane moves it; other lanes refuse the drop", 
     await lane("ready").getByRole("button", { name: /idea card/ }).waitFor();
     await tile("queued").dragTo(lane("running"));
     await lane("running").getByRole("button", { name: /queued card/ }).waitFor();
-    // Archive starts collapsed; its narrow button still takes the drop.
-    await tile("shipped").dragTo(page.getByRole("button", { name: "Expand Archive lane" }));
+    // The empty Archive lane is folded shut; its narrow column still takes the drop.
+    await tile("shipped").dragTo(page.locator('section[data-status="archived"]'));
     await page.waitForFunction(() => !document.querySelector('section[data-status="done"] button[draggable]'));
     assert.deepEqual(requests, [
       '/api/boards/board/cards/idea/status {"status":"ready"}',

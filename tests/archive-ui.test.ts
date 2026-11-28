@@ -68,7 +68,9 @@ test("Cards in any lane can be multi-selected and moved with the dropdown, here 
     await done.getByRole("button", { name: "Move", exact: true }).click();
     await archived.getByRole("button", { name: /two card/ }).waitFor();
     assert.deepEqual(requests, [["one", "three"], ["two"]]);
-    assert.equal(await done.getByText("Nothing here yet.").isVisible(), true);
+    // The emptied lane folds shut and can't be opened.
+    await done.getByRole("heading", { name: "Done" }).waitFor();
+    assert.equal(await done.getByRole("button", { name: /lane$/ }).count(), 0);
     assert.equal(await page.getByRole("button", { name: /open card/ }).isVisible(), true, "other lanes are untouched");
   } finally { await browser.close(); await server.close(); }
 });
